@@ -21,9 +21,10 @@ vendor-model access.
    role and classification. Optional configured model IDs are proposals only;
    the relay rejects any override not in its active tenant catalog.
 5. For specialist tasks, submit the exact allowlisted capability, selected model
-   ID, delegated agent ID, stable request-derived timestamps, and bounded
-   instruction through the private Analyst 360 KMS boundary. No model endpoint
-   crosses that boundary.
+   ID, delegated agent ID, role, artifact contract, task cost/token ceilings,
+   safety/approval decision, digest-only dependency context, stable
+   request-derived timestamps, and bounded instruction through the private
+   Analyst 360 KMS boundary. No model endpoint crosses that boundary.
 6. Heartbeat the fenced task while reading the exact KMS-signed, tenant-scoped
    Analyst status. Never complete on acceptance alone.
 7. On an artifact-bearing, digest-verified success, publish a metadata-only

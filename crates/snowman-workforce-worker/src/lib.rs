@@ -236,6 +236,21 @@ impl Worker {
             idempotency_key: format!("work-task-{}", lease.task.task_id),
             capability,
             model_id: lease.task.model_id.clone(),
+            specialist_role: lease.task.specialist_role.clone(),
+            expected_artifact_type: lease
+                .task
+                .expected_artifact_contract
+                .get("artifact_type")
+                .and_then(Value::as_str)
+                .unwrap_or("governed_work_product")
+                .to_string(),
+            max_cost_microusd: nonnegative(lease.task.task_max_cost_microusd)?,
+            expected_input_tokens: nonnegative(lease.task.expected_input_tokens)?,
+            max_output_tokens: nonnegative(lease.task.task_max_output_tokens)?,
+            risk_tier: lease.task.risk_tier.clone(),
+            reversible: lease.task.reversible,
+            approval_required: lease.task.approval_required,
+            context_refs: lease.task.context_references.clone(),
             instruction: specialist_instruction(&lease.task),
             input_refs: Vec::new(),
             delegated_agent_id: Some(lease.task.service_identity_id.to_string()),

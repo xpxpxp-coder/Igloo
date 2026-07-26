@@ -123,6 +123,24 @@ pub struct Command {
     /// Exact evaluated Snowman model identifier selected for this specialist.
     /// The command deliberately carries no gateway or provider endpoint.
     pub model_id: String,
+    /// Exact specialist role evaluated by the Command Center policy kernel.
+    pub specialist_role: String,
+    /// Machine-readable artifact contract selected for this task.
+    pub expected_artifact_type: String,
+    /// Per-task maximum model/tool spend in millionths of a US dollar.
+    pub max_cost_microusd: u64,
+    /// Expected input-token reservation used by admission control.
+    pub expected_input_tokens: u64,
+    /// Hard output-token ceiling.
+    pub max_output_tokens: u64,
+    /// Evaluated task risk tier.
+    pub risk_tier: String,
+    /// Whether the task can be safely reversed.
+    pub reversible: bool,
+    /// Whether execution or release requires a human approval.
+    pub approval_required: bool,
+    /// Digest-only dependency context; never raw task or client content.
+    pub context_refs: Vec<String>,
     /// Bounded instruction; never raw rows, transcripts, or model output.
     pub instruction: String,
     /// Authorized immutable Analyst references.
@@ -259,8 +277,22 @@ struct UnsignedCommandRequest<'a> {
     delegated_agent_id: Option<&'a str>,
     capability: Capability,
     model_id: &'a str,
+    execution: ExecutionConstraints<'a>,
     instruction: &'a str,
     input_refs: &'a [ArtifactReference],
+}
+
+#[derive(Debug, Serialize)]
+struct ExecutionConstraints<'a> {
+    specialist_role: &'a str,
+    expected_artifact_type: &'a str,
+    max_cost_microusd: u64,
+    expected_input_tokens: u64,
+    max_output_tokens: u64,
+    risk_tier: &'a str,
+    reversible: bool,
+    approval_required: bool,
+    context_refs: &'a [String],
 }
 
 #[derive(Debug, Serialize)]
@@ -483,6 +515,17 @@ fn build_command_request(config: &Config, command: &Command) -> Result<Value, Er
         delegated_agent_id: command.delegated_agent_id.as_deref(),
         capability: command.capability,
         model_id: &command.model_id,
+        execution: ExecutionConstraints {
+            specialist_role: &command.specialist_role,
+            expected_artifact_type: &command.expected_artifact_type,
+            max_cost_microusd: command.max_cost_microusd,
+            expected_input_tokens: command.expected_input_tokens,
+            max_output_tokens: command.max_output_tokens,
+            risk_tier: &command.risk_tier,
+            reversible: command.reversible,
+            approval_required: command.approval_required,
+            context_refs: &command.context_refs,
+        },
         instruction: &command.instruction,
         input_refs: &command.input_refs,
     };
@@ -550,6 +593,32 @@ fn validate_command(command: &Command, now: DateTime<Utc>) -> Result<(), Error> 
         || command.model_id.chars().any(char::is_control)
     {
         return Err(Error::InvalidCommand("model identifier is invalid"));
+    }
+    if !matches!(
+        command.specialist_role.as_str(),
+        "governed_analyst" | "client_delivery" | "quality_risk_reviewer" | "research_evidence"
+    ) || command.expected_artifact_type.is_empty()
+        || command.expected_artifact_type.len() > 120
+        || command.max_cost_microusd > 100_000_000
+        || command.expected_input_tokens > 2_000_000
+        || command.max_output_tokens > 200_000
+        || !matches!(command.risk_tier.as_str(), "low" | "moderate" | "high")
+        || (!command.reversible && !command.approval_required)
+        || command.context_refs.len() > 64
+        || command
+            .context_refs
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != command.context_refs.len()
+        || command.context_refs.iter().any(|value| {
+            value
+                .strip_prefix("analyst360:sha256:")
+                .or_else(|| value.strip_prefix("snowman:sha256:"))
+                .is_none_or(|digest| !is_sha256(digest))
+        })
+    {
+        return Err(Error::InvalidCommand("execution constraints are invalid"));
     }
     if command.instruction.is_empty() || command.instruction.len() > MAX_INSTRUCTION_BYTES {
         return Err(Error::InvalidCommand("instruction is empty or oversized"));
@@ -845,6 +914,15 @@ mod tests {
             idempotency_key: "task-123-generation-1".to_string(),
             capability: Capability::ArtifactBuild,
             model_id: "snowman-artifact-best".to_string(),
+            specialist_role: "client_delivery".to_string(),
+            expected_artifact_type: "client_ready_work_product".to_string(),
+            max_cost_microusd: 50_000,
+            expected_input_tokens: 1_000,
+            max_output_tokens: 2_000,
+            risk_tier: "low".to_string(),
+            reversible: true,
+            approval_required: false,
+            context_refs: vec![format!("analyst360:sha256:{}", "a".repeat(64))],
             instruction: "Build the authorized client-ready work product.".to_string(),
             input_refs: Vec::new(),
             delegated_agent_id: Some("agent-artifact-builder".to_string()),
@@ -857,6 +935,8 @@ mod tests {
         assert_eq!(value["actor"]["subject_id"], "snowman-command-gateway");
         assert_eq!(value["actor"]["actor_type"], "service");
         assert_eq!(value["delegated_agent_id"], "agent-artifact-builder");
+        assert_eq!(value["execution"]["specialist_role"], "client_delivery");
+        assert_eq!(value["execution"]["max_cost_microusd"], 50_000);
         let mut unsigned = value.clone();
         let claimed = unsigned
             .as_object_mut()
@@ -877,6 +957,15 @@ mod tests {
             idempotency_key: "task-123-generation-1".into(),
             capability: Capability::AnalyticsQuery,
             model_id: "snowman-analytics-best".to_string(),
+            specialist_role: "governed_analyst".to_string(),
+            expected_artifact_type: "governed_analysis".to_string(),
+            max_cost_microusd: 50_000,
+            expected_input_tokens: 1_000,
+            max_output_tokens: 2_000,
+            risk_tier: "low".to_string(),
+            reversible: true,
+            approval_required: false,
+            context_refs: Vec::new(),
             instruction: String::new(),
             input_refs: Vec::new(),
             delegated_agent_id: None,
