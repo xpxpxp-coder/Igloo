@@ -92,6 +92,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(api::workforce::claim_work_task),
         )
         .route(
+            "/internal/snowman/v1/workforce/maintenance/tick",
+            post(api::workforce::tick_workforce_maintenance),
+        )
+        .route(
             "/internal/snowman/v1/workforce/requests/{request_id}/context-packets",
             get(api::workforce::list_context_packets).post(api::workforce::publish_context_packet),
         )

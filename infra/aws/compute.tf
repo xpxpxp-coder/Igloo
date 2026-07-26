@@ -339,15 +339,15 @@ resource "aws_ecs_task_definition" "relay" {
         { name = "REDIS_URL", value = "rediss://${aws_elasticache_replication_group.valkey.primary_endpoint_address}:${aws_elasticache_replication_group.valkey.port}" },
         { name = "RELAY_URL", value = "wss://${var.application_hostname}" },
         { name = "RUST_LOG", value = "info,buzz_relay=info" },
-        { name = "SNOWMAN_ANALYST_EVENT_API_ENABLED", value = "false" },
+        { name = "SNOWMAN_ANALYST_EVENT_API_ENABLED", value = tostring(var.analyst_event_api_enabled) },
         { name = "SNOWMAN_PARTITION_MAINTENANCE_MODE", value = "external" },
         { name = "SNOWMAN_ROLE_SCOPES", value = "true" },
         { name = "SNOWMAN_VALKEY_CACHE_NAME", value = aws_elasticache_replication_group.valkey.replication_group_id },
         { name = "SNOWMAN_VALKEY_IAM_ENABLED", value = "true" },
         { name = "SNOWMAN_VALKEY_IAM_USER_ID", value = aws_elasticache_user.relay.user_id },
-        { name = "SNOWMAN_WORKFORCE_API_ENABLED", value = "false" },
+        { name = "SNOWMAN_WORKFORCE_API_ENABLED", value = tostring(var.workforce_api_enabled) },
         { name = "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", value = "true" },
-        { name = "SNOWMAN_WORKFORCE_WORKER_API_ENABLED", value = "false" },
+        { name = "SNOWMAN_WORKFORCE_WORKER_API_ENABLED", value = tostring(var.workforce_worker_api_enabled) },
       ]
       secrets = [
         { name = "BUZZ_GIT_HOOK_HMAC_SECRET", valueFrom = "${aws_secretsmanager_secret.relay_runtime.arn}:BUZZ_GIT_HOOK_HMAC_SECRET::" },
@@ -374,4 +374,50 @@ resource "aws_ecs_task_definition" "relay" {
       error_message = "The relay task definition is dormant until a governed runtime secret, Cloudflare-authenticated edge, and database bootstrap pass."
     }
   }
+}
+
+resource "aws_ecs_service" "relay" {
+  name            = "${local.workload_name}-relay"
+  cluster         = aws_ecs_cluster.command_center.id
+  task_definition = aws_ecs_task_definition.relay.arn
+  desired_count   = var.relay_desired_count
+  launch_type     = "FARGATE"
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  dynamic "load_balancer" {
+    for_each = var.edge_enabled ? [1] : []
+    content {
+      target_group_arn = aws_lb_target_group.relay[0].arn
+      container_name   = "relay"
+      container_port   = 8080
+    }
+  }
+
+  dynamic "load_balancer" {
+    for_each = var.workforce_private_ingress_enabled ? [1] : []
+    content {
+      target_group_arn = aws_lb_target_group.workforce_relay[0].arn
+      container_name   = "relay"
+      container_port   = 8080
+    }
+  }
+
+  network_configuration {
+    subnets          = [for key in sort(keys(aws_subnet.private)) : aws_subnet.private[key].id]
+    security_groups  = [aws_security_group.relay.id]
+    assign_public_ip = false
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.relay_desired_count == 0
+      error_message = "The relay service remains hard-zero until bootstrap, private routing, and staged activation gates pass."
+    }
+  }
+
+  depends_on = [aws_lb_listener.https, aws_lb_listener.workforce_https]
 }

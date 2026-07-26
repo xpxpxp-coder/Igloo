@@ -9,6 +9,13 @@ output "production_boundary" {
     relay_desired_count                   = var.relay_desired_count
     worker_desired_count                  = var.worker_desired_count
     workforce_profile_count               = length(var.workforce_profiles)
+    scheduler_desired_count               = var.scheduler_desired_count
+    scheduler_profile_count               = length(var.scheduler_profiles)
+    workforce_private_ingress_enabled     = var.workforce_private_ingress_enabled
+    workforce_private_hostnames           = sort(tolist(var.workforce_private_hostnames))
+    workforce_api_enabled                 = var.workforce_api_enabled
+    workforce_worker_api_enabled          = var.workforce_worker_api_enabled
+    analyst_event_api_enabled             = var.analyst_event_api_enabled
     model_gateway_desired_count           = var.model_gateway_desired_count
     model_gateway_private_ingress_enabled = var.model_gateway_private_ingress_enabled
   }
@@ -30,20 +37,22 @@ output "model_gateway_private_link" {
 output "network_posture" {
   description = "Isolated network coordinates for later dormant ECS services."
   value = {
-    vpc_id                       = aws_vpc.command_center.id
-    public_subnet_ids            = [for subnet in aws_subnet.public : subnet.id]
-    private_subnet_ids           = [for subnet in aws_subnet.private : subnet.id]
-    data_subnet_ids              = [for subnet in aws_subnet.data : subnet.id]
-    edge_security_group          = aws_security_group.edge.id
-    relay_security_group         = aws_security_group.relay.id
-    worker_security_group        = aws_security_group.worker.id
-    model_gateway_security_group = aws_security_group.model_gateway.id
-    inference_security_group     = aws_security_group.inference.id
-    nat_gateway_count            = 0
-    edge_enabled                 = var.edge_enabled
-    edge_dns_name                = var.edge_enabled ? aws_lb.edge[0].dns_name : null
-    edge_zone_id                 = var.edge_enabled ? aws_lb.edge[0].zone_id : null
-    edge_waf_log_group           = var.edge_enabled ? aws_cloudwatch_log_group.waf[0].name : null
+    vpc_id                           = aws_vpc.command_center.id
+    public_subnet_ids                = [for subnet in aws_subnet.public : subnet.id]
+    private_subnet_ids               = [for subnet in aws_subnet.private : subnet.id]
+    data_subnet_ids                  = [for subnet in aws_subnet.data : subnet.id]
+    edge_security_group              = aws_security_group.edge.id
+    relay_security_group             = aws_security_group.relay.id
+    worker_security_group            = aws_security_group.worker.id
+    scheduler_security_group         = aws_security_group.scheduler.id
+    workforce_ingress_security_group = aws_security_group.workforce_ingress.id
+    model_gateway_security_group     = aws_security_group.model_gateway.id
+    inference_security_group         = aws_security_group.inference.id
+    nat_gateway_count                = 0
+    edge_enabled                     = var.edge_enabled
+    edge_dns_name                    = var.edge_enabled ? aws_lb.edge[0].dns_name : null
+    edge_zone_id                     = var.edge_enabled ? aws_lb.edge[0].zone_id : null
+    edge_waf_log_group               = var.edge_enabled ? aws_cloudwatch_log_group.waf[0].name : null
   }
 }
 

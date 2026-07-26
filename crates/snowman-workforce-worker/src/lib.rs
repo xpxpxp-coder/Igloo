@@ -24,6 +24,7 @@ use url::Url;
 use uuid::Uuid;
 
 const CLAIM_PATH: &str = "/internal/snowman/v1/workforce/tasks/claim";
+const MAINTENANCE_PATH: &str = "/internal/snowman/v1/workforce/maintenance/tick";
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
 /// Bounded worker failures contain no objective, artifact body, key, or remote
@@ -129,6 +130,127 @@ impl Config {
             )?),
             once: env::var("SNOWMAN_WORKFORCE_ONCE").is_ok_and(|value| value == "true"),
         })
+    }
+}
+
+/// Runtime configuration for the dedicated, non-executing maintenance
+/// scheduler. It deliberately has no Analyst endpoint or AWS signing key.
+pub struct SchedulerConfig {
+    relay_url: Url,
+    private_key: Keys,
+    identity_id: Uuid,
+    interval: Duration,
+    once: bool,
+}
+
+impl SchedulerConfig {
+    /// Load the exact scheduler boundary from environment variables.
+    pub fn from_env() -> Result<Self, Error> {
+        Ok(Self {
+            relay_url: parse_snowman_origin(&required("SNOWMAN_WORKFORCE_RELAY_URL")?)?,
+            private_key: Keys::parse(&required("SNOWMAN_WORKFORCE_SCHEDULER_NOSTR_PRIVATE_KEY")?)
+                .map_err(|_| {
+                Error::Configuration("scheduler Nostr private key is invalid")
+            })?,
+            identity_id: parse_uuid("SNOWMAN_WORKFORCE_SCHEDULER_IDENTITY_ID")?,
+            interval: Duration::from_secs(parse_seconds(
+                "SNOWMAN_WORKFORCE_MAINTENANCE_INTERVAL_SECONDS",
+                30,
+                300,
+            )?),
+            once: env::var("SNOWMAN_WORKFORCE_SCHEDULER_ONCE").is_ok_and(|value| value == "true"),
+        })
+    }
+}
+
+/// Always-on scheduler for deadline enforcement and abandoned-lease recovery.
+/// It cannot claim tasks, invoke models, read Analyst data, or execute proactive
+/// actions because its only runtime credential is a separately bound relay key.
+pub struct Scheduler {
+    relay: RelayClient,
+    identity_id: Uuid,
+    interval: Duration,
+    once: bool,
+}
+
+impl Scheduler {
+    /// Construct the scheduler's private relay client.
+    pub fn new(config: SchedulerConfig) -> Result<Self, Error> {
+        Ok(Self {
+            relay: RelayClient::new(config.relay_url, config.private_key)?,
+            identity_id: config.identity_id,
+            interval: config.interval,
+            once: config.once,
+        })
+    }
+
+    /// Run maintenance continuously. A failed request retains the same tick ID
+    /// and request time on retry, so a lost success response cannot duplicate or
+    /// misreport a committed transition.
+    pub async fn run(&self) -> Result<(), Error> {
+        loop {
+            let tick_id = Uuid::new_v4();
+            let requested_at = Utc::now();
+            loop {
+                match self.tick(tick_id, requested_at).await {
+                    Ok(result) => {
+                        tracing::info!(
+                            %tick_id,
+                            identity_id = %self.identity_id,
+                            expired_requests = result.expired_requests,
+                            expired_tasks = result.expired_tasks,
+                            expired_proactive_actions = result.expired_proactive_actions,
+                            requeued_tasks = result.requeued_tasks,
+                            dead_lettered_tasks = result.dead_lettered_tasks,
+                            "governed workforce maintenance completed"
+                        );
+                        break;
+                    }
+                    Err(error) if self.once => return Err(error),
+                    Err(error) => {
+                        tracing::error!(
+                            %error,
+                            %tick_id,
+                            identity_id = %self.identity_id,
+                            "governed workforce maintenance retrying"
+                        );
+                        tokio::time::sleep(self.interval).await;
+                    }
+                }
+            }
+            if self.once {
+                return Ok(());
+            }
+            tokio::time::sleep(self.interval).await;
+        }
+    }
+
+    async fn tick(
+        &self,
+        tick_id: Uuid,
+        requested_at: DateTime<Utc>,
+    ) -> Result<MaintenanceResponse, Error> {
+        let response: MaintenanceResponse = self
+            .relay
+            .post_json(
+                MAINTENANCE_PATH,
+                &json!({
+                    "schema_version": "snowman.workforce.maintenance.tick.v1",
+                    "tick_id": tick_id,
+                    "requested_at": requested_at,
+                }),
+            )
+            .await?;
+        if response.schema_version != "snowman.workforce.maintenance.result.v1"
+            || response.tick_id != tick_id
+            || response.observed_at < requested_at - chrono::Duration::minutes(5)
+            || response.observed_at > Utc::now() + chrono::Duration::minutes(5)
+        {
+            return Err(Error::RelayContract(
+                "maintenance response identity or time is invalid",
+            ));
+        }
+        Ok(response)
     }
 }
 
@@ -584,6 +706,19 @@ struct ClaimResponse {
     task: Option<LeasedTask>,
     #[serde(default)]
     retry_after_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaintenanceResponse {
+    schema_version: String,
+    tick_id: Uuid,
+    observed_at: DateTime<Utc>,
+    expired_requests: u64,
+    expired_tasks: u64,
+    expired_proactive_actions: u64,
+    requeued_tasks: u64,
+    dead_lettered_tasks: u64,
 }
 
 struct Lease {

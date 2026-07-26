@@ -77,9 +77,12 @@ the highest risks without changing the production-readiness verdict:
   alarms, and budgets; plus a tested streaming SigV4 provider, automatic Valkey
   reauthentication/resubscription, password-free runtime contract, and a
   key/channel/command-bounded Valkey IAM user. It remains unapplied.
-- a hard-zero, digest-pinned dormant relay task definition with non-root/read-
-  only execution, dropped capabilities, exact task/execution roles, an empty
-  governed runtime-secret shell, and no ECS service capable of starting it.
+- a hard-zero, digest-pinned dormant relay task and ECS service with non-root,
+  read-only execution, dropped capabilities, exact task/execution roles, an
+  empty governed runtime-secret shell, and layered zero-count preconditions;
+- hard-dormant per-identity workers plus a maintenance-only scheduler with an
+  empty AWS task role, private TLS/split-horizon relay route, deadline and lease
+  recovery, dead-lettering, idempotent tick receipts, and hash-chain evidence;
 - a one-shot, no-service database/key bootstrap task that reads only the
   RDS-managed master secret, runs migrations, provisions and verifies a
   DML-only serving identity, generates relay/HMAC keys outside Terraform, and
@@ -89,9 +92,9 @@ the highest risks without changing the production-readiness verdict:
 These are implementation foundations, not staged proof. OIDC assertion exchange,
 private integration routing, live database/bootstrap evidence, recurring
 partition rotation and authenticated-edge bypass tests,
-AWS workers/scheduler/sandbox, KMS audit checkpoints, recovery/load/isolation
-exercises, comprehensive branding, accessibility, UAT, and launch evidence remain
-open gates.
+proactive execution, the agent sandbox, KMS audit checkpoints, staged
+recovery/load/isolation exercises, comprehensive branding, accessibility, UAT,
+and launch evidence remain open gates.
 
 ## Data classification and boundary
 

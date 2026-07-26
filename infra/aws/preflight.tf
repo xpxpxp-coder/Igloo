@@ -43,7 +43,7 @@ resource "terraform_data" "production_boundary_preflight" {
     precondition {
       condition = (
         var.environment != "staging" ||
-        (var.relay_desired_count == 0 && var.worker_desired_count == 0 && var.model_gateway_desired_count == 0)
+        (var.relay_desired_count == 0 && var.worker_desired_count == 0 && var.scheduler_desired_count == 0 && var.model_gateway_desired_count == 0)
       )
       error_message = "Staging remains dormant in baseline Terraform; verification windows use a reviewed override plan."
     }
@@ -52,9 +52,14 @@ resource "terraform_data" "production_boundary_preflight" {
       condition = (
         var.relay_desired_count == 0 &&
         var.worker_desired_count == 0 &&
-        var.model_gateway_desired_count == 0
+        var.scheduler_desired_count == 0 &&
+        var.model_gateway_desired_count == 0 &&
+        !var.workforce_private_ingress_enabled &&
+        !var.workforce_api_enabled &&
+        !var.workforce_worker_api_enabled &&
+        !var.analyst_event_api_enabled
       )
-      error_message = "Runtime desired counts remain hard-zero until the edge, database bootstrap, worker sandbox, and model-gateway activation contracts pass."
+      error_message = "Runtime desired counts remain hard-zero, and private workforce ingress/APIs remain hard-disabled, until the edge, database bootstrap, worker sandbox, and model-gateway activation contracts pass."
     }
 
     precondition {

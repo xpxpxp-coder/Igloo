@@ -6,7 +6,7 @@
 //! replacement worker has acquired it.
 
 use chrono::{DateTime, Duration, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -290,6 +290,23 @@ pub struct AppendedWorkEvent {
     pub previous_event_sha256: Option<[u8; 32]>,
     /// Digest of the domain-separated canonical event fields.
     pub event_sha256: [u8; 32],
+}
+
+/// Idempotent result of one tenant-local scheduler maintenance tick.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkforceMaintenanceResult {
+    /// Server-observed transaction time used for every state transition.
+    pub observed_at: DateTime<Utc>,
+    /// Requests closed because their overall deadline elapsed.
+    pub expired_requests: u64,
+    /// Tasks closed because their request or task deadline elapsed.
+    pub expired_tasks: u64,
+    /// Proactive proposals closed before execution because their expiry elapsed.
+    pub expired_proactive_actions: u64,
+    /// Abandoned leased tasks returned to the queue with bounded backoff.
+    pub requeued_tasks: u64,
+    /// Abandoned leased tasks closed after exhausting their attempt cap.
+    pub dead_lettered_tasks: u64,
 }
 
 /// Result of idempotently accepting a Snowman work request.
@@ -2609,43 +2626,428 @@ pub async fn finish_work_task(
     Ok(exact_replay)
 }
 
-/// Requeue expired work or dead-letter tasks that exhausted their attempt cap.
-pub async fn recover_expired_work_tasks(pool: &PgPool, community_id: CommunityId) -> Result<u64> {
+/// Enforce deadlines and recover abandoned leases under one idempotent,
+/// capability-authorized scheduler tick. Every mutation appends request-local
+/// hash-chain evidence in the same transaction as the state transition.
+pub async fn maintain_workforce(
+    pool: &PgPool,
+    community_id: CommunityId,
+    tick_id: Uuid,
+    scheduler_identity_id: Uuid,
+    requested_at: DateTime<Utc>,
+) -> Result<WorkforceMaintenanceResult> {
+    let requested_at = DateTime::<Utc>::from_timestamp_micros(requested_at.timestamp_micros())
+        .ok_or_else(|| DbError::InvalidData("maintenance requested time is invalid".into()))?;
+    if tick_id.is_nil()
+        || scheduler_identity_id.is_nil()
+        || requested_at < Utc::now() - Duration::days(1)
+        || requested_at > Utc::now() + Duration::minutes(5)
+    {
+        return Err(DbError::InvalidData(
+            "maintenance tick identity or requested time is invalid".into(),
+        ));
+    }
     let community_id = *community_id.as_uuid();
     let mut tx = pool.begin().await?;
-    let recovered = sqlx::query(
+    let authorized: bool = sqlx::query_scalar(
         r#"
-        UPDATE snowman_work_tasks t SET
-          status=CASE WHEN t.attempt_count >= t.max_attempts THEN 'dead_lettered' ELSE 'queued' END,
-          available_at=CASE
-            WHEN t.attempt_count >= t.max_attempts THEN t.available_at
-            ELSE NOW() + make_interval(
-              secs => LEAST(300, (5 * power(2, LEAST(t.attempt_count, 6)))::integer)
-            )
-          END,
-          updated_at=NOW()
-        FROM snowman_task_leases l
-        WHERE t.community_id=$1 AND l.community_id=t.community_id AND l.task_id=t.task_id
-          AND l.expires_at <= NOW() AND t.status IN ('leased','running','reviewing')
-        RETURNING t.request_id
+        SELECT EXISTS (
+          SELECT 1 FROM snowman_workforce_identities i
+          JOIN snowman_workforce_capability_grants g
+            ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+          WHERE i.community_id=$1 AND i.identity_id=$2
+            AND i.identity_type='service' AND i.role='agent'
+            AND i.status='active' AND i.revoked_at IS NULL
+            AND (i.expires_at IS NULL OR i.expires_at > NOW())
+            AND g.capability='workforce.maintenance'
+            AND g.revoked_at IS NULL
+            AND (g.expires_at IS NULL OR g.expires_at > NOW())
+        )
         "#,
     )
     .bind(community_id)
+    .bind(scheduler_identity_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !authorized {
+        return Err(DbError::AccessDenied(
+            "workforce scheduler identity is not authorized".into(),
+        ));
+    }
+
+    // Serialize maintenance per tenant before checking the durable receipt.
+    // This closes the lost-response race and fixes request-event lock ordering
+    // even if two scheduler identities are accidentally active at once.
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':workforce-maintenance', 0))",
+    )
+    .bind(community_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if let Some(existing) = sqlx::query(
+        "SELECT scheduler_identity_id, requested_at, result FROM snowman_workforce_maintenance_ticks \
+         WHERE community_id=$1 AND tick_id=$2",
+    )
+    .bind(community_id)
+    .bind(tick_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    {
+        if existing.try_get::<Uuid, _>("scheduler_identity_id")? != scheduler_identity_id
+            || existing.try_get::<DateTime<Utc>, _>("requested_at")? != requested_at
+        {
+            return Err(DbError::AccessDenied(
+                "maintenance tick ID was reused with different evidence".into(),
+            ));
+        }
+        let result = serde_json::from_value(existing.try_get::<Value, _>("result")?)
+            .map_err(|error| DbError::InvalidData(format!("invalid maintenance receipt: {error}")))?;
+        tx.commit().await?;
+        return Ok(result);
+    }
+
+    let observed_at: DateTime<Utc> = sqlx::query_scalar("SELECT NOW()")
+        .fetch_one(&mut *tx)
+        .await?;
+    let actor_identity = format!("snowman-service:{scheduler_identity_id}");
+
+    let expired_requests = sqlx::query(
+        r#"
+        WITH due AS (
+          SELECT request_id FROM snowman_work_requests
+          WHERE community_id=$1
+            AND status IN ('requested','planned','running','awaiting_approval','reviewing')
+            AND deadline_at IS NOT NULL AND deadline_at <= $2
+          ORDER BY deadline_at, request_id
+          LIMIT 100 FOR UPDATE SKIP LOCKED
+        )
+        UPDATE snowman_work_requests r SET status='expired', updated_at=$2
+        FROM due WHERE r.community_id=$1 AND r.request_id=due.request_id
+        RETURNING r.request_id
+        "#,
+    )
+    .bind(community_id)
+    .bind(observed_at)
     .fetch_all(&mut *tx)
     .await?;
-    let mut request_ids = std::collections::HashSet::new();
-    for row in &recovered {
-        request_ids.insert(row.try_get::<Uuid, _>("request_id")?);
-    }
-    sqlx::query("DELETE FROM snowman_task_leases WHERE community_id=$1 AND expires_at <= NOW()")
+    let expired_request_ids = expired_requests
+        .iter()
+        .map(|row| row.try_get::<Uuid, _>("request_id"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let mut expired_task_rows = Vec::new();
+    if !expired_request_ids.is_empty() {
+        expired_task_rows = sqlx::query(
+            r#"
+            WITH due AS (
+              SELECT task_id, request_id, status AS previous_status
+              FROM snowman_work_tasks
+              WHERE community_id=$1 AND request_id=ANY($2)
+                AND status NOT IN ('succeeded','failed','cancelled','expired','dead_lettered')
+              FOR UPDATE
+            )
+            UPDATE snowman_work_tasks t SET status='expired', updated_at=$3
+            FROM due WHERE t.community_id=$1 AND t.task_id=due.task_id
+            RETURNING t.request_id, t.task_id, due.previous_status
+            "#,
+        )
         .bind(community_id)
+        .bind(&expired_request_ids)
+        .bind(observed_at)
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query(
+            "DELETE FROM snowman_task_leases WHERE community_id=$1 AND task_id IN (\
+             SELECT task_id FROM snowman_work_tasks WHERE community_id=$1 AND request_id=ANY($2))",
+        )
+        .bind(community_id)
+        .bind(&expired_request_ids)
         .execute(&mut *tx)
         .await?;
-    for request_id in request_ids {
+    }
+
+    for request_id in &expired_request_ids {
+        append_maintenance_event(
+            &mut tx,
+            community_id,
+            tick_id,
+            *request_id,
+            None,
+            "request.expired",
+            &actor_identity,
+            serde_json::json!({
+                "schema_version": "snowman.workforce.maintenance.event.v1",
+                "tick_id": tick_id,
+                "reason": "request_deadline_elapsed"
+            }),
+            observed_at,
+        )
+        .await?;
+    }
+    for row in &expired_task_rows {
+        let request_id: Uuid = row.try_get("request_id")?;
+        let task_id: Uuid = row.try_get("task_id")?;
+        append_maintenance_event(
+            &mut tx,
+            community_id,
+            tick_id,
+            request_id,
+            Some(task_id),
+            "task.expired",
+            &actor_identity,
+            serde_json::json!({
+                "schema_version": "snowman.workforce.maintenance.event.v1",
+                "tick_id": tick_id,
+                "reason": "request_deadline_elapsed",
+                "previous_status": row.try_get::<String, _>("previous_status")?
+            }),
+            observed_at,
+        )
+        .await?;
+    }
+
+    let task_deadlines = sqlx::query(
+        r#"
+        WITH due AS (
+          SELECT t.task_id, t.request_id, t.status AS previous_status
+          FROM snowman_work_tasks t
+          JOIN snowman_work_requests r
+            ON r.community_id=t.community_id AND r.request_id=t.request_id
+          WHERE t.community_id=$1
+            AND r.status NOT IN ('completed','failed','cancelled','expired')
+            AND t.status NOT IN ('succeeded','failed','cancelled','expired','dead_lettered')
+            AND t.deadline_at IS NOT NULL AND t.deadline_at <= $2
+          ORDER BY t.deadline_at, t.task_id
+          LIMIT 500 FOR UPDATE OF t SKIP LOCKED
+        )
+        UPDATE snowman_work_tasks t SET status='expired', updated_at=$2
+        FROM due WHERE t.community_id=$1 AND t.task_id=due.task_id
+        RETURNING t.request_id, t.task_id, due.previous_status
+        "#,
+    )
+    .bind(community_id)
+    .bind(observed_at)
+    .fetch_all(&mut *tx)
+    .await?;
+    let task_deadline_ids = task_deadlines
+        .iter()
+        .map(|row| row.try_get::<Uuid, _>("task_id"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if !task_deadline_ids.is_empty() {
+        sqlx::query("DELETE FROM snowman_task_leases WHERE community_id=$1 AND task_id=ANY($2)")
+            .bind(community_id)
+            .bind(&task_deadline_ids)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let mut touched_requests = std::collections::HashSet::new();
+    for row in &task_deadlines {
+        let request_id: Uuid = row.try_get("request_id")?;
+        let task_id: Uuid = row.try_get("task_id")?;
+        touched_requests.insert(request_id);
+        append_maintenance_event(
+            &mut tx,
+            community_id,
+            tick_id,
+            request_id,
+            Some(task_id),
+            "task.expired",
+            &actor_identity,
+            serde_json::json!({
+                "schema_version": "snowman.workforce.maintenance.event.v1",
+                "tick_id": tick_id,
+                "reason": "task_deadline_elapsed",
+                "previous_status": row.try_get::<String, _>("previous_status")?
+            }),
+            observed_at,
+        )
+        .await?;
+    }
+
+    let recovered = sqlx::query(
+        r#"
+        WITH due AS (
+          SELECT t.task_id, t.request_id, t.attempt_count, t.max_attempts
+          FROM snowman_work_tasks t
+          JOIN snowman_task_leases l
+            ON l.community_id=t.community_id AND l.task_id=t.task_id
+          JOIN snowman_work_requests r
+            ON r.community_id=t.community_id AND r.request_id=t.request_id
+          WHERE t.community_id=$1 AND l.expires_at <= $2
+            AND t.status IN ('leased','running','reviewing')
+            AND r.status NOT IN ('completed','failed','cancelled','expired')
+          ORDER BY l.expires_at, t.task_id
+          LIMIT 500 FOR UPDATE OF t SKIP LOCKED
+        )
+        UPDATE snowman_work_tasks t SET
+          status=CASE WHEN due.attempt_count >= due.max_attempts THEN 'dead_lettered' ELSE 'queued' END,
+          available_at=CASE
+            WHEN due.attempt_count >= due.max_attempts THEN t.available_at
+            ELSE $2 + make_interval(
+              secs => LEAST(300, (5 * power(2, LEAST(due.attempt_count, 6)))::integer)
+            )
+          END,
+          updated_at=$2
+        FROM due WHERE t.community_id=$1 AND t.task_id=due.task_id
+        RETURNING t.request_id, t.task_id, t.status, t.available_at,
+                  due.attempt_count, due.max_attempts
+        "#,
+    )
+    .bind(community_id)
+    .bind(observed_at)
+    .fetch_all(&mut *tx)
+    .await?;
+    let recovered_ids = recovered
+        .iter()
+        .map(|row| row.try_get::<Uuid, _>("task_id"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if !recovered_ids.is_empty() {
+        sqlx::query("DELETE FROM snowman_task_leases WHERE community_id=$1 AND task_id=ANY($2)")
+            .bind(community_id)
+            .bind(&recovered_ids)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let mut requeued_tasks = 0_u64;
+    let mut dead_lettered_tasks = 0_u64;
+    for row in &recovered {
+        let request_id: Uuid = row.try_get("request_id")?;
+        let task_id: Uuid = row.try_get("task_id")?;
+        let status: String = row.try_get("status")?;
+        let requeued = status == "queued";
+        if requeued {
+            requeued_tasks += 1;
+        } else {
+            dead_lettered_tasks += 1;
+        }
+        touched_requests.insert(request_id);
+        append_maintenance_event(
+            &mut tx,
+            community_id,
+            tick_id,
+            request_id,
+            Some(task_id),
+            if requeued {
+                "task.requeued"
+            } else {
+                "task.dead_lettered"
+            },
+            &actor_identity,
+            serde_json::json!({
+                "schema_version": "snowman.workforce.maintenance.event.v1",
+                "tick_id": tick_id,
+                "reason": "lease_expired",
+                "attempt_count": row.try_get::<i32, _>("attempt_count")?,
+                "max_attempts": row.try_get::<i32, _>("max_attempts")?,
+                "available_at": row.try_get::<DateTime<Utc>, _>("available_at")?
+            }),
+            observed_at,
+        )
+        .await?;
+    }
+
+    let expired_actions = sqlx::query(
+        r#"
+        WITH due AS (
+          SELECT a.action_id, a.request_id,
+            CASE WHEN r.status='expired' THEN 'request_deadline_elapsed'
+                 ELSE 'action_expiry_elapsed' END AS reason
+          FROM snowman_proactive_actions a
+          JOIN snowman_work_requests r
+            ON r.community_id=a.community_id AND r.request_id=a.request_id
+          WHERE a.community_id=$1
+            AND a.status IN ('queued','awaiting_approval','leased','running')
+            AND (a.expires_at <= $2 OR r.status='expired')
+          ORDER BY a.expires_at, a.action_id
+          LIMIT 500 FOR UPDATE OF a SKIP LOCKED
+        )
+        UPDATE snowman_proactive_actions a SET status='expired'
+        FROM due WHERE a.community_id=$1 AND a.action_id=due.action_id
+        RETURNING a.request_id, a.action_id, due.reason
+        "#,
+    )
+    .bind(community_id)
+    .bind(observed_at)
+    .fetch_all(&mut *tx)
+    .await?;
+    for row in &expired_actions {
+        let request_id: Uuid = row.try_get("request_id")?;
+        let action_id: Uuid = row.try_get("action_id")?;
+        append_maintenance_event(
+            &mut tx,
+            community_id,
+            tick_id,
+            request_id,
+            None,
+            "proactive.expired",
+            &actor_identity,
+            serde_json::json!({
+                "schema_version": "snowman.workforce.maintenance.event.v1",
+                "tick_id": tick_id,
+                "action_id": action_id,
+                "reason": row.try_get::<String, _>("reason")?
+            }),
+            observed_at,
+        )
+        .await?;
+    }
+
+    for request_id in touched_requests {
         refresh_request_status(&mut tx, community_id, request_id).await?;
     }
+    let result = WorkforceMaintenanceResult {
+        observed_at,
+        expired_requests: expired_request_ids.len() as u64,
+        expired_tasks: (expired_task_rows.len() + task_deadlines.len()) as u64,
+        expired_proactive_actions: expired_actions.len() as u64,
+        requeued_tasks,
+        dead_lettered_tasks,
+    };
+    sqlx::query(
+        "INSERT INTO snowman_workforce_maintenance_ticks \
+         (community_id, tick_id, scheduler_identity_id, requested_at, observed_at, result) \
+         VALUES ($1,$2,$3,$4,$5,$6)",
+    )
+    .bind(community_id)
+    .bind(tick_id)
+    .bind(scheduler_identity_id)
+    .bind(requested_at)
+    .bind(observed_at)
+    .bind(serde_json::to_value(&result).map_err(|error| {
+        DbError::InvalidData(format!("maintenance receipt serialization failed: {error}"))
+    })?)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
-    Ok(recovered.len() as u64)
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn append_maintenance_event(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: Uuid,
+    tick_id: Uuid,
+    request_id: Uuid,
+    task_id: Option<Uuid>,
+    event_type: &str,
+    actor_identity: &str,
+    payload: Value,
+    occurred_at: DateTime<Utc>,
+) -> Result<()> {
+    let target_id = task_id.unwrap_or(request_id);
+    let event = NewWorkEvent {
+        event_id: maintenance_event_id(tick_id, event_type, target_id, &payload),
+        request_id,
+        task_id,
+        event_type: event_type.to_string(),
+        actor_identity: actor_identity.to_string(),
+        payload,
+        occurred_at,
+    };
+    validate_work_event(&event)?;
+    append_work_event_tx(tx, community_id, &event).await?;
+    Ok(())
 }
 
 /// Append one request-local event under a PostgreSQL advisory lock so parallel
@@ -3162,7 +3564,7 @@ async fn refresh_request_status(
     };
     sqlx::query(
         "UPDATE snowman_work_requests SET status=$3, updated_at=NOW() \
-         WHERE community_id=$1 AND request_id=$2 AND status <> 'cancelled'",
+         WHERE community_id=$1 AND request_id=$2 AND status NOT IN ('cancelled','expired')",
     )
     .bind(community_id)
     .bind(request_id)
@@ -3510,6 +3912,24 @@ fn sha256(value: &[u8]) -> [u8; 32] {
     Sha256::digest(value).into()
 }
 
+fn maintenance_event_id(tick_id: Uuid, event_type: &str, target_id: Uuid, payload: &Value) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(b"snowman.workforce.maintenance-event.v1\0");
+    update_digest_field(&mut hasher, tick_id.as_bytes());
+    update_digest_field(&mut hasher, event_type.as_bytes());
+    update_digest_field(&mut hasher, target_id.as_bytes());
+    update_digest_field(
+        &mut hasher,
+        &serde_json::to_vec(payload).expect("JSON value serialization cannot fail"),
+    );
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
 fn vec_to_sha256(value: Vec<u8>) -> Result<[u8; 32]> {
     value
         .try_into()
@@ -3649,6 +4069,51 @@ mod tests {
             validate_work_event(&invalid),
             Err(DbError::AccessDenied(_))
         ));
+    }
+
+    #[test]
+    fn maintenance_event_ids_are_deterministic_and_domain_bound() {
+        let tick = Uuid::from_u128(10);
+        let target = Uuid::from_u128(11);
+        let payload = serde_json::json!({"reason": "lease_expired"});
+        let event_id = maintenance_event_id(tick, "task.requeued", target, &payload);
+        assert_eq!(
+            event_id,
+            maintenance_event_id(tick, "task.requeued", target, &payload)
+        );
+        assert_ne!(
+            event_id,
+            maintenance_event_id(tick, "task.dead_lettered", target, &payload)
+        );
+        assert_ne!(
+            event_id,
+            maintenance_event_id(
+                tick,
+                "task.requeued",
+                target,
+                &serde_json::json!({"reason": "task_deadline_elapsed"})
+            )
+        );
+        assert_eq!(event_id.get_version_num(), 5);
+    }
+
+    #[test]
+    fn maintenance_receipt_round_trips_exactly() {
+        let receipt = WorkforceMaintenanceResult {
+            observed_at: DateTime::parse_from_rfc3339("2026-07-26T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            expired_requests: 1,
+            expired_tasks: 2,
+            expired_proactive_actions: 3,
+            requeued_tasks: 4,
+            dead_lettered_tasks: 5,
+        };
+        let stored = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(
+            receipt,
+            serde_json::from_value::<WorkforceMaintenanceResult>(stored).unwrap()
+        );
     }
 
     #[test]

@@ -27,3 +27,7 @@ uuid = { workspace = true }
 [[bin]]
 name = "snowman-workforce-worker"
 path = "src/main.rs"
+
+[[bin]]
+name = "snowman-workforce-scheduler"
+path = "src/bin/snowman-workforce-scheduler.rs"

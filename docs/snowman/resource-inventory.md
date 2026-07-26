@@ -75,8 +75,9 @@ record, not a client-side API key or direct vendor CLI.
   SigV4 provider with automatic reauthentication/resubscription and the
   Terraform root emits its password-free runtime contract. It has not been planned against or
   applied to a live Snowman account because the current AWS SSO session is
-  expired. A digest-pinned, non-root, read-only relay task definition and exact
-  roles now exist but are hard-dormant with no ECS service. A separate one-shot
+  expired. A digest-pinned, non-root, read-only relay task definition, ECS
+  service, and exact roles now exist but are hard-dormant under layered zero-count
+  preconditions. A separate one-shot
   bootstrap task now runs embedded migrations, reconciles a no-DDL/DML-only
   serving role, generates relay/HMAC material outside Terraform, verifies the
   serving identity, and writes only the exact KMS-encrypted runtime JSON secret.
@@ -91,14 +92,16 @@ record, not a client-side API key or direct vendor CLI.
   context references, hard spend/token ledgers, aggregate request-state
   reconciliation, and a serialized secret-rejecting lifecycle-event hash chain
   now exist in source. AWS
-  scheduler/worker services, sandbox isolation, and staged failure proof still
-  must be built before
-  the product can honestly provide 24/7 service.
+  per-identity worker services, a maintenance-only scheduler service, private
+  TLS ingress, and split-horizon DNS are now hard-dormant in AWS source. Sandbox
+  isolation and staged failure/recovery proof still must pass before the product
+  can honestly provide 24/7 service.
 - Proactive next-useful actions now have a tenant-scoped durable decision store:
   authorized service proposer, source-event/action/policy/usefulness digests,
   risk/reversibility/confidence, schedule/expiry, exact idempotency, and cost
-  reservation against the originating request. The AWS schedule poller, fenced
-  proactive lease/executor, notifications, and staged 24/7 recovery proof remain.
+  reservation against the originating request. The maintenance scheduler now
+  expires stale proposals but does not execute them; a trigger poller, fenced
+  proactive lease/executor, notifications, and staged 24/7 proof remain.
 - A deterministic context-manifest policy now gives replacement specialists a
   bounded, classified, content-addressed handoff contract with objective,
   provenance, evidence/artifact references, decision/open-question digests, and

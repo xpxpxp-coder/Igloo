@@ -1,7 +1,7 @@
 # Snowman workforce worker
 
-Status: implemented and unit-tested in source; AWS deployment and staged runtime
-proof remain required.
+Status: implemented and unit-tested in source with hard-dormant per-identity AWS
+services; staged runtime proof remains required.
 
 `snowman-workforce-worker` is the durable execution process for the governed AI
 team. One process owns exactly one tenant-bound Nostr service identity. It has no
@@ -83,8 +83,9 @@ exact model but never bypasses the evaluated catalog.
 - Activate the now-defined per-identity ECS task/services only after their
   Secrets Manager values, private Analyst route, provisioned workforce
   identities/catalog, and zero-internet-egress plan have passed review.
-- Add a scheduler/recovery service, task dead-letter policy, runtime metrics and
-  alarms, graceful draining, and bounded concurrency.
+- Deploy and prove the separately implemented maintenance scheduler, private TLS
+  relay origin, recovery/dead-letter evidence, runtime metrics and alarms,
+  graceful draining, and bounded concurrency.
 - Prove crash/re-lease idempotency, KMS/Analyst degradation, cancellation,
   approval waits, cross-tenant denial, artifact authority, budget exhaustion,
   backup/restore, and zero-external-egress behavior in staging.

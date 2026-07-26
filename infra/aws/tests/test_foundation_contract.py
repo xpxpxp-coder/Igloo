@@ -107,12 +107,20 @@ class AwsFoundationContractTests(unittest.TestCase):
             'image                  = var.container_image',
             'BUZZ_AUTO_MIGRATE", value = "false"',
             'SNOWMAN_VALKEY_IAM_ENABLED", value = "true"',
-            'SNOWMAN_WORKFORCE_API_ENABLED", value = "false"',
+            'SNOWMAN_WORKFORCE_API_ENABLED", value = tostring(var.workforce_api_enabled)',
+            'SNOWMAN_WORKFORCE_WORKER_API_ENABLED", value = tostring(var.workforce_worker_api_enabled)',
             'condition     = var.relay_desired_count == 0',
         ):
             self.assertIn(fragment, source)
         self.assertRegex(source, r'actions\s*=\s*\["elasticache:Connect"\]')
-        self.assertNotIn('resource "aws_ecs_service"', source)
+        for fragment in (
+            'resource "aws_ecs_service" "relay"',
+            'desired_count   = var.relay_desired_count',
+            'deployment_circuit_breaker',
+            'condition     = var.relay_desired_count == 0',
+            'assign_public_ip = false',
+        ):
+            self.assertIn(fragment, source)
         self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
         self.assertNotIn('"s3:*"', source)
         self.assertNotIn('"kms:*"', source)
@@ -144,11 +152,27 @@ class AwsFoundationContractTests(unittest.TestCase):
             'SNOWMAN_WORKFORCE_TEAM_IDENTITIES_JSON", valueFrom =',
             'condition     = each.value.desired_count == 0',
             'prefix_list_id    = var.analyst360_private_prefix_list_id',
+            'for_each = var.scheduler_profiles',
+            'entryPoint             = ["/usr/local/bin/snowman-workforce-scheduler"]',
+            'SNOWMAN_WORKFORCE_SCHEDULER_NOSTR_PRIVATE_KEY", valueFrom =',
+            'security_groups  = [aws_security_group.scheduler.id]',
+            'resource "aws_lb" "workforce_private"',
+            'internal                   = true',
+            'resource "aws_route53_zone" "workforce_private"',
         ):
             self.assertIn(fragment, source)
         self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
         self.assertNotIn('"kms:*"', source)
         self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
+
+    def test_public_edge_blocks_private_internal_api_paths(self) -> None:
+        source = (ROOT / "edge.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'name     = "deny-private-internal-api"',
+            'search_string         = "/internal/"',
+            'positional_constraint = "STARTS_WITH"',
+        ):
+            self.assertIn(fragment, source)
 
     def test_model_gateway_is_kms_bound_private_and_hard_dormant(self) -> None:
         source = (ROOT / "model_gateway.tf").read_text(encoding="utf-8")

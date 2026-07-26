@@ -79,6 +79,14 @@ struct ClaimWorkTask {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct MaintenanceTickRequest {
+    schema_version: String,
+    tick_id: Uuid,
+    requested_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LeaseProof {
     generation: i64,
     lease_token: String,
@@ -778,6 +786,76 @@ pub async fn claim_work_task(
             "reversible": task.reversible,
             "approval_required": task.approval_required,
         }
+    })))
+}
+
+/// Enforce tenant-local deadlines and recover expired task leases. This route
+/// is intentionally separate from task execution: the scheduler identity has
+/// no Analyst signing key and only the `workforce.maintenance` capability.
+pub async fn tick_workforce_maintenance(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/maintenance/tick");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.maintenance",
+        "service",
+    )
+    .await?;
+    let input: MaintenanceTickRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid maintenance tick JSON"))?;
+    if input.schema_version != "snowman.workforce.maintenance.tick.v1"
+        || input.tick_id.is_nil()
+        || !is_recent_maintenance_time(input.requested_at)
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "maintenance tick has an invalid schema, identity, or time",
+        ));
+    }
+    let result = state
+        .db
+        .maintain_workforce(
+            tenant.community(),
+            input.tick_id,
+            principal.identity_id,
+            input.requested_at,
+        )
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "maintenance tick conflicts with scheduler identity or prior evidence",
+            ),
+            _ => internal_error("workforce maintenance failed"),
+        })?;
+    metrics::counter!("snowman_workforce_maintenance_ticks_total").increment(1);
+    metrics::counter!("snowman_workforce_maintenance_transitions_total", "outcome" => "request_expired")
+        .increment(result.expired_requests);
+    metrics::counter!("snowman_workforce_maintenance_transitions_total", "outcome" => "task_expired")
+        .increment(result.expired_tasks);
+    metrics::counter!("snowman_workforce_maintenance_transitions_total", "outcome" => "proactive_expired")
+        .increment(result.expired_proactive_actions);
+    metrics::counter!("snowman_workforce_maintenance_transitions_total", "outcome" => "task_requeued")
+        .increment(result.requeued_tasks);
+    metrics::counter!("snowman_workforce_maintenance_transitions_total", "outcome" => "task_dead_lettered")
+        .increment(result.dead_lettered_tasks);
+    Ok(Json(json!({
+        "schema_version": "snowman.workforce.maintenance.result.v1",
+        "tick_id": input.tick_id,
+        "observed_at": result.observed_at,
+        "expired_requests": result.expired_requests,
+        "expired_tasks": result.expired_tasks,
+        "expired_proactive_actions": result.expired_proactive_actions,
+        "requeued_tasks": result.requeued_tasks,
+        "dead_lettered_tasks": result.dead_lettered_tasks,
     })))
 }
 
@@ -1716,6 +1794,11 @@ const fn proactive_decision_name(value: ProactiveDecision) -> &'static str {
 fn is_recent_worker_time(value: DateTime<Utc>) -> bool {
     let now = Utc::now();
     value >= now - Duration::days(30) && value <= now + Duration::minutes(5)
+}
+
+fn is_recent_maintenance_time(value: DateTime<Utc>) -> bool {
+    let now = Utc::now();
+    value >= now - Duration::hours(24) && value <= now + Duration::minutes(5)
 }
 
 fn validate_input(input: &CreateWorkRequest) -> Result<(), (StatusCode, Json<Value>)> {

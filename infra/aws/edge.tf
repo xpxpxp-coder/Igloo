@@ -332,6 +332,32 @@ resource "aws_wafv2_web_acl" "edge" {
   }
 
   rule {
+    name     = "deny-private-internal-api"
+    priority = 2
+    action {
+      block {}
+    }
+    statement {
+      byte_match_statement {
+        positional_constraint = "STARTS_WITH"
+        search_string         = "/internal/"
+        field_to_match {
+          uri_path {}
+        }
+        text_transformation {
+          priority = 0
+          type     = "NONE"
+        }
+      }
+    }
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "deny-private-internal-api"
+      sampled_requests_enabled   = false
+    }
+  }
+
+  rule {
     name     = "aws-common-rule-set"
     priority = 10
     override_action {

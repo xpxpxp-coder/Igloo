@@ -6,8 +6,8 @@ backups, and cost controls. Nothing in this root grants access to Analyst 360
 stores; integration uses the private versioned API/event contracts only.
 
 The current checked-in phase includes the account/image/activation preflight,
-managed substrate, a dormant relay task contract, and per-identity dormant
-workforce task/service contracts. It
+managed substrate, a hard-dormant relay service, per-identity workforce
+task/service contracts, and a separate maintenance scheduler service. It
 fails before resource creation when the caller is in the wrong account, the
 management account is targeted, production shares the Analyst 360 workload
 account, the image is mutable or outside the exact Snowman ECR repository,
@@ -22,13 +22,18 @@ enhanced ECS telemetry, encrypted service log groups, alarms, an SNS operations
 topic, and an account-tag budget. The digest-pinned relay task definition runs
 as non-root with a read-only root filesystem, dropped Linux capabilities,
 writable scratch mounts, separate execution/task roles, exact ECR/log/secret,
-Valkey, media-S3, and S3-via-KMS grants, and no ECS service that could activate
-it. Each workforce profile has a distinct ECS execution role, task role,
+Valkey, media-S3, and S3-via-KMS grants. Its ECS service is fixed at zero by both
+input preflight and resource precondition. Each workforce profile has a distinct
+ECS execution role, task role,
 Secrets Manager container, Nostr identity, Analyst service principal, and
 cross-account asymmetric KMS signing key. Its task has no public IP, shell,
 filesystem grant, shared agent secret, provider endpoint, or general internet
 route; the only optional non-AWS egress is an exact private Analyst 360 prefix
-list. Runtime secrets intentionally have no Terraform-managed values.
+list. The maintenance scheduler has a distinct identity, empty AWS task role,
+and no Analyst/model network path. Workers and schedulers reach the exact
+Snowman hostname through split-horizon Route 53 and an internal TLS ALB; the
+public WAF blocks `/internal/`. Runtime secrets intentionally have no
+Terraform-managed values.
 Staging uses one interface-endpoint ENI, one RDS instance, and one Valkey node;
 production expands endpoints and managed state across availability zones.
 
@@ -55,11 +60,10 @@ root is deployable:
 2. governed database-role/key bootstrap that populates the relay runtime secret,
    AWS Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
    delivery, and tested recovery;
-3. ECS relay service plus internal scheduler and sandbox; pinned specialist
-   model images/weights and staged activation of the separate `aws-inference`
-   endpoint/component root; private ingress
-   for the now-defined model-gateway service; plus staged activation of the
-   now-defined workforce services;
+3. proactive trigger poller/executor and agent sandbox; pinned specialist model
+   images/weights and staged activation of the separate `aws-inference`
+   endpoint/component root; private ingress for the now-defined model-gateway
+   service; plus staged activation of relay, workforce, and scheduler services;
 4. WAF, centralized encrypted logs/metrics/traces, alarms, synthetic probes,
    budgets, autoscaling, dormant staging controls, and evidence export; and
 5. CI plan/policy tests, SBOM/provenance/signature enforcement, staged apply,

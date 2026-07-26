@@ -141,6 +141,18 @@ resource "aws_security_group" "worker" {
   vpc_id      = aws_vpc.command_center.id
 }
 
+resource "aws_security_group" "scheduler" {
+  name        = "${local.workload_name}-scheduler"
+  description = "Deadline and lease maintenance only; no Analyst or model route"
+  vpc_id      = aws_vpc.command_center.id
+}
+
+resource "aws_security_group" "workforce_ingress" {
+  name        = "${local.workload_name}-workforce-ingress"
+  description = "Private TLS ingress for Snowman workforce service identities"
+  vpc_id      = aws_vpc.command_center.id
+}
+
 resource "aws_security_group" "model_gateway" {
   name        = "${local.workload_name}-model-gateway"
   description = "Snowman-only model policy gateway"
@@ -205,19 +217,61 @@ resource "aws_vpc_security_group_egress_rule" "edge_to_relay_health" {
   description                  = "ALB readiness probes only"
 }
 
-resource "aws_vpc_security_group_ingress_rule" "relay_from_worker" {
+resource "aws_vpc_security_group_ingress_rule" "workforce_ingress_from_services" {
+  for_each = {
+    worker    = aws_security_group.worker.id
+    scheduler = aws_security_group.scheduler.id
+  }
+
+  security_group_id            = aws_security_group.workforce_ingress.id
+  referenced_security_group_id = each.value
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "services_to_workforce_ingress" {
+  for_each = {
+    worker    = aws_security_group.worker.id
+    scheduler = aws_security_group.scheduler.id
+  }
+
+  security_group_id            = each.value
+  referenced_security_group_id = aws_security_group.workforce_ingress.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "relay_from_workforce_ingress" {
   security_group_id            = aws_security_group.relay.id
-  referenced_security_group_id = aws_security_group.worker.id
+  referenced_security_group_id = aws_security_group.workforce_ingress.id
   from_port                    = 8080
   to_port                      = 8080
   ip_protocol                  = "tcp"
 }
 
-resource "aws_vpc_security_group_egress_rule" "worker_to_relay" {
-  security_group_id            = aws_security_group.worker.id
+resource "aws_vpc_security_group_egress_rule" "workforce_ingress_to_relay" {
+  security_group_id            = aws_security_group.workforce_ingress.id
   referenced_security_group_id = aws_security_group.relay.id
   from_port                    = 8080
   to_port                      = 8080
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "relay_health_from_workforce_ingress" {
+  security_group_id            = aws_security_group.relay.id
+  referenced_security_group_id = aws_security_group.workforce_ingress.id
+  from_port                    = 8081
+  to_port                      = 8081
+  ip_protocol                  = "tcp"
+}
+
+resource "aws_vpc_security_group_egress_rule" "workforce_ingress_to_relay_health" {
+  security_group_id            = aws_security_group.workforce_ingress.id
+  referenced_security_group_id = aws_security_group.relay.id
+  from_port                    = 8081
+  to_port                      = 8081
   ip_protocol                  = "tcp"
 }
 
@@ -305,6 +359,7 @@ resource "aws_vpc_security_group_ingress_rule" "endpoints_from_services" {
   for_each = {
     relay         = aws_security_group.relay.id
     worker        = aws_security_group.worker.id
+    scheduler     = aws_security_group.scheduler.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -320,6 +375,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_endpoints" {
   for_each = {
     relay         = aws_security_group.relay.id
     worker        = aws_security_group.worker.id
+    scheduler     = aws_security_group.scheduler.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -335,6 +391,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_udp" {
   for_each = {
     relay         = aws_security_group.relay.id
     worker        = aws_security_group.worker.id
+    scheduler     = aws_security_group.scheduler.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -350,6 +407,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_tcp" {
   for_each = {
     relay         = aws_security_group.relay.id
     worker        = aws_security_group.worker.id
+    scheduler     = aws_security_group.scheduler.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }

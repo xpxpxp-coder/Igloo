@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 33);
+        assert_eq!(migrations.len(), 34);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -608,6 +608,15 @@ mod tests {
             .sql
             .as_str()
             .contains("ADD COLUMN artifact_type"));
+        assert_eq!(migrations[33].version, 34);
+        assert_eq!(
+            &*migrations[33].description,
+            "snowman workforce maintenance"
+        );
+        assert!(migrations[33]
+            .sql
+            .as_str()
+            .contains("snowman_workforce_maintenance_ticks"));
 
         // The git repo-name registry is an additive migration, never folded into
         // 0001 — folding it would change 0001's checksum and break brownfield

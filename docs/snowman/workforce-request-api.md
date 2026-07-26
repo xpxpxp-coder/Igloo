@@ -83,6 +83,7 @@ Source support now exists for a separately addressed private worker service:
 | `POST /internal/snowman/v1/workforce/requests/{request_id}/context-packets` | Publishes a bounded metadata-only handoff under the writer's current fenced task lease. |
 | `GET /internal/snowman/v1/workforce/requests/{request_id}/context-packets` | Lists only non-expired manifests for an actively assigned reader; artifact bodies remain in their authority. |
 | `POST /internal/snowman/v1/workforce/requests/{request_id}/proactive-actions` | Evaluates an authorized trigger against the server-owned auto/approval/reject policy and durably reserves approved cost. |
+| `POST /internal/snowman/v1/workforce/maintenance/tick` | Idempotently enforces deadlines, recovers expired leases, dead-letters exhausted tasks, expires stale proactive proposals, and appends transition evidence. |
 
 Every route requires a live `service` workforce binding and the exact
 capability appropriate to the operation. Claim, heartbeat, spend, and finish use
@@ -97,6 +98,12 @@ Claim replay, heartbeat, spend, and completion also revalidate the live
 task-specific grants, service-identity lifecycle, current approval snapshot, and
 catalog route; revocation or route suspension cannot be bypassed by retaining an
 unexpired lease token.
+
+Maintenance uses a distinct service identity holding only
+`workforce.maintenance`. The database stores the exact tick receipt and appends
+`request.expired`, `task.expired`, `task.requeued`, `task.dead_lettered`, or
+`proactive.expired` in the same transaction as each state transition. The
+scheduler cannot claim a task or invoke Analyst/model services.
 
 Human cancellation is a separate public control path. The server derives the
 tenant and human actor from the signed request, accepts only a bounded
@@ -138,11 +145,12 @@ points. A private scheduler deployment may explicitly set
 `SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD`, and
 `SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS`; the relay records the exact
 policy digest used for every decision.
-The identity-isolated `snowman-workforce-worker` now implements claim, planning,
-heartbeat, governed Analyst dispatch/status, context publication, and terminal
-completion in source. Capability-specific Analyst job executors, AWS task/service
-deployment, model gateway/inference, scheduler/recovery, sandbox boundaries, and
-staged execution proof remain open.
+The identity-isolated worker and maintenance scheduler now implement claim,
+planning, heartbeat, governed Analyst dispatch/status, context publication,
+terminal completion, deadline enforcement, lease recovery, and dead-lettering
+in source. Capability-specific Analyst job executors, proactive action
+execution, sandbox boundaries, AWS activation, and staged execution/recovery
+proof remain open.
 
 ## Analyst lifecycle events
 

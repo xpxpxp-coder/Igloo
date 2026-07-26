@@ -3145,6 +3145,25 @@ impl Db {
         workforce::schedule_proactive_action(&self.pool, community, proposal).await
     }
 
+    /// Enforce workforce deadlines and recover abandoned leases under one
+    /// idempotent, evidence-preserving scheduler tick.
+    pub async fn maintain_workforce(
+        &self,
+        community: CommunityId,
+        tick_id: Uuid,
+        scheduler_identity_id: Uuid,
+        requested_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<workforce::WorkforceMaintenanceResult> {
+        workforce::maintain_workforce(
+            &self.pool,
+            community,
+            tick_id,
+            scheduler_identity_id,
+            requested_at,
+        )
+        .await
+    }
+
     /// Returns whether a member has persisted acceptance evidence for a policy version.
     pub async fn has_join_policy_acceptance(
         &self,
