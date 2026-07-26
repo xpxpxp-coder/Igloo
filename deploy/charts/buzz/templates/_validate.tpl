@@ -53,6 +53,18 @@ surface at template time regardless of which manifest helm renders first.
   {{- end -}}
 {{- end -}}
 
+{{/* Governed workforce identity is meaningful only with role scopes and closed membership. */}}
+{{- if .Values.relay.snowmanWorkforceIdentityRequired -}}
+  {{- if not .Values.relay.snowmanRoleScopes -}}
+    {{- fail "relay.snowmanWorkforceIdentityRequired=true requires relay.snowmanRoleScopes=true" -}}
+  {{- end -}}
+{{- end -}}
+{{- if .Values.relay.snowmanRoleScopes -}}
+  {{- if not .Values.relay.requireRelayMembership -}}
+    {{- fail "relay.snowmanRoleScopes=true requires relay.requireRelayMembership=true" -}}
+  {{- end -}}
+{{- end -}}
+
 {{/* ownerPubkey format check */}}
 {{- if .Values.ownerPubkey -}}
   {{- if not (regexMatch "^[0-9a-f]{64}$" .Values.ownerPubkey) -}}

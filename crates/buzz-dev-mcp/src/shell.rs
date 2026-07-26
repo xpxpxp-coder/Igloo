@@ -1,4 +1,4 @@
-use crate::shim::Shim;
+use crate::{paths::resolve_workspace_root, shim::Shim};
 use rmcp::model::{CallToolResult, Content};
 use rmcp::ErrorData;
 use schemars::JsonSchema;
@@ -33,6 +33,9 @@ pub struct SharedState {
     /// bootstrap hint and every `run()` call read the SAME resolution — no drift.
     pub resolved_shell: Result<(PathBuf, String), String>,
     pub artifacts: Mutex<VecDeque<PathBuf>>,
+    /// Snapshotted at process construction so an agent cannot grant itself
+    /// shell authority by mutating its own environment after startup.
+    shell_capability_granted: bool,
     next_call_id: Mutex<u64>,
 }
 
@@ -58,6 +61,8 @@ impl SharedState {
             bootstrap_instructions,
             resolved_shell,
             artifacts: Mutex::new(VecDeque::with_capacity(ARTIFACT_RING_SIZE)),
+            shell_capability_granted: std::env::var("SNOWMAN_AGENT_SHELL_CAPABILITY").as_deref()
+                == Ok("workspace.shell"),
             next_call_id: Mutex::new(0),
         })
     }
@@ -132,6 +137,11 @@ pub async fn run(
     p: ShellParams,
     ct: CancellationToken,
 ) -> Result<CallToolResult, ErrorData> {
+    if !state.shell_capability_granted {
+        return Ok(CallToolResult::error(vec![Content::text(
+            "Snowman shell execution is disabled. A scoped execution broker must grant SNOWMAN_AGENT_SHELL_CAPABILITY=workspace.shell for this agent runtime.",
+        )]));
+    }
     if p.command.len() > MAX_COMMAND_BYTES {
         return Err(ErrorData::invalid_params(
             format!("command exceeds {MAX_COMMAND_BYTES} byte limit"),
@@ -142,11 +152,8 @@ pub async fn run(
         .timeout_ms
         .unwrap_or(DEFAULT_TIMEOUT_MS)
         .min(MAX_TIMEOUT_MS);
-    let workdir: PathBuf = p
-        .workdir
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| state.cwd.clone());
+    let workdir = resolve_workspace_root(state, p.workdir.as_deref())
+        .map_err(|e| ErrorData::invalid_params(e, None))?;
 
     if !workdir.is_dir() {
         return Err(ErrorData::invalid_params(
@@ -167,8 +174,21 @@ pub async fn run(
     cmd.arg(shell_arg).arg(&p.command);
     cmd.current_dir(&workdir);
     cmd.env("PATH", &state.shim.path_env);
-    // NOSTR_PRIVATE_KEY is already removed from this process's env (shim.rs).
-    // BUZZ_PRIVATE_KEY is intentionally inherited — the buzz CLI needs it.
+    // Long-lived signing/relay and cloud credentials must not reach an
+    // arbitrary shell. The execution broker will mint task-scoped credentials
+    // through purpose-specific channels instead of ambient inheritance.
+    for key in [
+        "NOSTR_PRIVATE_KEY",
+        "BUZZ_PRIVATE_KEY",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ] {
+        cmd.env_remove(key);
+    }
     for (k, v) in &state.shim.git_env {
         cmd.env(k, v);
     }
@@ -990,7 +1010,9 @@ mod tests {
 
     fn make_state(cwd: &std::path::Path) -> SharedState {
         let shim = Shim::install().expect("shim install");
-        SharedState::new(cwd.to_path_buf(), shim).expect("state new")
+        let mut state = SharedState::new(cwd.to_path_buf(), shim).expect("state new");
+        state.shell_capability_granted = true;
+        state
     }
 
     /// Pull the JSON body out of a CallToolResult so tests can assert on fields.

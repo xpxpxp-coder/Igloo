@@ -30,7 +30,7 @@ const BACKGROUND_BLOCKED_STATES = new Set<UpdateStatus["state"]>([
   "manual-required",
 ]);
 
-const GITHUB_RELEASES_URL = "https://github.com/block/buzz/releases/latest";
+const SNOWMAN_DOWNLOADS_URL = "https://snowmanai.org/downloads";
 
 function toErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -168,7 +168,7 @@ export function useUpdater() {
             setStatus({
               state: "manual-required",
               version: update.version,
-              releaseUrl: GITHUB_RELEASES_URL,
+            releaseUrl: SNOWMAN_DOWNLOADS_URL,
             });
           }
         } else if (shouldShowQuietResult) {

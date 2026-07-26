@@ -36,6 +36,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # view_image tool: HTTP fetch (workspace reqwest is already used by buzz-cli;
 # adding it here is essentially free), base64 encoding, and decode/resize.
 reqwest = { workspace = true }
+url = { workspace = true }
 base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 buzz-core = { workspace = true }

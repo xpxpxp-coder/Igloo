@@ -8,7 +8,7 @@ httpRoute:
   enabled: true
   parentRefs: []
   hostnames:
-    - push.buzz.xyz
+    - push.snowmanai.org
 networkPolicy:
   apnsEgressCidrs:
     - 0.0.0.0/0

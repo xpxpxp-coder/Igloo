@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "company_name": "Snowman AI",
+  "product_name": "Snowman 360",
+  "command_center_name": "Snowman Command Center",
+  "short_name": "Snowman",
+  "public_domain": "snowmanai.org",
+  "support_email": "security@snowmanai.org",
+  "desktop_bundle_id": "ai.snowman.commandcenter",
+  "desktop_dev_bundle_id": "ai.snowman.commandcenter.dev",
+  "container_image": "ghcr.io/snowman-ai-org/snowman-command-center",
+  "push_gateway_image": "ghcr.io/snowman-ai-org/snowman-push-gateway",
+  "source_repository": "https://github.com/snowman-ai-org/snowman-command-center",
+  "release_page_path": "/downloads",
+  "release_api_path": "/api/releases?per_page=10",
+  "compatibility": {
+    "preserve_nostr_event_kinds": true,
+    "preserve_wire_protocol_names_when_required": true,
+    "legacy_buzz_deep_links_may_be_read_only": true
+  }
+}

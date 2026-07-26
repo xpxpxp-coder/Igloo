@@ -353,13 +353,13 @@ fn is_openai_compatible_provider(provider: Option<&str>) -> bool {
 #[cfg(test)]
 fn openai_compatible_models_url(env: &BTreeMap<String, String>) -> String {
     let base_url = env_value(env, "OPENAI_COMPAT_BASE_URL")
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .unwrap_or_else(|| "https://models.snowmanai.org/openai/v1".to_string());
     format!("{}/models", base_url.trim_end_matches('/'))
 }
 
 fn openai_compatible_models_url_for_discovery(env: &BTreeMap<String, String>) -> String {
     let base_url = env_or_process_value(env, "OPENAI_COMPAT_BASE_URL")
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .unwrap_or_else(|| "https://models.snowmanai.org/openai/v1".to_string());
     format!("{}/models", base_url.trim_end_matches('/'))
 }
 
@@ -503,7 +503,10 @@ async fn discover_openai_compatible_models(
     let url = if relay_mesh {
         format!("{}/models", crate::managed_agents::RELAY_MESH_API_BASE_URL)
     } else {
-        openai_compatible_models_url_for_discovery(env)
+        let url = openai_compatible_models_url_for_discovery(env);
+        let base_url = url.trim_end_matches("/models");
+        buzz_agent_pkg::config::validate_snowman_model_base_url(base_url)?;
+        url
     };
     let response = client
         .get(&url)
@@ -566,13 +569,13 @@ fn is_anthropic_provider(provider: Option<&str>) -> bool {
 #[cfg(test)]
 fn anthropic_models_url(env: &BTreeMap<String, String>) -> String {
     let base_url = env_value(env, "ANTHROPIC_BASE_URL")
-        .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+        .unwrap_or_else(|| "https://models.snowmanai.org/anthropic".to_string());
     anthropic_models_url_from_base(&base_url)
 }
 
 fn anthropic_models_url_for_discovery(env: &BTreeMap<String, String>) -> String {
     let base_url = env_or_process_value(env, "ANTHROPIC_BASE_URL")
-        .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+        .unwrap_or_else(|| "https://models.snowmanai.org/anthropic".to_string());
     anthropic_models_url_from_base(&base_url)
 }
 
@@ -647,6 +650,9 @@ async fn discover_anthropic_models(
     };
     let redaction_env = redaction_env_with_value(env, "ANTHROPIC_API_KEY", &api_key);
     let url = anthropic_models_url_for_discovery(env);
+    let base_url = env_or_process_value(env, "ANTHROPIC_BASE_URL")
+        .unwrap_or_else(|| "https://models.snowmanai.org/anthropic".to_string());
+    buzz_agent_pkg::config::validate_snowman_model_base_url(&base_url)?;
     let mut models = Vec::new();
     let mut after_id: Option<String> = None;
     for _ in 0..20 {
@@ -729,6 +735,7 @@ async fn discover_databricks_models(
         Some(h) => h,
         None => return Ok(None), // no host → fall through to subprocess
     };
+    buzz_agent_pkg::config::validate_snowman_model_base_url(&host)?;
 
     // api_key = DATABRICKS_TOKEN (empty string = use PKCE cache).
     let api_key = env_or_process_value(env, "DATABRICKS_TOKEN").unwrap_or_default();

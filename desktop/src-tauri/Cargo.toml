@@ -3,8 +3,8 @@
 [package]
 name = "buzz-desktop"
 version = "0.4.26"
-description = "Buzz desktop app"
-authors = ["you"]
+description = "Snowman Command Center desktop app"
+authors = ["Snowman AI"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

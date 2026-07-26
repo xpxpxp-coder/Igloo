@@ -1,4 +1,4 @@
-package xyz.block.buzz.mobile
+package ai.snowman.commandcenter
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory

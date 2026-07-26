@@ -762,7 +762,10 @@ impl Config {
                     env("ANTHROPIC_MODEL").as_deref(),
                 )
                 .ok_or_else(|| "config: ANTHROPIC_MODEL required".to_string())?,
-                env_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+                env_or(
+                    "ANTHROPIC_BASE_URL",
+                    "https://models.snowmanai.org/anthropic",
+                ),
                 OpenAiApi::Auto, // unused for Anthropic
             ),
             Provider::OpenAi => (
@@ -772,7 +775,10 @@ impl Config {
                     env("OPENAI_COMPAT_MODEL").as_deref(),
                 )
                 .ok_or_else(|| "config: OPENAI_COMPAT_MODEL required".to_string())?,
-                env_or("OPENAI_COMPAT_BASE_URL", "https://api.openai.com/v1"),
+                env_or(
+                    "OPENAI_COMPAT_BASE_URL",
+                    "https://models.snowmanai.org/openai/v1",
+                ),
                 parse_openai_api(env("OPENAI_COMPAT_API").as_deref())?,
             ),
             Provider::Databricks | Provider::DatabricksV2 => (
@@ -872,6 +878,8 @@ impl Config {
         const MIN_LINE_BYTES: usize = 1024;
         const MIN_TOOL_RESULT_TEXT_BYTES: usize = 1024;
         const MIN_TIMEOUT: Duration = Duration::from_secs(1);
+
+        validate_snowman_model_base_url(&self.base_url)?;
 
         if self.max_output_tokens < 1 {
             return Err("config: BUZZ_AGENT_MAX_OUTPUT_TOKENS must be >= 1".into());
@@ -975,6 +983,50 @@ fn resolve_model(
     explicit_override.or(provider_default).map(str::to_owned)
 }
 
+/// Validate that a model endpoint stays inside the Snowman-controlled runtime
+/// boundary. Agent clients never call model vendors directly: production
+/// inference is reached through the Snowman model gateway, where tenant policy,
+/// minimization, receipts, cost controls, and provider approval can be enforced.
+/// Loopback is allowed for development and isolated local inference only.
+pub fn validate_snowman_model_base_url(base_url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(base_url)
+        .map_err(|error| format!("config: invalid model base URL: {error}"))?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("config: model base URL must not contain credentials".into());
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("config: model base URL must not contain a query or fragment".into());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "config: model base URL must include a host".to_string())?;
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || parsed.host().is_some_and(|value| match value {
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+            url::Host::Domain(_) => false,
+        });
+    let normalized_host = host.to_ascii_lowercase();
+    let is_snowman =
+        normalized_host == "snowmanai.org" || normalized_host.ends_with(".snowmanai.org");
+
+    if !is_snowman && !is_loopback {
+        return Err(format!(
+            "config: model endpoint {host:?} is outside the Snowman-controlled boundary; route inference through models.snowmanai.org"
+        ));
+    }
+    if is_snowman && parsed.scheme() != "https" {
+        return Err("config: Snowman model endpoints require HTTPS".into());
+    }
+    if is_loopback && !matches!(parsed.scheme(), "http" | "https") {
+        return Err("config: loopback model endpoints require HTTP or HTTPS".into());
+    }
+    if is_snowman && parsed.port().is_some_and(|port| port != 443) {
+        return Err("config: Snowman model endpoints may only use port 443".into());
+    }
+    Ok(())
+}
+
 fn present_nonempty(v: Option<&str>) -> bool {
     v.map(str::trim).is_some_and(|s| !s.is_empty())
 }
@@ -1022,9 +1074,9 @@ fn parse_openai_api(raw: Option<&str>) -> Result<OpenAiApi, String> {
     }
 }
 
-/// `true` when `base_url` is an official OpenAI host. Hosts on
-/// `*.openai.com` get Responses under `Auto`; everything else (vLLM,
-/// Ollama, OpenRouter, Block Gateway, …) gets Chat Completions.
+/// `true` when `base_url` is an OpenAI Responses-capable route. Official
+/// OpenAI hosts and the Snowman OpenAI gateway route get Responses under
+/// `Auto`; other compatible/local routes get Chat Completions.
 /// Lookalike-safe: `api.openai.com.evil.example` returns `false`.
 pub fn is_openai_host(base_url: &str) -> bool {
     let rest = match base_url
@@ -1035,7 +1087,9 @@ pub fn is_openai_host(base_url: &str) -> bool {
         None => return false,
     };
     let host = &rest[..rest.find(['/', ':']).unwrap_or(rest.len())];
-    host == "api.openai.com" || host.ends_with(".openai.com")
+    host == "api.openai.com"
+        || host.ends_with(".openai.com")
+        || (host == "models.snowmanai.org" && rest.contains("/openai"))
 }
 
 fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> Result<T, String>
@@ -1272,12 +1326,43 @@ mod tests {
             ("https://api.openai.com", true),
             ("http://eu.api.openai.com/v1", true),
             ("http://localhost:11434/v1", false),
+            ("https://models.snowmanai.org/openai/v1", true),
             ("https://openrouter.ai/api/v1", false),
             ("https://gateway.block.example/v1", false),
             ("https://api.openai.com.evil.example/v1", false),
             ("not a url", false),
         ] {
             assert_eq!(is_openai_host(url), want, "url={url}");
+        }
+    }
+
+    #[test]
+    fn snowman_model_endpoint_policy_is_fail_closed() {
+        for allowed in [
+            "https://models.snowmanai.org/openai/v1",
+            "https://models.snowmanai.org/anthropic",
+            "http://127.0.0.1:11434/v1",
+            "http://[::1]:8080/v1",
+            "http://localhost:8080/v1",
+        ] {
+            assert!(
+                validate_snowman_model_base_url(allowed).is_ok(),
+                "expected allowed endpoint: {allowed}"
+            );
+        }
+        for denied in [
+            "https://api.openai.com/v1",
+            "https://api.anthropic.com",
+            "https://models.snowmanai.org.evil.example/v1",
+            "http://models.snowmanai.org/openai/v1",
+            "https://models.snowmanai.org:8443/openai/v1",
+            "https://user:secret@models.snowmanai.org/v1",
+            "https://models.snowmanai.org/v1?token=secret",
+        ] {
+            assert!(
+                validate_snowman_model_base_url(denied).is_err(),
+                "expected denied endpoint: {denied}"
+            );
         }
     }
 
@@ -1837,7 +1922,11 @@ mod tests {
         provider: Provider,
         thinking_effort: Option<ThinkingEffort>,
     ) -> Config {
-        let mut cfg = Config::for_discovery(provider, "key".into(), "https://example.com".into());
+        let mut cfg = Config::for_discovery(
+            provider,
+            "key".into(),
+            "https://models.snowmanai.org/test".into(),
+        );
         cfg.model = "some-model".into();
         cfg.thinking_effort = thinking_effort;
         // for_discovery sets max_output_tokens=1 and max_context_tokens=200_001 which satisfies

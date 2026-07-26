@@ -12,26 +12,29 @@ use tauri_plugin_opener::OpenerExt;
 use tokio::{net::TcpListener, sync::oneshot};
 use url::Url;
 
-const BUILDERLAB_API_BASE_URL: &str = "https://app.builderlab.xyz/api/goose";
+// Internal module/command names are retained temporarily to minimize fork drift.
+// The production endpoint is Snowman-owned and is the only permitted hosted
+// community/identity control plane.
+const BUILDERLAB_API_BASE_URL: &str = "https://accounts.snowmanai.org/api/command-center";
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const BB_SESSION_CREDENTIAL_HEADER: &str = "X-BB-Session-Credential";
-// Builderlab enforces an Origin check on the identity bind endpoints. Browsers
+const BB_SESSION_CREDENTIAL_HEADER: &str = "X-Snowman-Session-Credential";
+// The Snowman account service enforces an Origin check on identity binding. Browsers
 // attach this automatically; the desktop reqwest client must set it explicitly
 // or challenge/verify fail with `invalid_origin`. It also seeds the challenge
 // body's `origin` field so both agree.
-const BUILDERLAB_ORIGIN: &str = "https://app.builderlab.xyz";
+const BUILDERLAB_ORIGIN: &str = "https://accounts.snowmanai.org";
 const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Buzz authentication complete</title>
+  <title>Snowman authentication complete</title>
   <style>
     :root {
       color-scheme: light;
       font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: #231e1e;
-      background: #d7d72e;
+      background: #e7f3ff;
     }
 
     * {
@@ -45,7 +48,7 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
       display: grid;
       place-items: center;
       padding: 24px;
-      background-color: #d7d72e;
+      background-color: #e7f3ff;
       background-image: radial-gradient(circle, rgba(35, 30, 30, 0.16) 1.2px, transparent 1.3px);
       background-size: 37px 37px;
     }
@@ -59,7 +62,7 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
       box-shadow: 8px 8px 0 #231e1e;
     }
 
-    .bee {
+    .snowman {
       display: block;
       width: 72px;
       height: auto;
@@ -108,7 +111,7 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
         box-shadow: 6px 6px 0 #231e1e;
       }
 
-      .bee {
+      .snowman {
         width: 60px;
         margin-bottom: 32px;
       }
@@ -117,24 +120,19 @@ const AUTH_COMPLETE_HTML: &str = r#"<!doctype html>
 </head>
 <body>
   <main>
-    <svg class="bee" viewBox="0 0 466 309" role="img" aria-label="Buzz">
-      <defs>
-        <mask id="bee-mask">
-          <rect width="466" height="309" fill="black"/>
-          <circle cx="91.7" cy="154.5" r="91.7" fill="white"/>
-          <circle cx="374.3" cy="154.5" r="91.7" fill="white"/>
-          <rect x="128" width="210" height="309" rx="34" fill="white"/>
-          <ellipse cx="193.3" cy="84.4" rx="27" ry="27" fill="black"/>
-          <ellipse cx="276" cy="84.4" rx="27" ry="27" fill="black"/>
-          <rect x="166.3" y="157.2" width="136.9" height="38.3" rx="5" fill="black"/>
-          <rect x="166.9" y="235.1" width="136.2" height="37.6" rx="5" fill="black"/>
-        </mask>
-      </defs>
-      <rect width="466" height="309" fill="currentColor" mask="url(#bee-mask)"/>
+    <svg class="snowman" viewBox="0 0 120 160" role="img" aria-label="Snowman Command Center">
+      <circle cx="60" cy="42" r="30" fill="white" stroke="currentColor" stroke-width="6"/>
+      <circle cx="60" cy="112" r="43" fill="white" stroke="currentColor" stroke-width="6"/>
+      <circle cx="49" cy="36" r="4" fill="currentColor"/>
+      <circle cx="71" cy="36" r="4" fill="currentColor"/>
+      <path d="M51 53 Q60 59 69 53" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+      <circle cx="60" cy="96" r="4" fill="currentColor"/>
+      <circle cx="60" cy="116" r="4" fill="currentColor"/>
+      <circle cx="60" cy="136" r="4" fill="currentColor"/>
     </svg>
     <div class="eyebrow">Authentication complete</div>
     <h1>You&rsquo;re signed in.</h1>
-    <p>You can close this window and return to Buzz.</p>
+    <p>You can close this window and return to Snowman Command Center.</p>
   </main>
 </body>
 </html>"#;
@@ -211,7 +209,7 @@ async fn login_callback(
 
 fn api_url(path: &str) -> Result<Url, String> {
     Url::parse(&format!("{BUILDERLAB_API_BASE_URL}{path}"))
-        .map_err(|error| format!("invalid Builderlab API URL: {error}"))
+        .map_err(|error| format!("invalid Snowman account API URL: {error}"))
 }
 
 fn login_url(return_to: &str) -> Result<Url, String> {
@@ -219,7 +217,7 @@ fn login_url(return_to: &str) -> Result<Url, String> {
     login_url
         .query_pairs_mut()
         .append_pair("type", "cli")
-        .append_pair("product", "buzz")
+        .append_pair("product", "snowman-command-center")
         .append_pair("returnTo", return_to);
     Ok(login_url)
 }
@@ -234,17 +232,17 @@ async fn authenticated_user(
         .timeout(Duration::from_secs(30))
         .send()
         .await
-        .map_err(|error| format!("Builderlab session check failed: {error}"))?;
+        .map_err(|error| format!("Snowman account session check failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
-            "Builderlab session check failed with HTTP {}",
+            "Snowman account session check failed with HTTP {}",
             response.status()
         ));
     }
     response
         .json()
         .await
-        .map_err(|error| format!("invalid Builderlab session response: {error}"))
+        .map_err(|error| format!("invalid Snowman account session response: {error}"))
 }
 
 #[tauri::command]
@@ -278,7 +276,7 @@ pub(crate) async fn start_builderlab_login(
     let login_url = login_url(&return_to)?;
     if let Err(error) = app.opener().open_url(login_url.as_str(), None::<&str>) {
         server.abort();
-        return Err(format!("could not open Builderlab authentication: {error}"));
+        return Err(format!("could not open Snowman authentication: {error}"));
     }
 
     let login_id = uuid::Uuid::new_v4();
@@ -307,12 +305,12 @@ pub(crate) async fn start_builderlab_login(
             }
             Err(_) => {
                 server.abort();
-                return Err("Builderlab authentication timed out".to_owned());
+                return Err("Snowman authentication timed out".to_owned());
             }
         },
         _ = &mut cancel_receiver => {
             server.abort();
-            return Err("Builderlab authentication canceled".to_owned());
+            return Err("Snowman authentication canceled".to_owned());
         }
     };
     server.abort();
@@ -324,24 +322,24 @@ pub(crate) async fn start_builderlab_login(
         .timeout(Duration::from_secs(30))
         .send()
         .await
-        .map_err(|error| format!("Builderlab code exchange failed: {error}"))?;
+        .map_err(|error| format!("Snowman code exchange failed: {error}"))?;
     if !response.status().is_success() {
         return Err(format!(
-            "Builderlab code exchange failed with HTTP {}",
+            "Snowman code exchange failed with HTTP {}",
             response.status()
         ));
     }
     let exchanged: LoginExchangeResponse = response
         .json()
         .await
-        .map_err(|error| format!("invalid Builderlab code exchange response: {error}"))?;
+        .map_err(|error| format!("invalid Snowman code exchange response: {error}"))?;
     if exchanged.session_credential.is_empty() {
-        return Err("Builderlab code exchange returned an empty credential".to_owned());
+        return Err("Snowman code exchange returned an empty credential".to_owned());
     }
 
     let me = authenticated_user(&app_state.http_client, &exchanged.session_credential).await?;
     if exchanged.expires_at != me.expires_at {
-        return Err("Builderlab session expiry did not match code exchange".to_owned());
+        return Err("Snowman session expiry did not match code exchange".to_owned());
     }
     let info = BuilderlabAuthInfo {
         expires_at: me.expires_at.clone(),
@@ -354,7 +352,7 @@ pub(crate) async fn start_builderlab_login(
             .as_ref()
             .is_none_or(|pending| pending.id != login_id)
         {
-            return Err("Builderlab authentication canceled".to_owned());
+            return Err("Snowman authentication canceled".to_owned());
         }
         *pending = None;
     }
@@ -434,7 +432,7 @@ async fn authenticated_json(
         .map_err(|error| error.to_string())?
         .as_ref()
         .map(|stored| stored.credential.clone())
-        .ok_or_else(|| "Sign in to Builderlab first".to_owned())?;
+        .ok_or_else(|| "Sign in to Snowman first".to_owned())?;
     let response = client
         .request(method, api_url(path)?)
         .header(BB_SESSION_CREDENTIAL_HEADER, credential)
@@ -443,14 +441,14 @@ async fn authenticated_json(
         .timeout(Duration::from_secs(60))
         .send()
         .await
-        .map_err(|error| format!("Builderlab request failed: {error}"))?;
+        .map_err(|error| format!("Snowman account request failed: {error}"))?;
     let status = response.status();
     let value: serde_json::Value = response
         .json()
         .await
-        .map_err(|error| format!("invalid Builderlab response: {error}"))?;
+        .map_err(|error| format!("invalid Snowman account response: {error}"))?;
     if !status.is_success() {
-        // Builderlab error responses carry a structured `{ error: { code,
+        // Snowman account error responses carry a structured `{ error: { code,
         // message, setup_needed, ... } }` body. Pass those through as `Ok` so the
         // frontend's typed handling and friendly per-code messages apply, instead
         // of surfacing a raw JSON blob. Only fall back to a plain string when the
@@ -458,7 +456,7 @@ async fn authenticated_json(
         if value.get("error").is_some() {
             return Ok(value);
         }
-        return Err(format!("Builderlab request failed (HTTP {status})."));
+        return Err(format!("Snowman account request failed (HTTP {status})."));
     }
     Ok(value)
 }
@@ -624,7 +622,7 @@ pub(crate) async fn transfer_builderlab_community(
     app_state: tauri::State<'_, crate::app_state::AppState>,
     session: tauri::State<'_, BuilderlabSession>,
 ) -> Result<serde_json::Value, String> {
-    // The Builderlab transfer endpoint expects camelCase keys, unlike the
+    // The Snowman community transfer endpoint expects camelCase keys, unlike the
     // archive/unarchive endpoints which take `community_id`; mirror the web
     // client's payload exactly.
     authenticated_json(
@@ -645,14 +643,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auth_complete_page_uses_buzz_brand() {
+    fn auth_complete_page_uses_snowman_brand() {
         for expected in [
-            "<title>Buzz authentication complete</title>",
-            "#d7d72e",
+            "<title>Snowman authentication complete</title>",
+            "#e7f3ff",
             "#231e1e",
             "#d7e7f6",
-            "aria-label=\"Buzz\"",
-            "return to Buzz",
+            "aria-label=\"Snowman Command Center\"",
+            "return to Snowman Command Center",
         ] {
             assert!(
                 AUTH_COMPLETE_HTML.contains(expected),
@@ -662,13 +660,13 @@ mod tests {
     }
 
     #[test]
-    fn api_paths_stay_on_builderlab_api_origin() {
+    fn api_paths_stay_on_snowman_api_origin() {
         let login = api_url("/v1/auth/login").unwrap();
         assert_eq!(
             login.origin().ascii_serialization(),
-            "https://app.builderlab.xyz"
+            "https://accounts.snowmanai.org"
         );
-        assert_eq!(login.path(), "/api/goose/v1/auth/login");
+        assert_eq!(login.path(), "/api/command-center/v1/auth/login");
     }
 
     #[test]
@@ -677,7 +675,10 @@ mod tests {
         let query: HashMap<_, _> = login.query_pairs().into_owned().collect();
 
         assert_eq!(query.get("type").map(String::as_str), Some("cli"));
-        assert_eq!(query.get("product").map(String::as_str), Some("buzz"));
+        assert_eq!(
+            query.get("product").map(String::as_str),
+            Some("snowman-command-center")
+        );
         assert_eq!(
             query.get("returnTo").map(String::as_str),
             Some("http://127.0.0.1:1234/callback/nonce")

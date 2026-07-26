@@ -23,7 +23,7 @@ quickstart: false
 
 # ── Image ────────────────────────────────────────────────────────────────────
 image:
-  repository: ghcr.io/block/buzz
+  repository: ghcr.io/snowman-ai-org/snowman-command-center
   tag: ""                        # empty → .Chart.AppVersion
   pullPolicy: IfNotPresent
   pullSecrets: []
@@ -107,6 +107,11 @@ relay:
   sendBuffer: 1000
   requireAuthToken: true
   requireRelayMembership: true
+  # Production requires a live Snowman workforce identity/session binding and
+  # derives relay scopes from its tenant role. Quickstart explicitly disables
+  # both gates for local evaluation.
+  snowmanRoleScopes: true
+  snowmanWorkforceIdentityRequired: true
   # Staged rollout gate for authenticated media reads. When true, relay
   # GET/HEAD /media/* requires Blossom kind 24242 t=get plus relay membership.
   # Keep false until deployed desktop/mobile/CLI clients attach read auth.

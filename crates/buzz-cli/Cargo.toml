@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Agent-first CLI for Buzz relay"
+description = "Agent-first CLI for the Snowman Command Center"
 
 [lib]
 name = "buzz_cli"
@@ -14,6 +14,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "buzz"
 path = "src/main.rs"
+
+[[bin]]
+name = "snowman"
+path = "src/bin/snowman.rs"
 
 [dependencies]
 # CLI argument parsing — derive macros + env var support (BUZZ_API_TOKEN auto-wired)

@@ -64,7 +64,7 @@ class App extends HookConsumerWidget {
     });
 
     return MaterialApp(
-      title: 'Buzz',
+      title: 'Snowman Command Center',
       theme: AppTheme.light(colorScheme: lightScheme),
       darkTheme: AppTheme.dark(colorScheme: darkScheme),
       themeMode: effectiveMode,

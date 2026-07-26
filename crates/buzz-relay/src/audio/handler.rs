@@ -217,7 +217,7 @@ async fn handle_active_audio_connection(
     let auth_tag_json = crate::handlers::auth::extract_auth_tag_json(&auth_msg.event);
 
     let relay_url = crate::api::bridge::nip42_expected_relay_url(&state.config.relay_url, &tenant);
-    let auth_ctx = match state
+    let mut auth_ctx = match state
         .auth
         .verify_auth_event(auth_msg.event, &challenge, &relay_url)
         .await
@@ -241,19 +241,40 @@ async fn handle_active_audio_connection(
     let pubkey_bytes = pubkey.to_bytes().to_vec();
     let parent_channel_id = auth_msg.parent_channel_id;
 
-    if crate::api::relay_members::enforce_relay_membership(
+    let delegated_owner = match crate::api::relay_members::enforce_relay_membership(
         &state,
         tenant.community(),
         pubkey.as_bytes(),
         auth_tag_json.as_deref(),
     )
     .await
-    .is_err()
     {
-        warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio: relay membership denied");
+        Ok(owner) => owner,
+        Err(_) => {
+            warn!(channel_id = %channel_id, pubkey = %pubkey_hex, "audio: relay membership denied");
+            let _ = ws_send
+                .send(WsMessage::Text(
+                    serde_json::json!({"type": "error", "message": "restricted: not a relay member"})
+                        .to_string()
+                        .into(),
+                ))
+                .await;
+            return;
+        }
+    };
+
+    if let Err(error) = crate::authorization::apply_role_scopes(
+        &state,
+        tenant.community(),
+        &mut auth_ctx,
+        delegated_owner.as_ref(),
+    )
+    .await
+    {
+        warn!(channel_id = %channel_id, pubkey = %pubkey_hex, %error, "audio: governed authorization denied");
         let _ = ws_send
             .send(WsMessage::Text(
-                serde_json::json!({"type": "error", "message": "restricted: not a relay member"})
+                serde_json::json!({"type": "error", "message": "restricted: identity is not authorized"})
                     .to_string()
                     .into(),
             ))

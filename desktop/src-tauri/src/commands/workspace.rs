@@ -27,6 +27,7 @@ pub async fn fetch_workspace_icon(
     relay_url: String,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
+    relay::validate_snowman_relay_url(&relay_url)?;
     let http_url = relay::relay_http_base_url(&relay_url);
     let Ok(response) = state
         .http_client
@@ -106,6 +107,7 @@ pub async fn apply_workspace(
     agent_managed_profiles: Option<bool>,
     app: AppHandle,
 ) -> Result<(), String> {
+    relay::validate_snowman_relay_url(&relay_url)?;
     let restore_app = app.clone();
     tokio::task::spawn_blocking(move || {
         let state = app.state::<AppState>();

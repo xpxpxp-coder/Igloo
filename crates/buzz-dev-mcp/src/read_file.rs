@@ -141,7 +141,7 @@ mod tests {
     }
 
     #[test]
-    fn read_allows_absolute_path() {
+    fn read_rejects_absolute_path_outside_workspace() {
         let dir = tempdir().expect("tempdir");
         // A real file in a SECOND tempdir, genuinely outside the workspace
         // root — proves absolute paths beyond workdir resolve, without a
@@ -157,10 +157,11 @@ mod tests {
             limit: None,
             workdir: Some(dir.path().display().to_string()),
         };
-        let out = run(&state, p).expect("ok");
+        let err = run(&state, p).unwrap_err();
+        let out = format!("{err:?}");
         assert!(
-            out.contains("localhost"),
-            "expected out-of-workspace file content, got: {out}"
+            out.contains("path escapes the Snowman agent workspace"),
+            "expected out-of-workspace rejection, got: {out}"
         );
     }
 

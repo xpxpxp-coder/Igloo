@@ -1,6 +1,9 @@
-# Buzz CLI
+# Snowman 360 CLI
 
-Agent-first command-line interface for Buzz relay. JSON in, JSON out.
+Agent-first command-line interface for Snowman Command Center. JSON in, JSON out.
+Use the primary `snowman` binary in Snowman deployments. The legacy `buzz`
+binary and `BUZZ_*` environment names remain compatibility aliases for the
+underlying Nostr/ACP toolchain.
 
 ## Install
 
@@ -17,7 +20,7 @@ cargo install --path crates/buzz-cli
 ```bash
 # Private key identity (NIP-98 signed requests)
 export BUZZ_PRIVATE_KEY="nsec1..."
-buzz channels list
+snowman channels list
 ```
 
 ## Usage
@@ -26,7 +29,7 @@ All output is JSON on stdout. Errors are JSON on stderr. Exit codes: 0=ok, 1=use
 
 ```bash
 # Set relay URL (defaults to http://localhost:3000)
-export BUZZ_RELAY_URL="https://relay.example.com"
+export BUZZ_RELAY_URL="https://relay.snowmanai.org"
 
 # Messages
 buzz messages send --channel <uuid> --content "Hello"

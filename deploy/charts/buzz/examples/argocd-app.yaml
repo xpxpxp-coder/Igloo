@@ -16,7 +16,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/block/buzz/charts
+    repoURL: oci://ghcr.io/snowman-ai-org/snowman-command-center/charts
     chart: buzz
     targetRevision: 0.1.0
     helm:

@@ -168,50 +168,46 @@ fn requested_model_is_not_ready_while_sdk_is_in_standby() {
 }
 
 #[test]
-fn iroh_relay_mode_defaults_to_enabled() {
-    // Default is ON: unset, empty, "1", and "default" all enable the SDK's
-    // default iroh relays, so members connect regardless of NAT. Relays are
-    // transport-only (ciphertext forwarding) — admission is a separate layer.
+fn iroh_relay_mode_defaults_to_disabled_and_requires_explicit_enablement() {
+    // Snowman defaults to direct-only. Public relays require an explicit
+    // setting; production supplies only Snowman-controlled custom relays.
     use super::IrohRelayMode;
     assert_eq!(
         super::iroh_relay_mode_from(None).unwrap(),
-        IrohRelayMode::Default
+        IrohRelayMode::Disabled
     );
     assert_eq!(
         super::iroh_relay_mode_from(Some("")).unwrap(),
-        IrohRelayMode::Default
+        IrohRelayMode::Disabled
     );
     assert_eq!(
         super::iroh_relay_mode_from(Some("  ")).unwrap(),
-        IrohRelayMode::Default
+        IrohRelayMode::Disabled
     );
-    assert_eq!(
-        super::iroh_relay_mode_from(Some("1")).unwrap(),
-        IrohRelayMode::Default
-    );
-    assert_eq!(
-        super::iroh_relay_mode_from(Some("default")).unwrap(),
-        IrohRelayMode::Default
-    );
+    assert!(super::iroh_relay_mode_from(Some("1")).is_err());
+    assert!(super::iroh_relay_mode_from(Some("default")).is_err());
 }
 
 #[test]
-fn iroh_relay_mode_opt_out_and_custom() {
+fn iroh_relay_mode_explicit_default_and_custom() {
     use super::IrohRelayMode;
-    // "0" is the explicit opt-out for metadata-conscious deployments.
+    // "0" remains an explicit opt-out.
     assert_eq!(
         super::iroh_relay_mode_from(Some("0")).unwrap(),
         IrohRelayMode::Disabled
     );
     // Anything else is a comma-separated custom relay list.
     assert_eq!(
-        super::iroh_relay_mode_from(Some("https://relay1.example, https://relay2.example ,"))
-            .unwrap(),
+        super::iroh_relay_mode_from(Some(
+            "https://relay1.snowmanai.org, https://relay2.snowmanai.org ,",
+        ))
+        .unwrap(),
         IrohRelayMode::Custom(vec![
-            "https://relay1.example".parse().unwrap(),
-            "https://relay2.example".parse().unwrap(),
+            "https://relay1.snowmanai.org".parse().unwrap(),
+            "https://relay2.snowmanai.org".parse().unwrap(),
         ])
     );
+    assert!(super::iroh_relay_mode_from(Some("https://relay.example")).is_err());
 }
 
 fn test_endpoint_token() -> String {

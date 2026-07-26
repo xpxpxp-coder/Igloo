@@ -91,12 +91,12 @@ fn merged_env_strips_reserved_keys_from_persona() {
     // it must be stripped before reaching the child process.
     let persona = map(&[
         ("BUZZ_PRIVATE_KEY", "nsec1evil"),
-        ("ANTHROPIC_API_KEY", "ok"),
+        ("SAFE_SETTING", "ok"),
     ]);
     let merged = merged_user_env(&persona, &BTreeMap::new());
     assert!(!merged.contains_key("BUZZ_PRIVATE_KEY"));
     assert_eq!(
-        merged.get("ANTHROPIC_API_KEY").map(String::as_str),
+        merged.get("SAFE_SETTING").map(String::as_str),
         Some("ok")
     );
 }
@@ -131,7 +131,7 @@ fn is_reserved_recognises_full_list() {
         assert!(is_reserved_env_key(key), "{key} should be reserved");
     }
     assert!(!is_reserved_env_key("GOOSE_MODE"));
-    assert!(!is_reserved_env_key("ANTHROPIC_API_KEY"));
+    assert!(is_reserved_env_key("ANTHROPIC_API_KEY"));
     assert!(!is_reserved_env_key("BUZZ_ACP_MODEL")); // behavior knob
 }
 
@@ -184,8 +184,8 @@ fn reserved_keys_include_relay_url() {
 // ── validate_user_env_keys ─────────────────────────────────────────
 
 #[test]
-fn validate_keys_accepts_normal_env() {
-    let env = map(&[("ANTHROPIC_API_KEY", "k"), ("GOOSE_PROVIDER", "anthropic")]);
+fn validate_keys_accepts_non_secret_behavior_env() {
+    let env = map(&[("GOOSE_TEMPERATURE", "0.2"), ("GOOSE_PROVIDER", "anthropic")]);
     assert!(validate_user_env_keys(&env).is_ok());
 }
 
@@ -202,7 +202,7 @@ fn validate_keys_lists_all_reserved_keys_found() {
     let env = map(&[
         ("BUZZ_PRIVATE_KEY", "x"),
         ("NOSTR_PRIVATE_KEY", "y"),
-        ("ANTHROPIC_API_KEY", "ok"),
+        ("SAFE_SETTING", "ok"),
     ]);
     let err = validate_user_env_keys(&env).unwrap_err();
     assert!(err.contains("BUZZ_PRIVATE_KEY"));

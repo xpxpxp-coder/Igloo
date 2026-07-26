@@ -92,7 +92,12 @@ build-release:
     cargo build --workspace --release
 
 # Run repo lint and formatting checks
-check: fmt-check clippy desktop-check desktop-tauri-fmt-check desktop-tauri-clippy web-check mobile-check
+check: snowman-production-boundary fmt-check clippy desktop-check desktop-tauri-fmt-check desktop-tauri-clippy web-check mobile-check
+
+# Fail closed when a production authority surface regains an upstream endpoint,
+# mutable image fallback, remote runtime asset, or off-brand product identity.
+snowman-production-boundary:
+    node scripts/check-snowman-production-boundary.mjs
 
 # Format all Rust code
 fmt:

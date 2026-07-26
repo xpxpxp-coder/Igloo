@@ -51,6 +51,10 @@ pub mod usage;
 pub mod user;
 /// Workflow, run, and approval persistence.
 pub mod workflow;
+/// Durable, fenced Snowman AI Workforce queue and spend controls.
+pub mod workforce;
+/// Workforce identity, device/session, and service-capability resolution.
+pub mod workforce_identity;
 
 pub use error::{DbError, Result};
 pub use event::{EventQuery, ReactionEventInsertOutcome};
@@ -2915,6 +2919,15 @@ impl Db {
         pubkey: &str,
     ) -> Result<Option<relay_members::RelayMember>> {
         relay_members::get_relay_member(&self.pool, community, pubkey).await
+    }
+
+    /// Resolve a live Snowman workforce identity for a tenant and relay key.
+    pub async fn resolve_workforce_principal(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Option<workforce_identity::WorkforcePrincipal>> {
+        workforce_identity::resolve_workforce_principal(&self.pool, community, pubkey).await
     }
 
     /// Returns all relay members of `community` ordered by `created_at` ascending.

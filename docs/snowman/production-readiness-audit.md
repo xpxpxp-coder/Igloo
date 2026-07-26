@@ -1,0 +1,106 @@
+# Snowman Command Center source-level maturity audit
+
+Status date: 2026-07-25  
+Audited baseline: `c2a4ee711e481bb427d6cf8cd08b2c7329d1508c`  
+Fork relation at baseline: `origin/main` and `upstream/main` identical
+
+## Outcome
+
+Igloo/Buzz materially improves the delivery speed, capability, usefulness, and
+visible quality of Snowman 360. It supplies a mature collaboration and agent
+operations substrate that would be expensive to rebuild: a Rust relay, signed
+realtime events, desktop/web/mobile clients, CLI, channels and direct messages,
+threads, media, search, git hosting, agent observation, workflows, Postgres,
+Redis fan-out, S3-compatible storage, telemetry, and a per-community audit
+chain.
+
+The correct decision is **adopt with hardening as a separate command center**,
+not merge its data stores into Analyst 360 and not ship the upstream baseline.
+The highest-risk gaps are identity/authorization, agent tool containment,
+approval coverage, externally anchored audit integrity, deployment/recovery
+evidence, and systematic Snowman branding.
+
+## Source-backed maturity matrix
+
+| Area | State | Source evidence | Snowman decision |
+| --- | --- | --- | --- |
+| Signed realtime protocol and relay | Proven | `crates/buzz-core/src/kind.rs`; `crates/buzz-relay/src/handlers/{auth,event,req}.rs` | Preserve Nostr wire kinds and signatures beneath the Snowman identity layer. |
+| Collaboration surfaces | Proven | `desktop/src/features`; `web/src/features`; `mobile/lib/features`; `crates/buzz-cli/src` | Reuse as command-center experience; verify each critical journey during UAT. |
+| Host-derived community boundary | Proven in substantial implementation and conformance coverage | `crates/buzz-relay/src/tenant.rs`; `crates/buzz-test-client/tests/conformance_multitenant.rs`; community-scoped DB modules | Keep. Add trusted-proxy/host-header threat tests and Snowman integration tests before launch. |
+| Human authentication | Hardening required | `crates/buzz-auth/src/lib.rs` explicitly has no JWT/IdP dependency; NIP-42 possession is the human identity proof | Add workforce OIDC binding, short sessions, device/session inventory, lifecycle, and revocation. |
+| Human authorization | Hardening required | `AuthService::verify_auth_event` grants `Scope::all_known()`; `scope.rs` includes admin scopes | Replace possession-implies-all with tenant-scoped Snowman roles and capabilities. Membership remains a resource boundary, not the whole authorization model. |
+| Agent identity | Hardening required | `desktop/src-tauri/src/managed_agents/runtime.rs` injects an agent Nostr private key and owner metadata | Issue a distinct service identity per agent/runtime/workspace; bind it to tenant, owner, capabilities, TTL, and revocation state. |
+| Agent shell/file tools | Hardening required, high risk | `crates/buzz-dev-mcp/src/shell.rs` accepts an arbitrary command, selects a host shell, permits an arbitrary workdir, and intentionally inherits `BUZZ_PRIVATE_KEY` | Disable by default. Require an external sandbox boundary, deny-by-default capabilities, scoped filesystem, constrained egress/AWS access, secret brokering, approvals, and audit. |
+| Workflow engine | Partially proven | `crates/buzz-workflow/src/{schema,executor}.rs`; transactional command handling in `crates/buzz-relay/src/handlers/command_executor.rs` | Retain only after risk classification and approval policy are enforced end to end. |
+| Workflow approvals | Hardening required | Approval records/grant/deny/resume exist in `command_executor.rs`; approver syntax currently supports `any` or one pubkey, while role-like specs are rejected | Bind approvers to Snowman identity and capability policy; prevent self-approval where independence is required; expire and audit all decisions. |
+| Workflow action completeness | Vision only for named actions | `executor.rs` returns `NotImplemented` for `SendDm` and `SetChannelTopic` | Do not advertise or accept these actions until implemented and tested, or reject them at definition validation. |
+| Outbound workflow calls | Hardening required | `ActionDef::CallWebhook` and executor/sink implement external HTTP behavior | Apply destination allowlists, DNS/IP revalidation, time/size limits, credential references, redaction, approval tiers, and evidence capture. |
+| Rate limiting | Proven implementation, production tuning required | `crates/buzz-auth/src/rate_limit.rs`; relay configuration and Redis-backed limiter wiring | Treat older contrary prose as stale; load/adversarial test tenant fairness and failure behavior. |
+| Audit chain | Proven tamper-evidence, insufficient tamper resistance | `crates/buzz-audit/src/{hash,service}.rs` uses unkeyed SHA-256 and DB-resident chain rows | Add KMS-signed periodic checkpoints and immutable external retention. A DB writer can currently rewrite rows and recompute the chain. |
+| Multi-node fan-out | Proven implementation, operational proof pending | `crates/buzz-pubsub`; relay Redis subscriber/fan-out paths | Test failover, reconnect, duplicate suppression, and degraded Redis behavior in staging. |
+| Storage/search/media tenant scoping | Substantially proven, adversarial proof pending | community-aware modules in `crates/buzz-db`, `buzz-search`, `buzz-media`; multitenant conformance tests | Add cross-tenant signed-event, REST, media, search, git, workflow, pub/sub, and cache tests to the launch gate. |
+| Observability | Useful baseline | `crates/buzz-relay/src/{metrics,telemetry}.rs`; chart metrics/health configuration | Standardize Snowman OTLP, structured audit-safe logs, SLOs, dashboards, paging, synthetic probes, and runbooks. |
+| Supply chain | Useful baseline | pinned GitHub Actions; Docker provenance attestation in `.github/workflows/docker.yml`; multi-platform release workflows | Add Snowman-owned registries/signing trust, SBOM and vulnerability policy, dependency review, reproducible release evidence, and digest-only deploys. |
+| Deployment | Evaluation/self-hosting ready, not Snowman AWS production ready | `deploy/compose/compose.yml` defaults to `ghcr.io/block/buzz:main` plus single-node Postgres/Redis/MinIO; Helm offers managed-service hooks | Do not use Compose in production. Build Snowman AWS IaC with managed data services, WAF/ALB, KMS, backups, immutable images, alarms, and cost controls. |
+| Accessibility | Meaningful component-level work, acceptance proof absent | extensive ARIA/reduced-motion usage and UI tests across desktop/web/mobile | Add automated axe/semantic checks plus keyboard, zoom, contrast, screen-reader, and mobile accessibility UAT evidence. |
+| Branding | Not started | Buzz/Sprout names, `xyz.block` identifiers, bee/hive assets, Catppuccin theme and deep links remain pervasive | Create a central product identity/design token layer, then migrate every supported surface while retaining protocol identifiers where compatibility requires them. |
+| Analyst 360 integration | Vision only in this repository | no Snowman/Analyst contract or adapter exists at the audited baseline | Implement narrow, versioned commands/events and immutable evidence references; never share databases or copy raw Aptive rows/transcripts here by default. |
+
+## Hardening progress after the audited baseline
+
+The working branch now includes source-level foundations that materially reduce
+the highest risks without changing the production-readiness verdict:
+
+- governed relay role scopes plus active workforce human-session or
+  capability-bounded service-identity resolution;
+- tenant-scoped durable work requests/tasks, model-per-specialist routes,
+  fenced leases, retry/dead-letter recovery, exact-snapshot approvals, immutable
+  context references, and hard token/cost ledgers;
+- Snowman-only model, update, release, pairing, push, image, and workflow
+  destination enforcement with an automated production-boundary scanner;
+- default-off agent shell/network access, workspace containment, ambient secret
+  removal, and direct provider endpoint rejection; and
+- definition-time rejection of unimplemented workflow actions and unsafe
+  webhook destinations/credential headers.
+
+These are implementation foundations, not staged proof. OIDC assertion exchange,
+AWS workers/scheduler/sandbox, KMS audit checkpoints, recovery/load/isolation
+exercises, comprehensive branding, accessibility, UAT, and launch evidence remain
+open gates.
+
+## Data classification and boundary
+
+The command center may store coordination metadata, Snowman identity bindings,
+tenant-scoped conversations explicitly approved for the control plane, job and
+workflow state, redacted summaries, citations, decisions, and immutable artifact
+references. It must not become the authority for governed queries, evidence,
+memory, recommendations, decisions/outcomes, or client datasets.
+
+For Aptive, the deny-by-default rule is stronger: raw source rows, extracts,
+transcripts, query results containing client data, and credentials remain inside
+Analyst 360-governed stores. Any exception requires an explicit data-flow review,
+field-level minimization, retention decision, and user approval.
+
+## Threat priorities
+
+1. A stolen Nostr key becoming an administrator because cryptographic possession
+   currently receives all known scopes.
+2. An agent or prompt-injected tool invoking arbitrary shell commands with relay
+   credentials and host filesystem/network reach.
+3. Cross-tenant leakage through host/proxy ambiguity, caches, pub/sub, media,
+   search, git, workflows, logs, or integration events.
+4. A database-level attacker rewriting audit history and recomputing its unkeyed
+   chain.
+5. A workflow causing an irreversible external action without the required
+   identity-bound approval and idempotency evidence.
+6. Mutable/untrusted artifacts or upstream branding/update channels entering a
+   Snowman release.
+7. Loss of state or evidence without a tested point-in-time and object-version
+   recovery path.
+
+## Audit limits
+
+This is a source-level decision record, not launch evidence. It does not claim
+runtime proof for staging failover, backup restoration, cross-tenant adversarial
+tests, accessibility, performance, SLOs, or UAT. Those remain explicit acceptance
+gates in `production-acceptance-criteria.md`.

@@ -111,6 +111,19 @@ pub struct Config {
     /// are permitted regardless of auth method (API token, NIP-42).
     pub require_relay_membership: bool,
 
+    /// Derive authenticated connection scopes from the tenant's relay-member
+    /// role instead of granting every known scope for NIP-42 key possession.
+    ///
+    /// This is the first Snowman governed-identity enforcement seam. It requires
+    /// closed relay membership and fails authentication for missing or unknown
+    /// roles. Workforce OIDC binding will be evaluated before this seam in the
+    /// completed production identity flow.
+    pub snowman_role_scopes: bool,
+
+    /// Require every relay key to resolve to a live Snowman workforce human
+    /// session or capability-bounded service identity before authentication.
+    pub snowman_workforce_identity_required: bool,
+
     /// Whether this deployment can serve huddle (voice) audio.
     ///
     /// Huddle audio frames are relayed peer-to-peer *within a single pod*
@@ -336,8 +349,6 @@ fn parse_operator_api_origin(raw: &str) -> Result<String, ConfigError> {
     Ok(raw.trim_end_matches('/').to_string())
 }
 
-const DEFAULT_PUSH_GATEWAY_DELIVERY_URL: &str = "https://push.buzz.xyz/v1/deliveries/apns";
-
 fn parse_push_gateway_delivery_url(raw: &str) -> Result<url::Url, ConfigError> {
     let url = url::Url::parse(raw.trim()).map_err(|e| {
         ConfigError::InvalidValue(format!(
@@ -483,6 +494,21 @@ impl Config {
         let require_relay_membership = std::env::var("BUZZ_REQUIRE_RELAY_MEMBERSHIP")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
+
+        let snowman_role_scopes = parse_bool("SNOWMAN_ROLE_SCOPES", false)?;
+        if snowman_role_scopes && !require_relay_membership {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_ROLE_SCOPES=true requires BUZZ_REQUIRE_RELAY_MEMBERSHIP=true".to_string(),
+            ));
+        }
+        let snowman_workforce_identity_required =
+            parse_bool("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", false)?;
+        if snowman_workforce_identity_required && !snowman_role_scopes {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true requires SNOWMAN_ROLE_SCOPES=true"
+                    .to_string(),
+            ));
+        }
 
         // Defaults true → single-pod (N=1) keeps today's huddle behavior. A
         // horizontally-scaled deployment sets this false; see the field doc.
@@ -752,9 +778,7 @@ impl Config {
         let push_gateway_delivery_url = match std::env::var("BUZZ_PUSH_GATEWAY_DELIVERY_URL") {
             Ok(raw) if raw.trim().is_empty() => None,
             Ok(raw) => Some(parse_push_gateway_delivery_url(&raw)?),
-            Err(_) => Some(parse_push_gateway_delivery_url(
-                DEFAULT_PUSH_GATEWAY_DELIVERY_URL,
-            )?),
+            Err(_) => None,
         };
         let push_gateway_timeout_millis = match std::env::var("BUZZ_PUSH_GATEWAY_TIMEOUT_MS") {
             Ok(raw) => raw
@@ -891,6 +915,8 @@ impl Config {
             metrics_port,
             pubkey_allowlist_enabled,
             require_relay_membership,
+            snowman_role_scopes,
+            snowman_workforce_identity_required,
             huddle_audio_available,
             mesh,
             mesh_demo_echo,
@@ -1106,6 +1132,81 @@ mod tests {
     }
 
     #[test]
+    fn snowman_role_scopes_require_closed_membership() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let previous_role_scopes = std::env::var_os("SNOWMAN_ROLE_SCOPES");
+        let previous_membership = std::env::var_os("BUZZ_REQUIRE_RELAY_MEMBERSHIP");
+
+        std::env::set_var("SNOWMAN_ROLE_SCOPES", "true");
+        std::env::remove_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP");
+        let open_result = Config::from_env();
+
+        std::env::set_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP", "true");
+        let closed_result = Config::from_env();
+
+        for (key, previous) in [
+            ("SNOWMAN_ROLE_SCOPES", previous_role_scopes),
+            ("BUZZ_REQUIRE_RELAY_MEMBERSHIP", previous_membership),
+        ] {
+            if let Some(value) = previous {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        assert!(matches!(
+            open_result,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("requires BUZZ_REQUIRE_RELAY_MEMBERSHIP=true")
+        ));
+        assert!(
+            closed_result
+                .expect("closed membership config")
+                .snowman_role_scopes
+        );
+    }
+
+    #[test]
+    fn workforce_identity_requires_governed_role_scopes() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let previous_identity = std::env::var_os("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED");
+        let previous_role_scopes = std::env::var_os("SNOWMAN_ROLE_SCOPES");
+        let previous_membership = std::env::var_os("BUZZ_REQUIRE_RELAY_MEMBERSHIP");
+
+        std::env::set_var("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", "true");
+        std::env::remove_var("SNOWMAN_ROLE_SCOPES");
+        std::env::set_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP", "true");
+        let ungoverned = Config::from_env();
+
+        std::env::set_var("SNOWMAN_ROLE_SCOPES", "true");
+        let governed = Config::from_env();
+
+        for (key, previous) in [
+            ("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", previous_identity),
+            ("SNOWMAN_ROLE_SCOPES", previous_role_scopes),
+            ("BUZZ_REQUIRE_RELAY_MEMBERSHIP", previous_membership),
+        ] {
+            if let Some(value) = previous {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        assert!(matches!(
+            ungoverned,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("requires SNOWMAN_ROLE_SCOPES=true")
+        ));
+        assert!(
+            governed
+                .expect("governed workforce identity config")
+                .snowman_workforce_identity_required
+        );
+    }
+
+    #[test]
     fn rate_limit_overrides_reject_zero() {
         let _guard = ENV_MUTEX.lock().unwrap();
         std::env::set_var("BUZZ_RATE_LIMIT_HUMAN_WS_EVENTS_PER_SEC", "0");
@@ -1187,22 +1288,25 @@ mod tests {
     }
 
     #[test]
-    fn push_gateway_defaults_to_buzz_and_can_be_disabled() {
+    fn push_gateway_defaults_off_and_requires_an_explicit_endpoint() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let previous = std::env::var_os("BUZZ_PUSH_GATEWAY_DELIVERY_URL");
         std::env::remove_var("BUZZ_PUSH_GATEWAY_DELIVERY_URL");
         let config = Config::from_env().expect("default config");
+        assert!(config.push_gateway_delivery_url.is_none());
+
+        std::env::set_var(
+            "BUZZ_PUSH_GATEWAY_DELIVERY_URL",
+            "https://push.snowmanai.org/v1/deliveries/apns",
+        );
+        let config = Config::from_env().expect("explicit Snowman push config");
         assert_eq!(
             config
                 .push_gateway_delivery_url
                 .as_ref()
                 .map(url::Url::as_str),
-            Some(DEFAULT_PUSH_GATEWAY_DELIVERY_URL)
+            Some("https://push.snowmanai.org/v1/deliveries/apns")
         );
-
-        std::env::set_var("BUZZ_PUSH_GATEWAY_DELIVERY_URL", "");
-        let config = Config::from_env().expect("disabled push config");
-        assert!(config.push_gateway_delivery_url.is_none());
 
         if let Some(value) = previous {
             std::env::set_var("BUZZ_PUSH_GATEWAY_DELIVERY_URL", value);
@@ -1276,14 +1380,14 @@ mod tests {
     #[test]
     fn pairing_relay_url_accepts_websocket_urls_and_rejects_http() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var("BUZZ_PAIRING_RELAY_URL", "wss://pairing.buzz.xyz");
+        std::env::set_var("BUZZ_PAIRING_RELAY_URL", "wss://pairing.snowmanai.org");
         let config = Config::from_env().expect("config");
         assert_eq!(
             config.pairing_relay_url.as_deref(),
-            Some("wss://pairing.buzz.xyz")
+            Some("wss://pairing.snowmanai.org")
         );
 
-        std::env::set_var("BUZZ_PAIRING_RELAY_URL", "https://pairing.buzz.xyz");
+        std::env::set_var("BUZZ_PAIRING_RELAY_URL", "https://pairing.snowmanai.org");
         let result = Config::from_env();
         std::env::remove_var("BUZZ_PAIRING_RELAY_URL");
         assert!(matches!(

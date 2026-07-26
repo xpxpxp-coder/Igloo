@@ -57,6 +57,7 @@ fn merge_teams_adds_missing_built_ins() {
         id: "builtin-team:test",
         name: "Test Team",
         description: Some("A synthetic test team."),
+        instructions: None,
         persona_ids: &["builtin:test-persona"],
     };
 
@@ -75,6 +76,7 @@ fn merge_teams_preserves_user_customizations_to_builtin() {
         id: "builtin-team:test",
         name: "Test Team",
         description: None,
+        instructions: None,
         persona_ids: &["builtin:test-persona"],
     };
     let mut customized = team("builtin-team:test", "Test Team (mine)");
@@ -99,6 +101,7 @@ fn merge_teams_preserves_unrelated_user_teams() {
         id: "builtin-team:test",
         name: "Test Team",
         description: None,
+        instructions: None,
         persona_ids: &[],
     };
     let user_team = team("user-uuid", "My Team");
@@ -134,6 +137,7 @@ fn merge_teams_repromotes_existing_builtin_marked_as_custom() {
         id: "builtin-team:test",
         name: "Test Team",
         description: None,
+        instructions: None,
         persona_ids: &[],
     };
     let mut downgraded = team("builtin-team:test", "Test Team");
@@ -324,17 +328,23 @@ fn welcome_team_is_seeded_and_idempotent() {
     assert_eq!(records.len(), 1);
     let welcome = &records[0];
     assert_eq!(welcome.id, "builtin-team:welcome");
-    assert_eq!(welcome.name, "Welcome Team");
+    assert_eq!(welcome.name, "Snowman AI Workforce");
     assert_eq!(
         welcome.description.as_deref(),
-        Some("A friendly starter trio ready to help you plan, create, and ship.")
+        Some("A governed specialist team for research, analysis, delivery, and independent review.")
     );
+    assert!(welcome
+        .instructions
+        .as_deref()
+        .is_some_and(|value| value.contains("Quality & Risk Reviewer")));
     assert_eq!(
         welcome.persona_ids,
         vec![
             "builtin:fizz".to_string(),
-            "builtin:honey".to_string(),
             "builtin:bumble".to_string(),
+            "builtin:snowman-analyst".to_string(),
+            "builtin:honey".to_string(),
+            "builtin:snowman-reviewer".to_string(),
         ]
     );
     assert!(welcome.is_builtin);

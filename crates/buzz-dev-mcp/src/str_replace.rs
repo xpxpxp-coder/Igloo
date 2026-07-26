@@ -255,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn run_allows_path_outside_workspace() {
+    fn run_rejects_path_outside_workspace() {
         let dir = tempdir().expect("tempdir");
         // A real file in a SECOND tempdir, genuinely outside the workspace
         // root, that does NOT contain our old_str — we expect a "not found"
@@ -275,8 +275,8 @@ mod tests {
         let err = run(&state, p).unwrap_err();
         let msg = format!("{err:?}");
         assert!(
-            msg.contains("not found"),
-            "expected 'not found' error (proving path resolved), got: {msg}"
+            msg.contains("path escapes the Snowman agent workspace"),
+            "expected out-of-workspace rejection, got: {msg}"
         );
     }
 

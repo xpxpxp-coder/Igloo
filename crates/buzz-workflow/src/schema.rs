@@ -190,6 +190,7 @@ impl WorkflowDef {
                     step.id
                 )));
             }
+            validate_action(&step.action)?;
         }
 
         if let TriggerDef::Schedule { cron, interval } = &self.trigger {
@@ -227,6 +228,129 @@ impl WorkflowDef {
 
         Ok(())
     }
+}
+
+fn validate_action(action: &ActionDef) -> Result<(), WorkflowError> {
+    match action {
+        ActionDef::SendDm { .. } => Err(WorkflowError::InvalidDefinition(
+            "send_dm is not enabled: Snowman rejects actions without an end-to-end implementation"
+                .into(),
+        )),
+        ActionDef::SetChannelTopic { .. } => Err(WorkflowError::InvalidDefinition(
+            "set_channel_topic is not enabled: Snowman rejects actions without an end-to-end implementation"
+                .into(),
+        )),
+        ActionDef::CallWebhook {
+            url,
+            method,
+            headers,
+            ..
+        } => {
+            validate_snowman_webhook_url(url)?;
+            if method
+                .as_deref()
+                .is_some_and(|value| !value.eq_ignore_ascii_case("POST"))
+            {
+                return Err(WorkflowError::InvalidDefinition(
+                    "call_webhook supports POST only in Snowman production".into(),
+                ));
+            }
+            if headers.as_ref().is_some_and(|values| {
+                values.keys().any(|name| {
+                    matches!(
+                        name.trim().to_ascii_lowercase().as_str(),
+                        "authorization" | "cookie" | "proxy-authorization" | "x-api-key"
+                    )
+                })
+            }) {
+                return Err(WorkflowError::InvalidDefinition(
+                    "call_webhook must use brokered credentials; literal credential headers are forbidden"
+                        .into(),
+                ));
+            }
+            Ok(())
+        }
+        ActionDef::RequestApproval { from, timeout, .. } => {
+            let approver = from.trim();
+            if approver != "any"
+                && (approver.len() != 64
+                    || !approver.chars().all(|character| character.is_ascii_hexdigit()))
+            {
+                return Err(WorkflowError::InvalidDefinition(
+                    "request_approval.from must be 'any' or one 64-character approver pubkey until Snowman workforce role binding is enabled"
+                        .into(),
+                ));
+            }
+            if let Some(value) = timeout {
+                let seconds = crate::executor::parse_duration_secs(value).map_err(|_| {
+                    WorkflowError::InvalidDefinition(format!(
+                        "invalid approval timeout '{value}'"
+                    ))
+                })?;
+                if seconds == 0 || seconds > 7 * 24 * 60 * 60 {
+                    return Err(WorkflowError::InvalidDefinition(
+                        "approval timeout must be between 1 second and 7 days".into(),
+                    ));
+                }
+            }
+            Ok(())
+        }
+        ActionDef::Delay { duration } => {
+            let seconds = crate::executor::parse_duration_secs(duration).map_err(|_| {
+                WorkflowError::InvalidDefinition(format!("invalid delay duration '{duration}'"))
+            })?;
+            if seconds > 5 * 60 {
+                return Err(WorkflowError::InvalidDefinition(
+                    "delay exceeds the 5-minute in-process safety limit; use a durable schedule"
+                        .into(),
+                ));
+            }
+            Ok(())
+        }
+        ActionDef::SendMessage { .. } | ActionDef::AddReaction { .. } => Ok(()),
+    }
+}
+
+fn validate_snowman_webhook_url(raw: &str) -> Result<(), WorkflowError> {
+    let parsed = url::Url::parse(raw).map_err(|error| {
+        WorkflowError::InvalidDefinition(format!("invalid call_webhook URL: {error}"))
+    })?;
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(WorkflowError::InvalidDefinition(
+            "call_webhook URL must not contain credentials, a query, or a fragment".into(),
+        ));
+    }
+    let host = parsed.host_str().ok_or_else(|| {
+        WorkflowError::InvalidDefinition("call_webhook URL must include a host".into())
+    })?;
+    let normalized = host.to_ascii_lowercase();
+    let is_snowman = normalized == "snowmanai.org" || normalized.ends_with(".snowmanai.org");
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || parsed.host().is_some_and(|value| match value {
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+            url::Host::Domain(_) => false,
+        });
+    if !is_snowman && !is_loopback {
+        return Err(WorkflowError::InvalidDefinition(format!(
+            "call_webhook host {host:?} is outside the Snowman-controlled boundary"
+        )));
+    }
+    if is_snowman && (parsed.scheme() != "https" || parsed.port().is_some_and(|port| port != 443)) {
+        return Err(WorkflowError::InvalidDefinition(
+            "Snowman webhook endpoints require HTTPS on port 443".into(),
+        ));
+    }
+    if is_loopback && !matches!(parsed.scheme(), "http" | "https") {
+        return Err(WorkflowError::InvalidDefinition(
+            "loopback webhook endpoints require HTTP or HTTPS".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Validate a cron expression using the `cron` crate.
@@ -343,11 +467,11 @@ mod tests {
             "  - id: dm\n    action: send_dm\n    to: '{{trigger.author}}'\n    text: You triggered this\n",
             "  - id: topic\n    action: set_channel_topic\n    topic: Status active\n",
             "  - id: react\n    action: add_reaction\n    emoji: white_check_mark\n",
-            "  - id: hook\n    action: call_webhook\n    url: https://hooks.example.com/notify\n    method: POST\n",
+            "  - id: hook\n    action: call_webhook\n    url: https://hooks.snowmanai.org/notify\n    method: POST\n",
             "  - id: approve\n    action: request_approval\n    from: '@manager'\n    message: Approve?\n    timeout: 4h\n",
             "  - id: wait\n    action: delay\n    duration: 5m\n",
         );
-        let (def, _) = parse_yaml(yaml).expect("parse failed");
+        let def: WorkflowDef = serde_yaml::from_str(yaml).expect("deserialize failed");
         assert_eq!(def.steps.len(), 7);
 
         assert!(matches!(
@@ -380,7 +504,7 @@ mod tests {
             "name: Deploy Approval\n",
             "trigger:\n  on: webhook\n",
             "steps:\n",
-            "  - id: request\n    action: request_approval\n    from: '@engineering-lead'\n",
+            "  - id: request\n    action: request_approval\n    from: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n",
             "    message: Approve deploy?\n    timeout: 4h\n",
             "  - id: notify_approved\n    if: 'steps_request_output_approved == true'\n",
             "    action: send_message\n    text: Deploy approved\n",
@@ -554,9 +678,9 @@ mod tests {
             "name: Full Webhook\ntrigger:\n  on: webhook\n",
             "steps:\n",
             "  - id: call\n    action: call_webhook\n",
-            "    url: https://example.com/hook\n",
-            "    method: PUT\n",
-            "    headers:\n      Authorization: 'Bearer token123'\n      Content-Type: application/json\n",
+            "    url: https://hooks.snowmanai.org/hook\n",
+            "    method: POST\n",
+            "    headers:\n      X-Snowman-Event: workflow\n      Content-Type: application/json\n",
             "    body: '{\"key\": \"value\"}'\n",
         );
         let (def, _) = parse_yaml(yaml).expect("parse failed");
@@ -567,12 +691,12 @@ mod tests {
                 headers,
                 body,
             } => {
-                assert_eq!(url, "https://example.com/hook");
-                assert_eq!(method.as_deref(), Some("PUT"));
+                assert_eq!(url, "https://hooks.snowmanai.org/hook");
+                assert_eq!(method.as_deref(), Some("POST"));
                 let hdrs = headers.as_ref().expect("headers should be present");
                 assert_eq!(
-                    hdrs.get("Authorization").map(|s| s.as_str()),
-                    Some("Bearer token123")
+                    hdrs.get("X-Snowman-Event").map(|s| s.as_str()),
+                    Some("workflow")
                 );
                 assert!(body.is_some());
             }
@@ -584,7 +708,7 @@ mod tests {
     fn parse_call_webhook_minimal_only_url() {
         let yaml = concat!(
             "name: Min Webhook\ntrigger:\n  on: webhook\n",
-            "steps:\n  - id: call\n    action: call_webhook\n    url: https://example.com/hook\n",
+            "steps:\n  - id: call\n    action: call_webhook\n    url: https://hooks.snowmanai.org/hook\n",
         );
         let (def, _) = parse_yaml(yaml).expect("parse failed");
         match &def.steps[0].action {
@@ -594,13 +718,80 @@ mod tests {
                 headers,
                 body,
             } => {
-                assert_eq!(url, "https://example.com/hook");
+                assert_eq!(url, "https://hooks.snowmanai.org/hook");
                 assert!(method.is_none());
                 assert!(headers.is_none());
                 assert!(body.is_none());
             }
             other => panic!("unexpected action: {other:?}"),
         }
+    }
+
+    #[test]
+    fn snowman_action_policy_rejects_unimplemented_and_external_actions() {
+        for (action, expected) in [
+            (
+                "action: send_dm\n    to: user\n    text: hello",
+                "send_dm is not enabled",
+            ),
+            (
+                "action: set_channel_topic\n    topic: hello",
+                "set_channel_topic is not enabled",
+            ),
+            (
+                "action: call_webhook\n    url: https://hooks.example.com/task",
+                "outside the Snowman-controlled boundary",
+            ),
+            (
+                "action: call_webhook\n    url: http://hooks.snowmanai.org/task",
+                "require HTTPS",
+            ),
+            (
+                "action: request_approval\n    from: '@admin'\n    message: approve",
+                "64-character approver pubkey",
+            ),
+            (
+                "action: delay\n    duration: 6m",
+                "5-minute in-process safety limit",
+            ),
+        ] {
+            let yaml = format!(
+                "name: Policy test\ntrigger:\n  on: webhook\nsteps:\n  - id: test\n    {action}\n"
+            );
+            let error = parse_yaml(&yaml).unwrap_err().to_string();
+            assert!(
+                error.contains(expected),
+                "expected {expected:?} in {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn snowman_webhook_policy_allows_snowman_and_loopback_only() {
+        for endpoint in [
+            "https://hooks.snowmanai.org/task",
+            "https://snowmanai.org/task",
+            "http://127.0.0.1:8080/task",
+            "http://[::1]:8080/task",
+            "http://localhost:8080/task",
+        ] {
+            let yaml = format!(
+                "name: Allowed webhook\ntrigger:\n  on: webhook\nsteps:\n  - id: call\n    action: call_webhook\n    url: {endpoint}\n"
+            );
+            parse_yaml(&yaml).unwrap_or_else(|error| panic!("{endpoint}: {error}"));
+        }
+    }
+
+    #[test]
+    fn snowman_webhook_policy_rejects_literal_credentials() {
+        let yaml = concat!(
+            "name: Unsafe webhook\ntrigger:\n  on: webhook\nsteps:\n",
+            "  - id: call\n    action: call_webhook\n",
+            "    url: https://hooks.snowmanai.org/task\n",
+            "    headers:\n      Authorization: Bearer-secret\n",
+        );
+        let error = parse_yaml(yaml).unwrap_err().to_string();
+        assert!(error.contains("brokered credentials"), "{error}");
     }
 
     #[test]

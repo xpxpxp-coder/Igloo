@@ -1,57 +1,39 @@
-import { useId } from "react";
-
 /**
- * The finished Buzz mark as a plain static SVG — no SMIL, no scripting, no
- * animation machinery. Geometry matches the final keyframe of the
- * BuzzLogoAnimation morph (v8 variant), rendered in `currentColor`, so it
- * paints complete on the very first frame regardless of animation support.
+ * Snowman Command Center's static product mark. The exported component name is
+ * retained as an internal compatibility identifier while upstream call sites
+ * migrate; the rendered product identity is exclusively Snowman.
  */
 export function BuzzMark({ className }: { className?: string }) {
-  const maskId = `buzz-mark-cutouts-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
-
   return (
     <svg
-      aria-hidden="true"
-      className={["buzz-mark", className].filter(Boolean).join(" ")}
-      viewBox="0 0 466 309"
-      fill="currentColor"
+      aria-label="Snowman Command Center"
+      className={["snowman-mark", className].filter(Boolean).join(" ")}
+      role="img"
+      viewBox="0 0 128 128"
     >
-      <defs>
-        <mask
-          id={maskId}
-          x="-80"
-          y="-80"
-          width="626"
-          height="469"
-          maskUnits="userSpaceOnUse"
-          maskContentUnits="userSpaceOnUse"
-        >
-          <rect x="-80" y="-80" width="626" height="469" fill="#fff" />
-          <ellipse cx="193.3" cy="84.4" rx="27" ry="27" fill="#000" />
-          <ellipse cx="276" cy="84.4" rx="27" ry="27" fill="#000" />
-          <rect
-            x="166.3"
-            y="157.2"
-            width="136.9"
-            height="38.3"
-            rx="5"
-            fill="#000"
-          />
-          <rect
-            x="166.9"
-            y="235.1"
-            width="136.2"
-            height="37.6"
-            rx="5"
-            fill="#000"
-          />
-        </mask>
-      </defs>
-      <g mask={`url(#${maskId})`}>
-        <circle cx="91.7" cy="154.5" r="91.7" />
-        <circle cx="374.3" cy="154.5" r="91.7" />
-        <rect x="128" y="0" width="210" height="309" rx="34" />
-      </g>
+      <circle cx="64" cy="64" r="62" fill="#10233f" />
+      <circle cx="64" cy="80" r="30" fill="#f7fbff" />
+      <circle cx="64" cy="43" r="22" fill="#fff" />
+      <circle cx="56" cy="39" r="3" fill="#10233f" />
+      <circle cx="72" cy="39" r="3" fill="#10233f" />
+      <path d="M64 44l15 5-15 4z" fill="#ff9f43" />
+      <path
+        d="M51 54c8 6 18 6 26 0"
+        fill="none"
+        stroke="#10233f"
+        strokeLinecap="round"
+        strokeWidth="3"
+      />
+      <circle cx="64" cy="70" r="3" fill="#10233f" />
+      <circle cx="64" cy="82" r="3" fill="#10233f" />
+      <circle cx="64" cy="94" r="3" fill="#10233f" />
+      <path d="M42 29h44l-6-12H48z" fill="#55c2ff" />
+      <path
+        d="M38 29h52"
+        stroke="#55c2ff"
+        strokeLinecap="round"
+        strokeWidth="6"
+      />
     </svg>
   );
 }

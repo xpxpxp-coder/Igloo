@@ -10,7 +10,7 @@ use error::CliError;
 use nostr::Keys;
 use uuid::Uuid;
 
-/// Run the Buzz CLI from raw arguments (including `argv[0]`).
+/// Run the Snowman CLI from raw arguments (including `argv[0]`).
 ///
 /// Returns a process exit code (0 = success).
 ///
@@ -61,12 +61,12 @@ where
 
 #[derive(Parser)]
 #[command(
-    name = "buzz",
-    about = "Buzz CLI — interact with a Buzz relay",
+    name = "snowman",
+    about = "Snowman 360 CLI — operate the Snowman Command Center",
     long_about = "\
-Buzz CLI — interact with a Buzz relay
+Snowman 360 CLI — operate the Snowman Command Center
 
-Configuration (flags override env vars):
+Configuration (flags override env vars; BUZZ_* names are retained protocol compatibility identifiers):
   BUZZ_RELAY_URL     Relay base URL        [default: http://localhost:3000]
   BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
   BUZZ_AUTH_TAG      NIP-OA auth tag JSON  [optional]
@@ -77,7 +77,7 @@ Exit codes: 0=ok  1=bad input  2=relay/network error  3=auth error  4=other  5=w
 Errors are JSON on stderr: {\"error\": \"<category>\", \"message\": \"<detail>\"}"
 )]
 struct Cli {
-    /// Relay URL (http:// or https://). Overrides BUZZ_RELAY_URL env var.
+    /// Snowman Command Center relay URL. Overrides the compatibility BUZZ_RELAY_URL env var.
     #[arg(long, env = "BUZZ_RELAY_URL", default_value = "http://localhost:3000")]
     relay: String,
 

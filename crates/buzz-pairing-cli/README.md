@@ -8,7 +8,7 @@ CLI tool for testing the [NIP-AB device pairing protocol](../buzz-core/src/pairi
 cargo build --release -p buzz-pairing-cli
 
 # Terminal 1 — source (holds the secret)
-./target/release/buzz-pair source --relay wss://relay.damus.io
+./target/release/buzz-pair source --relay wss://pairing.snowmanai.org
 
 # Terminal 2 — target (receives the secret)
 ./target/release/buzz-pair target --show-secret
@@ -27,7 +27,7 @@ Acts as the device holding the secret. Generates an ephemeral keypair and sessio
 buzz-pair source --relay <RELAY_URL> [--nsec <BECH32_NSEC>]
 ```
 
-- `--relay` — WebSocket relay URL (default: `wss://relay.damus.io`)
+- `--relay` — WebSocket relay URL (default: `wss://pairing.snowmanai.org`)
 - `--nsec` — bech32 nsec to transfer. If omitted, generates a throwaway test key.
 
 ### `target`

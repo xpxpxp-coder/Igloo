@@ -1,4 +1,4 @@
-package xyz.block.buzz.mobile
+package ai.snowman.commandcenter
 
 import kotlin.test.Test
 import kotlin.test.assertContentEquals

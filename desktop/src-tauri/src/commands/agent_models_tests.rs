@@ -101,7 +101,7 @@ fn openai_compat_model_normalization_preserves_provider_specific_ids() {
 fn openai_models_url_uses_openai_default_base_url() {
     assert_eq!(
         openai_compatible_models_url(&BTreeMap::new()),
-        "https://api.openai.com/v1/models"
+        "https://models.snowmanai.org/openai/v1/models"
     );
 }
 
@@ -109,7 +109,7 @@ fn openai_models_url_uses_openai_default_base_url() {
 fn anthropic_models_url_uses_anthropic_default_base_url() {
     assert_eq!(
         anthropic_models_url(&BTreeMap::new()),
-        "https://api.anthropic.com/v1/models"
+        "https://models.snowmanai.org/anthropic/v1/models"
     );
 }
 

@@ -1,6 +1,8 @@
-export const BUZZ_RELEASES_URL = "https://github.com/block/buzz/releases";
-const BUZZ_RELEASES_API_URL =
-  "https://api.github.com/repos/block/buzz/releases?per_page=10";
+// Same-origin Snowman routes are the only release authority. The edge/service
+// behind these paths may read a Snowman-controlled registry, but the browser
+// never contacts an upstream GitHub or Block endpoint directly.
+export const BUZZ_RELEASES_URL = "/downloads";
+const BUZZ_RELEASES_API_URL = "/api/releases?per_page=10";
 const CACHE_KEY = "buzz.latestDownload.v1";
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
@@ -134,7 +136,12 @@ export function selectBuzzDownloadUrl(
   for (const release of releases) {
     if (release.draft || release.prerelease) continue;
     const asset = release.assets.find(({ name }) => pattern.test(name));
-    if (asset) return asset.browser_download_url;
+    if (
+      asset &&
+      asset.browser_download_url.startsWith("/") &&
+      !asset.browser_download_url.startsWith("//")
+    )
+      return asset.browser_download_url;
   }
   return undefined;
 }

@@ -9,9 +9,9 @@ description: |
 type: application
 version: 0.1.6
 appVersion: "0.1.0"
-home: https://github.com/block/buzz
+home: https://github.com/snowman-ai-org/snowman-command-center
 sources:
-  - https://github.com/block/buzz
+  - https://github.com/snowman-ai-org/snowman-command-center
 keywords:
   - nostr
   - relay
@@ -20,7 +20,7 @@ keywords:
   - chat
 maintainers:
   - name: Block
-    url: https://github.com/block
+    url: https://snowmanai.org
 annotations:
   artifacthub.io/changes: |
     - kind: added

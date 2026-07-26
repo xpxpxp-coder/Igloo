@@ -1,22 +1,23 @@
 import { getCanvas, setCanvas } from "@/shared/api/tauri";
 
-export const WELCOME_CANVAS_CONTENT = `# Welcome to Buzz
+export const WELCOME_CANVAS_CONTENT = `# Welcome to Snowman 360
 
-This private channel is your home base for getting oriented. Fizz, Honey, and Bumble can help you learn the app, troubleshoot setup, and work through something you are building.
+This private channel is your governed home base. Snowman Lead coordinates Research & Evidence, Governed Analyst, Client Delivery, and Quality & Risk Reviewer to advance your work.
 
 ## Work with your agents
 
 - Mention an agent when you want its help.
 - Bring multiple agents into the same conversation when you want different perspectives.
-- Keep decisions, progress, and results in the channel so everyone shares the same context.
+- Keep decisions, progress, evidence references, and results in the channel so every authorized agent can resume with the same context.
+- Each agent can use a model chosen for its specialty, within the workspace's approved provider and data policy.
 
 ## Try something
 
-Bring the team something you are building, or give them a quick challenge to see how they work together.
+Describe the outcome you want. Snowman Lead will organize the work, route bounded assignments, and return useful artifacts and verified next steps.
 
 ## Get help
 
-Ask the team a question here, or read the [Buzz user guide](https://github.com/block/buzz#readme).
+Ask the team a question here, or open the [Snowman 360 guide](/docs).
 `;
 
 type WelcomeCanvasClient = {

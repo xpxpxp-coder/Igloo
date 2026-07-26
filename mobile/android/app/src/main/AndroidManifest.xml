@@ -2,7 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <application
-        android:label="Buzz"
+        android:label="Snowman Command Center"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -26,11 +26,12 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- Handle buzz:// deep links (e.g. buzz://message?channel=…&id=…). -->
+            <!-- Snowman primary deep links plus legacy buzz:// protocol compatibility. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="snowman"/>
                 <data android:scheme="buzz"/>
             </intent-filter>
             <!-- Disable Flutter's built-in deeplink handler; app_links owns

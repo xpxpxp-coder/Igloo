@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 24);
+        assert_eq!(migrations.len(), 26);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -879,6 +879,56 @@ mod tests {
             .to_lowercase()
             .contains("for update"));
         assert!(ttl_shared.contains("NEW.kind <> 9007"));
+
+        // The Snowman AI Workforce queue is durable, fenced, budgeted, and
+        // tenant-scoped. It stores coordination state and immutable context
+        // references, never raw Analyst 360 client datasets.
+        assert_eq!(migrations[24].version, 25);
+        let workforce = migrations[24].sql.as_str();
+        for table in [
+            "snowman_work_requests",
+            "snowman_context_packets",
+            "snowman_work_tasks",
+            "snowman_work_approvals",
+            "snowman_task_leases",
+            "snowman_work_events",
+            "snowman_spend_ledger",
+        ] {
+            assert!(
+                workforce.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(workforce.contains("PRIMARY KEY (community_id, task_id)"));
+        assert!(workforce.contains("lease_token_sha256"));
+        assert!(workforce.contains("execution_snapshot_sha256"));
+        assert!(workforce.contains("model_gateway_route ~ '^https://"));
+        assert!(workforce.contains("max_cost_microusd"));
+        assert!(!workforce.contains("raw_client_data"));
+        assert!(!migrations[0].sql.as_str().contains("snowman_work_requests"));
+
+        // A Nostr signature is bound to a live workforce identity, human
+        // session/device or capability-bounded service runtime before governed
+        // production authorization can succeed.
+        assert_eq!(migrations[25].version, 26);
+        let identity = migrations[25].sql.as_str();
+        for table in [
+            "snowman_workforce_identities",
+            "snowman_workforce_sessions",
+            "snowman_workforce_key_bindings",
+            "snowman_workforce_capability_grants",
+        ] {
+            assert!(
+                identity.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(identity.contains("provider_subject_sha256"));
+        assert!(identity.contains("device_pubkey"));
+        assert!(identity.contains("revoked_at"));
+        assert!(identity.contains("service_identity_fk"));
+        assert!(!identity.contains("id_token"));
+        assert!(!identity.contains("refresh_token"));
     }
 
     #[test]

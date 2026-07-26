@@ -304,7 +304,7 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
         }
     };
 
-    if url.scheme() != "buzz" {
+    if !matches!(url.scheme(), "snowman" | "buzz") {
         eprintln!("buzz-desktop: ignoring unsupported deep link scheme: {url_str}");
         return;
     }
@@ -443,11 +443,11 @@ mod tests {
     #[test]
     fn parse_add_community_deep_link_extracts_relay_and_name() {
         let url = Url::parse(
-            "buzz://add-community?relay=wss%3A%2F%2Facme.communities.buzz.xyz&name=Acme%20Team&ignored=value",
+            "buzz://add-community?relay=wss%3A%2F%2Facme.communities.snowmanai.org&name=Acme%20Team&ignored=value",
         )
         .unwrap();
         let payload = parse_add_community_deep_link(&url).unwrap();
-        assert_eq!(payload.relay_url, "wss://acme.communities.buzz.xyz");
+        assert_eq!(payload.relay_url, "wss://acme.communities.snowmanai.org");
         assert_eq!(payload.name.as_deref(), Some("Acme Team"));
     }
 
