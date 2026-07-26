@@ -15,6 +15,7 @@ claims require live verification before use.
 | Igloo agent/runtime catalog | Runtime-owned harness/provider/model capability metadata with desktop configuration surfaces | Extend for policy-approved model-per-role routing; do not fork capability facts into UI-only tables. |
 | Igloo teams, personas, snapshots, nests, reminders, and workflow schedules | Proven local/control-plane foundations for scoped teams, per-agent runtime/model configuration, task continuity, collaboration, and scheduled triggers | Reuse for the Snowman AI Workforce experience. Add a durable AWS orchestration plane; local desktop processes alone do not satisfy 24/7 execution. |
 | Igloo workflows/approvals | YAML workflows plus durable approval records and resume paths | Harden risk classification, role/capability approvers, unsupported actions, egress, idempotency, and evidence. |
+| AWS Rust SDK for KMS | Pinned `aws-config` and `aws-sdk-kms` dependencies compile in the production relay library | Use Snowman-account KMS Verify for Analyst assertions and a distinct Snowman-account KMS Sign key for delivery receipts. No exportable signing key or Block service is introduced. |
 
 ## Snowman-controlled platform resources
 
@@ -42,6 +43,13 @@ claims require live verification before use.
   `/api/snowman/v1/work-requests`. The endpoint deliberately creates only a
   lead planning task; private worker identity, validated plan expansion, and
   AWS execution are still required before the request can run end to end.
+- A default-off, tenant-bound Analyst event ingress now verifies strict
+  asymmetric KMS service assertions, rejects unknown or scope-mismatched fields,
+  consumes replay nonces transactionally, stores only minimized lifecycle
+  metadata and Analyst-authoritative artifact references, and returns a receipt
+  signed by a separate Command Center KMS key. Analyst's outbox delivery worker,
+  private AWS routing, key provisioning, and staged two-tenant proof remain to be
+  completed.
 - Workforce identity/session/device/service schemas and fail-closed relay-key
   resolution now exist in source. The Snowman identity broker must still verify
   Google Workspace or AWS IAM Identity Center OIDC assertions and perform the

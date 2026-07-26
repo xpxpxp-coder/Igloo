@@ -12,6 +12,7 @@ const runtimeAuthorityFiles = [
   "crates/buzz-relay/src/config.rs",
   "crates/buzz-relay/src/authorization.rs",
   "crates/buzz-relay/src/api/workforce.rs",
+  "crates/buzz-relay/src/api/analyst_integration.rs",
   "crates/buzz-relay/src/nip11.rs",
   "crates/buzz-push-gateway/src/config.rs",
   "crates/buzz-push-gateway/src/http.rs",
@@ -24,11 +25,13 @@ const runtimeAuthorityFiles = [
   "crates/buzz-workflow/src/schema.rs",
   "crates/buzz-db/src/workforce.rs",
   "crates/buzz-db/src/workforce_identity.rs",
+  "crates/buzz-db/src/analyst_integration.rs",
   "crates/snowman-workforce/src/lib.rs",
   "migrations/0025_snowman_workforce.sql",
   "migrations/0026_snowman_workforce_identity.sql",
   "migrations/0027_snowman_workforce_request_contract.sql",
   "migrations/0028_snowman_workforce_claim_idempotency.sql",
+  "migrations/0029_snowman_analyst_event_boundary.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -218,6 +221,26 @@ requireFragment(
   "crates/buzz-relay/src/api/workforce.rs",
   '"workforce.requests.create"',
   "workforce request intake must require an exact human capability",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/analyst_integration.rs",
+  "verify_kms_signature(&assertion)",
+  "Analyst event ingress must verify an asymmetric KMS request assertion",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/analyst_integration.rs",
+  "tenant.community()",
+  "Analyst event ingress must derive its community server-side",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/analyst_integration.rs",
+  "sign_receipt(&binding.receipt_kms_key_arn",
+  "Analyst event ingress must sign delivery evidence with the bound receipt key",
+);
+requireFragment(
+  "migrations/0029_snowman_analyst_event_boundary.sql",
+  "CHECK (request_kms_key_arn <> receipt_kms_key_arn)",
+  "Analyst request and Command Center receipt keys must be separate",
 );
 requireFragment(
   "crates/buzz-relay/src/api/workforce.rs",

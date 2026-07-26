@@ -119,6 +119,7 @@ spec:
             - { name: BUZZ_REQUIRE_RELAY_MEMBERSHIP, value: {{ .Values.relay.requireRelayMembership | quote }} }
             - { name: SNOWMAN_ROLE_SCOPES, value: {{ .Values.relay.snowmanRoleScopes | quote }} }
             - { name: SNOWMAN_WORKFORCE_IDENTITY_REQUIRED, value: {{ .Values.relay.snowmanWorkforceIdentityRequired | quote }} }
+            - { name: SNOWMAN_ANALYST_EVENT_API_ENABLED, value: {{ .Values.relay.snowmanAnalystEventApiEnabled | quote }} }
             - { name: SNOWMAN_WORKFORCE_API_ENABLED, value: {{ .Values.relay.snowmanWorkforce.enabled | quote }} }
             - { name: SNOWMAN_WORKFORCE_WORKER_API_ENABLED, value: {{ .Values.relay.snowmanWorkforce.workerApiEnabled | quote }} }
             {{- if .Values.relay.snowmanWorkforce.enabled }}

@@ -14,6 +14,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [External dependency and data-egress register](external-dependency-register.md)
 - [Available resource and reuse inventory](resource-inventory.md)
 - [Governed workforce request API](workforce-request-api.md)
+- [Analyst 360 event and receipt boundary](analyst-event-boundary.md)
 
 These documents distinguish three states:
 

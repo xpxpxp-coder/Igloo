@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 26);
+        assert_eq!(migrations.len(), 29);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -929,6 +929,31 @@ mod tests {
         assert!(identity.contains("service_identity_fk"));
         assert!(!identity.contains("id_token"));
         assert!(!identity.contains("refresh_token"));
+
+        assert_eq!(migrations[26].version, 27);
+        assert!(migrations[26]
+            .sql
+            .as_str()
+            .contains("request_contract_sha256"));
+        assert_eq!(migrations[27].version, 28);
+        assert!(migrations[27].sql.as_str().contains("claim_id"));
+
+        assert_eq!(migrations[28].version, 29);
+        let analyst = migrations[28].sql.as_str();
+        for table in [
+            "snowman_analyst_integrations",
+            "snowman_analyst_request_nonces",
+            "snowman_analyst_events",
+        ] {
+            assert!(
+                analyst.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(analyst.contains("request_kms_key_arn"));
+        assert!(analyst.contains("receipt_kms_key_arn"));
+        assert!(analyst.contains("PRIMARY KEY (community_id, event_id)"));
+        assert!(!analyst.contains("raw_client_data"));
     }
 
     #[test]

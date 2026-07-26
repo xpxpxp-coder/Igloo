@@ -96,6 +96,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(api::workforce::finish_work_task),
         )
         .route(
+            "/internal/snowman/v1/analyst-events",
+            post(api::analyst_integration::receive_analyst_event),
+        )
+        .route(
             "/operator/communities",
             get(api::operator::list_owned_communities).post(api::operator::provision_community),
         )

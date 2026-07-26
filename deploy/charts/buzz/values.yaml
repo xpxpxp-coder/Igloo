@@ -112,6 +112,9 @@ relay:
   # both gates for local evaluation.
   snowmanRoleScopes: true
   snowmanWorkforceIdentityRequired: true
+  # Private Analyst 360 event/receipt boundary. Public relay deployments keep
+  # this false; enable only on the separately addressed integration service.
+  snowmanAnalystEventApiEnabled: false
   # Governed objective intake remains off until the tenant-local lead service
   # identity has been seeded and the Snowman model gateway is deployed.
   snowmanWorkforce:

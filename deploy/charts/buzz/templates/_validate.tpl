@@ -83,6 +83,9 @@ surface at template time regardless of which manifest helm renders first.
 {{- if and .Values.relay.snowmanWorkforce.workerApiEnabled (not .Values.relay.snowmanWorkforce.enabled) -}}
   {{- fail "relay.snowmanWorkforce.workerApiEnabled=true requires relay.snowmanWorkforce.enabled=true" -}}
 {{- end -}}
+{{- if and .Values.relay.snowmanAnalystEventApiEnabled (not .Values.relay.snowmanWorkforceIdentityRequired) -}}
+  {{- fail "relay.snowmanAnalystEventApiEnabled=true requires relay.snowmanWorkforceIdentityRequired=true" -}}
+{{- end -}}
 
 {{/* ownerPubkey format check */}}
 {{- if .Values.ownerPubkey -}}

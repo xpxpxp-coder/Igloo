@@ -91,3 +91,20 @@ Cloudflare/AWS-addressed service with security-group/edge restrictions may turn
 it on; signed service identity remains required even on that private network.
 The API foundation does not itself constitute the AWS worker, model gateway,
 sandbox, scheduler, or staged execution proof.
+
+## Analyst lifecycle events
+
+The separate, private `POST /internal/snowman/v1/analyst-events` route accepts
+only strict, minimized Analyst 360 job lifecycle events. It is not a general
+webhook and does not accept raw query results, transcripts, client rows,
+credentials, prompts, or arbitrary destination coordinates. Each event must be
+bound to the host-derived community's exact tenant/client/project identifiers
+and an active Analyst service/KMS key registration.
+
+`SNOWMAN_ANALYST_EVENT_API_ENABLED` defaults false and requires governed
+workforce identity. The receiver verifies a fresh, one-time asymmetric AWS KMS
+assertion over the exact HTTP method, route, canonical body digest, principal,
+key, timestamp, nonce, and `events.ingest` operation. It then persists the event
+idempotently and returns an independently KMS-signed, digest-bound delivery
+receipt. The endpoint belongs on a separately addressed private integration
+service, not the public relay task.

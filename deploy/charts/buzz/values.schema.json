@@ -63,6 +63,7 @@
         "requireRelayMembership": { "type": "boolean" },
         "snowmanRoleScopes": { "type": "boolean" },
         "snowmanWorkforceIdentityRequired": { "type": "boolean" },
+        "snowmanAnalystEventApiEnabled": { "type": "boolean" },
         "snowmanWorkforce": {
           "type": "object",
           "additionalProperties": false,

@@ -11,6 +11,8 @@
 
 /// Explicit deployment-global admin report reads.
 pub mod admin_moderation;
+/// Tenant-isolated Analyst 360 lifecycle-event and receipt persistence.
+pub mod analyst_integration;
 /// API token storage and lookup.
 pub mod api_token;
 /// Relay-scoped archived identity persistence (NIP-IA).

@@ -44,7 +44,7 @@ evidence, and systematic Snowman branding.
 | Deployment | Evaluation/self-hosting ready, not Snowman AWS production ready | `deploy/compose/compose.yml` defaults to `ghcr.io/block/buzz:main` plus single-node Postgres/Redis/MinIO; Helm offers managed-service hooks | Do not use Compose in production. Build Snowman AWS IaC with managed data services, WAF/ALB, KMS, backups, immutable images, alarms, and cost controls. |
 | Accessibility | Meaningful component-level work, acceptance proof absent | extensive ARIA/reduced-motion usage and UI tests across desktop/web/mobile | Add automated axe/semantic checks plus keyboard, zoom, contrast, screen-reader, and mobile accessibility UAT evidence. |
 | Branding | Not started | Buzz/Sprout names, `xyz.block` identifiers, bee/hive assets, Catppuccin theme and deep links remain pervasive | Create a central product identity/design token layer, then migrate every supported surface while retaining protocol identifiers where compatibility requires them. |
-| Analyst 360 integration | Vision only in this repository | no Snowman/Analyst contract or adapter exists at the audited baseline | Implement narrow, versioned commands/events and immutable evidence references; never share databases or copy raw Aptive rows/transcripts here by default. |
+| Analyst 360 integration | Source foundation implemented; runtime hardening required | `crates/buzz-relay/src/api/analyst_integration.rs`; `crates/buzz-db/src/analyst_integration.rs`; `migrations/0029_snowman_analyst_event_boundary.sql`; Analyst 360 migration 047 and its command/outbox modules | Keep the asymmetric, versioned command/event boundary. Complete the Analyst delivery worker, private AWS routing, KMS/IAM provisioning, and adversarial cross-tenant staging proof; never share databases or copy raw Aptive rows/transcripts here by default. |
 
 ## Hardening progress after the audited baseline
 
@@ -66,10 +66,14 @@ the highest risks without changing the production-readiness verdict:
 - default-off agent shell/network access, workspace containment, ambient secret
   removal, and direct provider endpoint rejection; and
 - definition-time rejection of unimplemented workflow actions and unsafe
-  webhook destinations/credential headers.
+  webhook destinations/credential headers; and
+- a default-off Analyst lifecycle-event ingress with host-derived community
+  scope, strict minimized schema, exact asymmetric KMS assertions, replay
+  prevention, idempotent persistence, and independently KMS-signed receipts.
 
 These are implementation foundations, not staged proof. OIDC assertion exchange,
-AWS workers/scheduler/sandbox, KMS audit checkpoints, recovery/load/isolation
+the Analyst outbox delivery worker, private integration routing, AWS
+workers/scheduler/sandbox, KMS audit checkpoints, recovery/load/isolation
 exercises, comprehensive branding, accessibility, UAT, and launch evidence remain
 open gates.
 

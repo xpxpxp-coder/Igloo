@@ -145,6 +145,11 @@ pub struct Config {
     /// enable it after network and service-identity controls are active.
     pub snowman_workforce_worker_api_enabled: bool,
 
+    /// Enable the private Analyst 360 lifecycle-event ingress. This surface is
+    /// independently disabled on public relay deployments and authenticates
+    /// tenant-bound asymmetric KMS assertions rather than browser sessions.
+    pub snowman_analyst_event_api_enabled: bool,
+
     /// Whether this deployment can serve huddle (voice) audio.
     ///
     /// Huddle audio frames are relayed peer-to-peer *within a single pod*
@@ -617,6 +622,14 @@ impl Config {
                     .to_string(),
             ));
         }
+        let snowman_analyst_event_api_enabled =
+            parse_bool("SNOWMAN_ANALYST_EVENT_API_ENABLED", false)?;
+        if snowman_analyst_event_api_enabled && !snowman_workforce_identity_required {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_ANALYST_EVENT_API_ENABLED=true requires SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true"
+                    .to_string(),
+            ));
+        }
 
         // Defaults true → single-pod (N=1) keeps today's huddle behavior. A
         // horizontally-scaled deployment sets this false; see the field doc.
@@ -1027,6 +1040,7 @@ impl Config {
             snowman_workforce_identity_required,
             snowman_workforce,
             snowman_workforce_worker_api_enabled,
+            snowman_analyst_event_api_enabled,
             huddle_audio_available,
             mesh,
             mesh_demo_echo,
@@ -1093,6 +1107,10 @@ mod tests {
         assert!(
             !config.snowman_workforce_worker_api_enabled,
             "private Snowman worker API should default to false"
+        );
+        assert!(
+            !config.snowman_analyst_event_api_enabled,
+            "private Analyst 360 event API should default to false"
         );
         assert!(
             config.relay_owner_pubkey.is_none(),
@@ -1317,6 +1335,49 @@ mod tests {
             governed
                 .expect("governed workforce identity config")
                 .snowman_workforce_identity_required
+        );
+    }
+
+    #[test]
+    fn analyst_event_api_requires_governed_workforce_identity() {
+        let _guard = ENV_MUTEX.lock().expect("environment mutex");
+        let keys = [
+            "BUZZ_REQUIRE_RELAY_MEMBERSHIP",
+            "SNOWMAN_ROLE_SCOPES",
+            "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED",
+            "SNOWMAN_ANALYST_EVENT_API_ENABLED",
+        ];
+        let previous: Vec<_> = keys
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect();
+
+        std::env::set_var("SNOWMAN_ANALYST_EVENT_API_ENABLED", "true");
+        std::env::remove_var("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED");
+        let ungoverned = Config::from_env();
+
+        std::env::set_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP", "true");
+        std::env::set_var("SNOWMAN_ROLE_SCOPES", "true");
+        std::env::set_var("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", "true");
+        let governed = Config::from_env();
+
+        for (key, value) in previous {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        assert!(matches!(
+            ungoverned,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("requires SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true")
+        ));
+        assert!(
+            governed
+                .expect("governed Analyst event config")
+                .snowman_analyst_event_api_enabled
         );
     }
 

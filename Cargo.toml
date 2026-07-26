@@ -97,6 +97,8 @@ reqwest = { version = "0.13", features = ["json", "rustls"], default-features = 
 sha2      = "0.11"
 hex       = "0.4"
 hmac      = "0.13"
+aws-config = "1.10.1"
+aws-sdk-kms = "1.114.0"
 
 # Randomness
 rand = "0.10"
