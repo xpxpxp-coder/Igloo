@@ -72,6 +72,46 @@ variable "worker_desired_count" {
   }
 }
 
+variable "workforce_profiles" {
+  description = "Per-identity durable workforce definitions. Secret values are populated out of band after creation."
+  type = map(object({
+    desired_count             = number
+    identity_id               = string
+    relay_url                 = string
+    analyst_endpoint          = string
+    analyst_service_principal = string
+    analyst_signing_key_arn   = string
+    tenant_id                 = string
+    client_id                 = string
+    project_id                = string
+  }))
+  default = {}
+  validation {
+    condition = alltrue([
+      for name, profile in var.workforce_profiles :
+      can(regex("^[a-z][a-z0-9-]{2,19}$", name)) &&
+      profile.desired_count >= 0 && profile.desired_count <= 20 &&
+      can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", profile.identity_id)) &&
+      can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org$", profile.relay_url)) &&
+      can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org$", profile.analyst_endpoint)) &&
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$", profile.analyst_service_principal)) &&
+      can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-fA-F-]{36}$", profile.analyst_signing_key_arn)) &&
+      profile.tenant_id == profile.client_id
+    ])
+    error_message = "Every workforce profile must be a bounded, tenant-consistent Snowman HTTPS identity definition."
+  }
+}
+
+variable "analyst360_private_prefix_list_id" {
+  type        = string
+  description = "Cross-account private Analyst 360 endpoint prefix list. Required only when workforce tasks activate."
+  default     = ""
+  validation {
+    condition     = var.analyst360_private_prefix_list_id == "" || can(regex("^pl-[0-9a-f]+$", var.analyst360_private_prefix_list_id))
+    error_message = "analyst360_private_prefix_list_id must be empty or an AWS managed prefix-list ID."
+  }
+}
+
 variable "model_gateway_desired_count" {
   type        = number
   description = "Desired Snowman model-gateway tasks."

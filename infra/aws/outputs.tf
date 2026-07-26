@@ -8,6 +8,7 @@ output "production_boundary" {
     external_model_processors   = var.external_model_processors_enabled
     relay_desired_count         = var.relay_desired_count
     worker_desired_count        = var.worker_desired_count
+    workforce_profile_count     = length(var.workforce_profiles)
     model_gateway_desired_count = var.model_gateway_desired_count
   }
 }

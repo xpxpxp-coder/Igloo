@@ -6,7 +6,8 @@ backups, and cost controls. Nothing in this root grants access to Analyst 360
 stores; integration uses the private versioned API/event contracts only.
 
 The current checked-in phase includes the account/image/activation preflight,
-managed substrate, and a dormant relay task contract. It
+managed substrate, a dormant relay task contract, and per-identity dormant
+workforce task/service contracts. It
 fails before resource creation when the caller is in the wrong account, the
 management account is targeted, production shares the Analyst 360 workload
 account, the image is mutable or outside the exact Snowman ECR repository,
@@ -22,7 +23,12 @@ topic, and an account-tag budget. The digest-pinned relay task definition runs
 as non-root with a read-only root filesystem, dropped Linux capabilities,
 writable scratch mounts, separate execution/task roles, exact ECR/log/secret,
 Valkey, media-S3, and S3-via-KMS grants, and no ECS service that could activate
-it. The runtime secret intentionally has no Terraform-managed value.
+it. Each workforce profile has a distinct ECS execution role, task role,
+Secrets Manager container, Nostr identity, Analyst service principal, and
+cross-account asymmetric KMS signing key. Its task has no public IP, shell,
+filesystem grant, shared agent secret, provider endpoint, or general internet
+route; the only optional non-AWS egress is an exact private Analyst 360 prefix
+list. Runtime secrets intentionally have no Terraform-managed values.
 Staging uses one interface-endpoint ENI, one RDS instance, and one Valkey node;
 production expands endpoints and managed state across availability zones.
 
@@ -34,9 +40,10 @@ root is deployable:
 2. governed database-role/key bootstrap that populates the relay runtime secret,
    AWS Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
    delivery, and tested recovery;
-3. ECS relay service plus workforce worker, scheduler, sandbox, and internal
+3. ECS relay service plus scheduler, sandbox, and internal
    model-gateway/inference task definitions/services with distinct
-   least-privilege roles;
+   least-privilege roles, plus staged activation of the now-defined workforce
+   services;
 4. WAF, centralized encrypted logs/metrics/traces, alarms, synthetic probes,
    budgets, autoscaling, dormant staging controls, and evidence export; and
 5. CI plan/policy tests, SBOM/provenance/signature enforcement, staged apply,

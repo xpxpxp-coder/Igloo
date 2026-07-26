@@ -131,6 +131,25 @@ class AwsFoundationContractTests(unittest.TestCase):
         self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
         self.assertNotIn('SNOWMAN_RELAY_OWNER_PUBKEY", value =', source)
 
+    def test_workforce_is_per_identity_private_and_hard_dormant(self) -> None:
+        source = (ROOT / "workforce.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'for_each = var.workforce_profiles',
+            'actions   = ["kms:Sign"]',
+            'resources = [each.value.analyst_signing_key_arn]',
+            'readonlyRootFilesystem = true',
+            'capabilities       = { drop = ["ALL"] }',
+            'assign_public_ip = false',
+            'SNOWMAN_WORKFORCE_NOSTR_PRIVATE_KEY", valueFrom =',
+            'SNOWMAN_WORKFORCE_TEAM_IDENTITIES_JSON", valueFrom =',
+            'condition     = each.value.desired_count == 0',
+            'prefix_list_id    = var.analyst360_private_prefix_list_id',
+        ):
+            self.assertIn(fragment, source)
+        self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
+        self.assertNotIn('"kms:*"', source)
+        self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
+
     def test_operations_are_encrypted_alerted_and_budgeted(self) -> None:
         source = (ROOT / "operations.tf").read_text(encoding="utf-8")
         for fragment in (
