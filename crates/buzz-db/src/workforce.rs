@@ -409,6 +409,61 @@ pub struct ScheduledProactiveAction {
     pub inserted: bool,
 }
 
+/// Human-authorized recurring work template. It contains only bounded policy
+/// metadata and immutable references; instruction and client-data bodies stay
+/// in their Snowman authority.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewWorkSchedule {
+    /// Stable schedule identifier.
+    pub schedule_id: Uuid,
+    /// Long-running request/objective advanced by each occurrence.
+    pub request_id: Uuid,
+    /// Authenticated human authorizing the recurrence.
+    pub created_by_identity_id: Uuid,
+    /// Dedicated service identity allowed to claim this schedule.
+    pub trigger_identity_id: Uuid,
+    /// Specialist identity that may execute materialized tasks.
+    pub executor_identity_id: Uuid,
+    /// Supported specialist role.
+    pub specialist_role: String,
+    /// Exact action capability.
+    pub capability: String,
+    /// Content-addressed instruction contract.
+    pub instruction_reference: String,
+    /// Bounded content-addressed context references.
+    pub context_references: Vec<String>,
+    /// Optional preferred model, still evaluated server-side at occurrence time.
+    pub requested_model_id: Option<String>,
+    /// Input token reservation per occurrence.
+    pub expected_input_tokens: i64,
+    /// Output token ceiling per occurrence.
+    pub max_output_tokens: i64,
+    /// Cost ceiling per occurrence.
+    pub max_cost_microusd: i64,
+    /// Expected artifact type.
+    pub expected_artifact_type: String,
+    /// Low, moderate, or high.
+    pub risk_tier: String,
+    /// Whether each operation is reversible.
+    pub reversible: bool,
+    /// Confidence of the authorized usefulness basis.
+    pub confidence_basis_points: i32,
+    /// Digest of the human-reviewed usefulness basis.
+    pub usefulness_sha256: [u8; 32],
+    /// Fixed recurrence interval, bounded to 15 minutes through 30 days.
+    pub cadence_seconds: i32,
+    /// First due time.
+    pub next_run_at: DateTime<Utc>,
+    /// Hard schedule end.
+    pub ends_at: DateTime<Utc>,
+    /// Maximum number of occurrences.
+    pub max_occurrences: i32,
+    /// Per-task retry cap.
+    pub max_attempts: i32,
+    /// Server-observed creation time.
+    pub created_at: DateTime<Utc>,
+}
+
 /// Server-authoritative request envelope used to govern a planner proposal.
 #[derive(Debug, Clone)]
 pub struct WorkPlanEnvelope {
@@ -1214,6 +1269,307 @@ pub async fn list_context_packets(
             })
         })
         .collect()
+}
+
+/// Idempotently persist one bounded recurring-work authorization.
+pub async fn create_work_schedule(
+    pool: &PgPool,
+    community_id: CommunityId,
+    schedule: &NewWorkSchedule,
+) -> Result<bool> {
+    if schedule.schedule_id.is_nil()
+        || schedule.request_id.is_nil()
+        || schedule.created_by_identity_id.is_nil()
+        || schedule.trigger_identity_id.is_nil()
+        || schedule.executor_identity_id.is_nil()
+        || !valid_proactive_execution(&schedule.specialist_role, &schedule.capability)
+        || !is_context_reference(&schedule.instruction_reference)
+        || schedule.context_references.len() >= 64
+        || schedule
+            .context_references
+            .iter()
+            .any(|reference| !is_context_reference(reference))
+        || !(1..=20_000_000).contains(&schedule.expected_input_tokens)
+        || !(1..=5_000_000).contains(&schedule.max_output_tokens)
+        || !(0..=500_000_000).contains(&schedule.max_cost_microusd)
+        || schedule.expected_artifact_type.trim().is_empty()
+        || schedule.expected_artifact_type.len() > 128
+        || !matches!(schedule.risk_tier.as_str(), "low" | "moderate" | "high")
+        || (!schedule.reversible && schedule.risk_tier == "low")
+        || !(0..=10_000).contains(&schedule.confidence_basis_points)
+        || schedule.usefulness_sha256 == [0; 32]
+        || !(900..=2_592_000).contains(&schedule.cadence_seconds)
+        || schedule.created_at > schedule.next_run_at
+        || schedule.ends_at <= schedule.next_run_at
+        || schedule.ends_at > schedule.created_at + Duration::days(366)
+        || !(1..=366).contains(&schedule.max_occurrences)
+        || !(1..=20).contains(&schedule.max_attempts)
+        || schedule
+            .requested_model_id
+            .as_ref()
+            .is_some_and(|model| model.trim().is_empty() || model.len() > 128)
+    {
+        return Err(DbError::InvalidData(
+            "work schedule violates bounded recurrence or execution policy".into(),
+        ));
+    }
+    let mut references = schedule.context_references.clone();
+    references.push(schedule.instruction_reference.clone());
+    references.sort();
+    references.dedup();
+    if references.len() > 64 {
+        return Err(DbError::AccessDenied(
+            "work schedule exceeds the immutable context-reference limit".into(),
+        ));
+    }
+    let canonical = serde_json::to_vec(schedule)
+        .map_err(|error| DbError::InvalidData(format!("work schedule is invalid: {error}")))?;
+    let schedule_sha256 = sha256(&canonical);
+    let mut tx = pool.begin().await?;
+    let authorization = sqlx::query(
+        r#"
+        SELECT r.status,
+          EXISTS (
+            SELECT 1 FROM snowman_workforce_identities i
+            JOIN snowman_workforce_capability_grants g
+              ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+            WHERE i.community_id=$1 AND i.identity_id=$3 AND i.identity_type='human'
+              AND i.status='active' AND i.revoked_at IS NULL
+              AND (i.expires_at IS NULL OR i.expires_at > NOW())
+              AND g.capability='workforce.schedules.manage' AND g.revoked_at IS NULL
+              AND (g.expires_at IS NULL OR g.expires_at > NOW())
+          ) AS creator_ready,
+          NOT EXISTS (
+            SELECT 1 FROM unnest(ARRAY['workforce.schedules.trigger','workforce.proactive.propose']) required(capability)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM snowman_workforce_identities i
+              JOIN snowman_workforce_capability_grants g
+                ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+              WHERE i.community_id=$1 AND i.identity_id=$4 AND i.identity_type='service'
+                AND i.role='agent' AND i.status='active' AND i.revoked_at IS NULL
+                AND (i.expires_at IS NULL OR i.expires_at > NOW())
+                AND g.capability=required.capability AND g.revoked_at IS NULL
+                AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            )
+          ) AS trigger_ready,
+          NOT EXISTS (
+            SELECT 1 FROM unnest(ARRAY[$6::text,'workforce.context.write']) required(capability)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM snowman_workforce_identities i
+              JOIN snowman_workforce_capability_grants g
+                ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+              WHERE i.community_id=$1 AND i.identity_id=$5 AND i.identity_type='service'
+                AND i.role='agent' AND i.status='active' AND i.revoked_at IS NULL
+                AND (i.expires_at IS NULL OR i.expires_at > NOW())
+                AND g.capability=required.capability AND g.revoked_at IS NULL
+                AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            )
+          ) AS executor_ready
+        FROM snowman_work_requests r
+        WHERE r.community_id=$1 AND r.request_id=$2
+        FOR UPDATE
+        "#,
+    )
+    .bind(*community_id.as_uuid())
+    .bind(schedule.request_id)
+    .bind(schedule.created_by_identity_id)
+    .bind(schedule.trigger_identity_id)
+    .bind(schedule.executor_identity_id)
+    .bind(&schedule.capability)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| DbError::InvalidData("scheduled work request was not found".into()))?;
+    if !matches!(
+        authorization.try_get::<String, _>("status")?.as_str(),
+        "requested" | "planned" | "running" | "awaiting_approval" | "reviewing"
+    ) || !authorization.try_get::<bool, _>("creator_ready")?
+        || !authorization.try_get::<bool, _>("trigger_ready")?
+        || !authorization.try_get::<bool, _>("executor_ready")?
+    {
+        return Err(DbError::AccessDenied(
+            "schedule creator, trigger, executor, or request lifecycle is not authorized".into(),
+        ));
+    }
+    let inserted = sqlx::query(
+        r#"
+        INSERT INTO snowman_work_schedules
+          (community_id, schedule_id, request_id, created_by_identity_id,
+           trigger_identity_id, executor_identity_id, specialist_role, capability,
+           instruction_reference, context_references, requested_model_id,
+           expected_input_tokens, max_output_tokens, max_cost_microusd,
+           expected_artifact_type, risk_tier, reversible, confidence_basis_points,
+           usefulness_sha256, cadence_seconds, next_run_at, ends_at,
+           max_occurrences, max_attempts, schedule_sha256, created_at, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$26)
+        ON CONFLICT (community_id, schedule_id) DO NOTHING
+        "#,
+    )
+    .bind(*community_id.as_uuid())
+    .bind(schedule.schedule_id)
+    .bind(schedule.request_id)
+    .bind(schedule.created_by_identity_id)
+    .bind(schedule.trigger_identity_id)
+    .bind(schedule.executor_identity_id)
+    .bind(&schedule.specialist_role)
+    .bind(&schedule.capability)
+    .bind(&schedule.instruction_reference)
+    .bind(&references)
+    .bind(&schedule.requested_model_id)
+    .bind(schedule.expected_input_tokens)
+    .bind(schedule.max_output_tokens)
+    .bind(schedule.max_cost_microusd)
+    .bind(&schedule.expected_artifact_type)
+    .bind(&schedule.risk_tier)
+    .bind(schedule.reversible)
+    .bind(schedule.confidence_basis_points)
+    .bind(schedule.usefulness_sha256.as_slice())
+    .bind(schedule.cadence_seconds)
+    .bind(schedule.next_run_at)
+    .bind(schedule.ends_at)
+    .bind(schedule.max_occurrences)
+    .bind(schedule.max_attempts)
+    .bind(schedule_sha256.as_slice())
+    .bind(schedule.created_at)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        == 1;
+    if !inserted {
+        let existing: Vec<u8> = sqlx::query_scalar(
+            "SELECT schedule_sha256 FROM snowman_work_schedules WHERE community_id=$1 AND schedule_id=$2",
+        )
+        .bind(*community_id.as_uuid())
+        .bind(schedule.schedule_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if existing.as_slice() != schedule_sha256.as_slice() {
+            return Err(DbError::AccessDenied(
+                "schedule identifier was reused for a different contract".into(),
+            ));
+        }
+    } else {
+        let event = NewWorkEvent {
+            event_id: schedule.schedule_id,
+            request_id: schedule.request_id,
+            task_id: None,
+            event_type: "schedule.authorized".into(),
+            actor_identity: format!("snowman:{}", schedule.created_by_identity_id),
+            payload: serde_json::json!({
+                "schema_version": "snowman.work.schedule.event.v1",
+                "schedule_id": schedule.schedule_id,
+                "schedule_sha256": hex::encode(schedule_sha256),
+                "trigger_identity_id": schedule.trigger_identity_id,
+                "executor_identity_id": schedule.executor_identity_id,
+                "specialist_role": schedule.specialist_role,
+                "capability": schedule.capability,
+                "cadence_seconds": schedule.cadence_seconds,
+                "next_run_at": schedule.next_run_at,
+                "ends_at": schedule.ends_at,
+                "max_occurrences": schedule.max_occurrences,
+            }),
+            occurred_at: schedule.created_at,
+        };
+        validate_work_event(&event)?;
+        append_work_event_tx(&mut tx, *community_id.as_uuid(), &event).await?;
+    }
+    tx.commit().await?;
+    Ok(inserted)
+}
+
+/// Stop a recurring authorization and expire any occurrence that has not yet
+/// become a governed proactive task. Completed task evidence is preserved.
+pub async fn cancel_work_schedule(
+    pool: &PgPool,
+    community_id: CommunityId,
+    request_id: Uuid,
+    schedule_id: Uuid,
+    cancellation_id: Uuid,
+    actor_identity_id: Uuid,
+    cancelled_at: DateTime<Utc>,
+) -> Result<bool> {
+    if request_id.is_nil()
+        || schedule_id.is_nil()
+        || cancellation_id.is_nil()
+        || actor_identity_id.is_nil()
+        || cancelled_at > Utc::now() + Duration::minutes(5)
+    {
+        return Err(DbError::InvalidData(
+            "schedule cancellation identity or time is invalid".into(),
+        ));
+    }
+    let mut tx = pool.begin().await?;
+    let authorized: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+          SELECT 1 FROM snowman_workforce_identities i
+          JOIN snowman_workforce_capability_grants g
+            ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+          WHERE i.community_id=$1 AND i.identity_id=$4 AND i.identity_type='human'
+            AND i.status='active' AND i.revoked_at IS NULL
+            AND (i.expires_at IS NULL OR i.expires_at > NOW())
+            AND g.capability='workforce.schedules.manage' AND g.revoked_at IS NULL
+            AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            AND EXISTS (
+              SELECT 1 FROM snowman_work_schedules s
+              WHERE s.community_id=$1 AND s.request_id=$2 AND s.schedule_id=$3
+            )
+        )
+        "#,
+    )
+    .bind(*community_id.as_uuid())
+    .bind(request_id)
+    .bind(schedule_id)
+    .bind(actor_identity_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !authorized {
+        return Err(DbError::AccessDenied(
+            "schedule cancellation is not authorized".into(),
+        ));
+    }
+    let changed = sqlx::query(
+        "UPDATE snowman_work_schedules SET status='cancelled', updated_at=$4 \
+         WHERE community_id=$1 AND request_id=$2 AND schedule_id=$3 \
+           AND status IN ('active','paused')",
+    )
+    .bind(*community_id.as_uuid())
+    .bind(request_id)
+    .bind(schedule_id)
+    .bind(cancelled_at)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected()
+        == 1;
+    if changed {
+        sqlx::query(
+            "UPDATE snowman_work_schedule_occurrences SET status='expired', updated_at=$4 \
+             WHERE community_id=$1 AND request_id=$2 AND schedule_id=$3 AND status='claimed'",
+        )
+        .bind(*community_id.as_uuid())
+        .bind(request_id)
+        .bind(schedule_id)
+        .bind(cancelled_at)
+        .execute(&mut *tx)
+        .await?;
+        refresh_request_status(&mut tx, *community_id.as_uuid(), request_id).await?;
+        let event = NewWorkEvent {
+            event_id: cancellation_id,
+            request_id,
+            task_id: None,
+            event_type: "schedule.cancelled".into(),
+            actor_identity: format!("snowman:{actor_identity_id}"),
+            payload: serde_json::json!({
+                "schema_version": "snowman.work.schedule.event.v1",
+                "schedule_id": schedule_id,
+                "reason": "human_cancelled"
+            }),
+            occurred_at: cancelled_at,
+        };
+        validate_work_event(&event)?;
+        append_work_event_tx(&mut tx, *community_id.as_uuid(), &event).await?;
+    }
+    tx.commit().await?;
+    Ok(changed)
 }
 
 /// Evaluate and durably record one proactive next-useful action exactly once.
@@ -3776,7 +4132,12 @@ async fn refresh_request_status(
           COUNT(*) FILTER (WHERE status IN ('failed','expired','dead_lettered'))::bigint AS failed,
           COUNT(*) FILTER (WHERE status='cancelled')::bigint AS cancelled,
           COUNT(*) FILTER (WHERE status='awaiting_approval')::bigint AS awaiting,
-          COUNT(*) FILTER (WHERE status IN ('leased','running','reviewing'))::bigint AS active
+          COUNT(*) FILTER (WHERE status IN ('leased','running','reviewing'))::bigint AS active,
+          EXISTS (
+            SELECT 1 FROM snowman_work_schedules s
+            WHERE s.community_id=$1 AND s.request_id=$2 AND s.status='active'
+              AND s.next_run_at <= s.ends_at AND s.occurrence_count < s.max_occurrences
+          ) AS active_schedule
         FROM snowman_work_tasks WHERE community_id=$1 AND request_id=$2
         "#,
     )
@@ -3790,7 +4151,10 @@ async fn refresh_request_status(
     let cancelled: i64 = counts.try_get("cancelled")?;
     let awaiting: i64 = counts.try_get("awaiting")?;
     let active: i64 = counts.try_get("active")?;
-    let next = if total > 0 && terminal == total {
+    let active_schedule: bool = counts.try_get("active_schedule")?;
+    let next = if active_schedule {
+        "planned"
+    } else if total > 0 && terminal == total {
         if failed > 0 {
             "failed"
         } else if cancelled > 0 {

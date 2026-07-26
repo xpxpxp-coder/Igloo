@@ -102,7 +102,9 @@ record, not a client-side API key or direct vendor CLI.
   reservation against the originating request. Supported v2 decisions now
   materialize as ordinary governed work tasks and reuse fenced leases,
   approvals, spend, cancellation, context, recovery, and evidence; the
-  maintenance scheduler expires stale actions. A trigger poller,
+  maintenance scheduler expires stale actions. Human-authorized, cancellable,
+  tenant-bound recurring schedule contracts now persist only immutable
+  references and bounded execution policy. A separately scoped trigger poller,
   calendar/reminder delivery capabilities, notifications, and staged 24/7 proof
   remain.
 - A deterministic context-manifest policy now gives replacement specialists a

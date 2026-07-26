@@ -111,6 +111,13 @@ model and atomically inserts the action as an ordinary work task. This reuses
 the existing approval, lease fencing, spend, cancellation, context, completion,
 recovery, and hash-chain controls; rejected actions have no task authority.
 
+Recurring work is authorized separately from execution. A Snowman human binds
+a schedule to one live objective, dedicated trigger identity, executor,
+supported capability, immutable instruction/context, per-run budgets, cadence,
+end time, and occurrence ceiling. Authorization and cancellation are hash-chain
+events. A maintenance identity cannot claim schedules, and no occurrence may
+bypass the proactive decision and ordinary task controls.
+
 The private proposal endpoint does not accept a policy from an agent. It uses
 the server-owned allowlist, automatic cost ceiling, and confidence threshold;
 all default to no automatic action until explicitly configured on the private

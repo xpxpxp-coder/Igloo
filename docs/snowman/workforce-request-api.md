@@ -21,6 +21,8 @@ session, an exact tenant-role match, and a fine-grained grant:
 | `GET /api/snowman/v1/work-requests/{request_id}` | `workforce.requests.read` | Returns lifecycle, task, budget, spend, and bounded hash-chain evidence metadata. |
 | `POST /api/snowman/v1/work-requests/{request_id}/cancel` | `workforce.requests.cancel` | Idempotently cancels every non-terminal task, deletes every live lease, and appends human-attributed hash-chain evidence. |
 | `POST /api/snowman/v1/work-requests/{request_id}/tasks/{task_id}/approval` | `workforce.tasks.approve` | Records an idempotent approve/deny/revoke decision bound to the exact task snapshot and an expiry of at most 24 hours. |
+| `POST /api/snowman/v1/work-requests/{request_id}/schedules` | `workforce.schedules.manage` | Authorizes a bounded recurring specialist contract for a live objective; it does not itself create or execute an occurrence. |
+| `POST /api/snowman/v1/work-requests/{request_id}/schedules/{schedule_id}/cancel` | `workforce.schedules.manage` | Stops future occurrences, expires unsubmitted claims, and appends hash-chain cancellation evidence. |
 
 The server derives `community_id` from the normalized request host and derives
 the requester from the signed relay key's live workforce binding. Neither is a
@@ -155,6 +157,16 @@ status synchronized with task claim, approval, completion, cancellation,
 expiry, requeue, and dead-letter transitions. The v2 decision receipt returns
 the task, executor, selected model, execution-snapshot digest, and approval flag
 under `execution`; it is `null` for a rejected action.
+Recurring-work authorization is human-only and binds one tenant/request,
+dedicated trigger identity, executor identity, supported role/capability,
+content-addressed instruction/context set, per-occurrence token/cost limits,
+fixed cadence (15 minutes through 30 days), a one-year end bound, and at most
+366 occurrences. The trigger identity must hold only
+`workforce.schedules.trigger` and `workforce.proactive.propose`; the executor
+must already hold the exact execution capabilities. Authorization and
+cancellation append hash-chain evidence. Source support does not yet claim
+occurrences: the separately deployed trigger runtime and staged retry proof
+remain required.
 The identity-isolated worker and maintenance scheduler now implement claim,
 planning, heartbeat, governed Analyst dispatch/status, context publication,
 terminal completion, deadline enforcement, lease recovery, and dead-lettering

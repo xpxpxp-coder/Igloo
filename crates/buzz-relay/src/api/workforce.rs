@@ -22,9 +22,9 @@ use uuid::Uuid;
 
 use buzz_auth::LimitType;
 use buzz_db::workforce::{
-    NewContextPacket, NewPlannedTask, NewProactiveAction, NewWorkPlan, NewWorkRequest, NewWorkTask,
-    SpendEntry, StoredContextPacket, StoredModelRoute, WorkApproval, WorkRequestCancellation,
-    WorkTaskCompletion,
+    NewContextPacket, NewPlannedTask, NewProactiveAction, NewWorkPlan, NewWorkRequest,
+    NewWorkSchedule, NewWorkTask, SpendEntry, StoredContextPacket, StoredModelRoute, WorkApproval,
+    WorkRequestCancellation, WorkTaskCompletion,
 };
 use snowman_workforce::{
     decide_proactive_action, govern_team_plan, Classification, ContextAuthority, ContextNextAction,
@@ -225,6 +225,45 @@ struct ProposeProactiveActionRequest {
     source_event_sha256: String,
     scheduled_for: DateTime<Utc>,
     expires_at: DateTime<Utc>,
+    occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateWorkScheduleRequest {
+    schema_version: String,
+    schedule_id: Uuid,
+    trigger_identity_id: Uuid,
+    executor_identity_id: Uuid,
+    specialist_role: SpecialistRole,
+    capability: String,
+    instruction_reference: String,
+    #[serde(default)]
+    context_references: BTreeSet<String>,
+    #[serde(default)]
+    requested_model_id: Option<String>,
+    expected_input_tokens: i64,
+    max_output_tokens: i64,
+    max_cost_microusd: i64,
+    expected_artifact_type: String,
+    risk_tier: RiskTier,
+    reversible: bool,
+    confidence_basis_points: i32,
+    usefulness_sha256: String,
+    cadence_seconds: i32,
+    next_run_at: DateTime<Utc>,
+    ends_at: DateTime<Utc>,
+    max_occurrences: i32,
+    #[serde(default = "default_proactive_max_attempts")]
+    max_attempts: i32,
+    occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelWorkScheduleRequest {
+    schema_version: String,
+    cancellation_id: Uuid,
     occurred_at: DateTime<Utc>,
 }
 
@@ -550,6 +589,163 @@ pub async fn create_work_request(
             "status_url": format!("{CREATE_PATH}/{}", accepted.request_id),
         })),
     ))
+}
+
+/// Authorize bounded recurring specialist work for an existing objective.
+pub async fn create_work_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    let path = format!("{CREATE_PATH}/{request_id}/schedules");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.schedules.manage",
+        "human",
+    )
+    .await?;
+    let input: CreateWorkScheduleRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid work schedule JSON"))?;
+    if input.schema_version != "snowman.work.schedule.v1"
+        || request_id.is_nil()
+        || input.schedule_id.is_nil()
+        || input.trigger_identity_id.is_nil()
+        || input.executor_identity_id.is_nil()
+        || !is_recent_worker_time(input.occurred_at)
+        || input.next_run_at < input.occurred_at
+        || input.ends_at <= input.next_run_at
+        || input.ends_at > input.occurred_at + Duration::days(366)
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "work schedule has an invalid schema, identity, time, or duration",
+        ));
+    }
+    let schedule = NewWorkSchedule {
+        schedule_id: input.schedule_id,
+        request_id,
+        created_by_identity_id: principal.identity_id,
+        trigger_identity_id: input.trigger_identity_id,
+        executor_identity_id: input.executor_identity_id,
+        specialist_role: specialist_role_name(input.specialist_role).to_string(),
+        capability: input.capability,
+        instruction_reference: input.instruction_reference,
+        context_references: input.context_references.into_iter().collect(),
+        requested_model_id: input.requested_model_id,
+        expected_input_tokens: input.expected_input_tokens,
+        max_output_tokens: input.max_output_tokens,
+        max_cost_microusd: input.max_cost_microusd,
+        expected_artifact_type: input.expected_artifact_type,
+        risk_tier: risk_tier_name(input.risk_tier).to_string(),
+        reversible: input.reversible,
+        confidence_basis_points: input.confidence_basis_points,
+        usefulness_sha256: parse_sha256(&input.usefulness_sha256, "usefulness_sha256")?,
+        cadence_seconds: input.cadence_seconds,
+        next_run_at: input.next_run_at,
+        ends_at: input.ends_at,
+        max_occurrences: input.max_occurrences,
+        max_attempts: input.max_attempts,
+        created_at: input.occurred_at,
+    };
+    let inserted = state
+        .db
+        .create_work_schedule(tenant.community(), &schedule)
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "work schedule conflicts with identity, request, recurrence, or execution policy",
+            ),
+            _ => internal_error("work schedule persistence failed"),
+        })?;
+    metrics::counter!(
+        "snowman_workforce_schedules_total",
+        "outcome" => if inserted { "created" } else { "replayed" }
+    )
+    .increment(1);
+    Ok((
+        if inserted {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(json!({
+            "schema_version": "snowman.work.schedule.accepted.v1",
+            "request_id": request_id,
+            "schedule_id": schedule.schedule_id,
+            "status": "active",
+            "next_run_at": schedule.next_run_at,
+            "ends_at": schedule.ends_at,
+            "inserted": inserted,
+        })),
+    ))
+}
+
+/// Idempotently stop recurring work before another occurrence can be claimed.
+pub async fn cancel_work_schedule(
+    State(state): State<Arc<AppState>>,
+    Path((request_id, schedule_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let path = format!("{CREATE_PATH}/{request_id}/schedules/{schedule_id}/cancel");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.schedules.manage",
+        "human",
+    )
+    .await?;
+    let input: CancelWorkScheduleRequest = serde_json::from_slice(&body).map_err(|_| {
+        api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid schedule cancellation JSON",
+        )
+    })?;
+    if input.schema_version != "snowman.work.schedule.cancel.v1"
+        || request_id.is_nil()
+        || schedule_id.is_nil()
+        || input.cancellation_id.is_nil()
+        || !is_recent_worker_time(input.occurred_at)
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "schedule cancellation has an invalid schema, identity, or time",
+        ));
+    }
+    let changed = state
+        .db
+        .cancel_work_schedule(
+            tenant.community(),
+            request_id,
+            schedule_id,
+            input.cancellation_id,
+            principal.identity_id,
+            input.occurred_at,
+        )
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "schedule cancellation conflicts with identity or schedule scope",
+            ),
+            _ => internal_error("schedule cancellation failed"),
+        })?;
+    Ok(Json(json!({
+        "schema_version": "snowman.work.schedule.cancelled.v1",
+        "request_id": request_id,
+        "schedule_id": schedule_id,
+        "status": "cancelled",
+        "changed": changed,
+    })))
 }
 
 /// Return tenant-scoped lifecycle, budget, task, and evidence metadata.

@@ -37,5 +37,8 @@ This scheduler enforces lifecycle safety; it does **not** itself execute queued
 proactive actions. The v2 proactive contract materializes supported actions as
 ordinary governed work tasks, so identity, model routing, approval, fenced
 leases, spend, context, cancellation, completion, and recovery are reused rather
-than duplicated. Trigger generation, calendar/reminder delivery capabilities,
-and staged failure proof remain open.
+than duplicated. Recurring authorization records are now human-created,
+cancellable, tenant/request bound, and hard-limited by cadence/end/occurrence
+ceilings, but this maintenance scheduler intentionally cannot claim them. The
+separately scoped trigger runtime, calendar/reminder delivery capabilities, and
+staged failure proof remain open.

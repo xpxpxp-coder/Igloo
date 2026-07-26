@@ -3145,6 +3145,37 @@ impl Db {
         workforce::schedule_proactive_action(&self.pool, community, proposal).await
     }
 
+    /// Idempotently authorize bounded recurring specialist work.
+    pub async fn create_work_schedule(
+        &self,
+        community: CommunityId,
+        schedule: &workforce::NewWorkSchedule,
+    ) -> Result<bool> {
+        workforce::create_work_schedule(&self.pool, community, schedule).await
+    }
+
+    /// Stop a recurring-work authorization and expire unsubmitted occurrences.
+    pub async fn cancel_work_schedule(
+        &self,
+        community: CommunityId,
+        request_id: Uuid,
+        schedule_id: Uuid,
+        cancellation_id: Uuid,
+        actor_identity_id: Uuid,
+        cancelled_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        workforce::cancel_work_schedule(
+            &self.pool,
+            community,
+            request_id,
+            schedule_id,
+            cancellation_id,
+            actor_identity_id,
+            cancelled_at,
+        )
+        .await
+    }
+
     /// Enforce workforce deadlines and recover abandoned leases under one
     /// idempotent, evidence-preserving scheduler tick.
     pub async fn maintain_workforce(
