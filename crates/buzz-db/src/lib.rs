@@ -2934,6 +2934,24 @@ impl Db {
         workforce_identity::resolve_workforce_principal(&self.pool, community, pubkey).await
     }
 
+    /// Load an active tenant-local Snowman identity-authority binding.
+    pub async fn workforce_identity_broker(
+        &self,
+        community: CommunityId,
+        broker_id: &str,
+    ) -> Result<Option<workforce_identity::WorkforceIdentityBroker>> {
+        workforce_identity::workforce_identity_broker(&self.pool, community, broker_id).await
+    }
+
+    /// Atomically consume an authority assertion and bind one human device session.
+    pub async fn enroll_human_workforce_session(
+        &self,
+        community: CommunityId,
+        enrollment: &workforce_identity::NewHumanWorkforceSession,
+    ) -> Result<workforce_identity::EnrolledHumanWorkforceSession> {
+        workforce_identity::enroll_human_workforce_session(&self.pool, community, enrollment).await
+    }
+
     /// Verify an active tenant-local agent service identity and capability.
     pub async fn active_service_identity_has_capability(
         &self,

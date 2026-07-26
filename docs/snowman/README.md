@@ -21,6 +21,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Workforce maintenance scheduler](workforce-scheduler.md)
 - [Workforce reminder delivery](workforce-reminder.md)
 - [Governed workforce bootstrap](workforce-bootstrap.md)
+- [Workforce human identity bridge](workforce-human-identity.md)
 - [Private model gateway](model-gateway.md)
 - [Private inference fleet](../../infra/aws-inference/README.md)
 

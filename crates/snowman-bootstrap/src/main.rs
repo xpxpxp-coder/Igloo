@@ -58,6 +58,23 @@ struct WorkforceBootstrapManifest {
     identities: Vec<ServiceIdentityManifest>,
     model_routes: Vec<ModelRouteManifest>,
     team: TeamManifest,
+    identity_authority: IdentityAuthorityManifest,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct IdentityAuthorityManifest {
+    broker_id: String,
+    provider: String,
+    hosted_domain: String,
+    tenant_id: String,
+    client_id: String,
+    project_id: String,
+    signing_kms_key_arn: String,
+    max_session_seconds: i32,
+    assurance_level: String,
+    assurance_evidence_sha256: String,
+    assurance_evaluated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -244,6 +261,30 @@ fn validate_workforce_manifest(manifest: &WorkforceBootstrapManifest) -> anyhow:
     {
         bail!("workforce manifest schema or community identity is invalid");
     }
+    let authority = &manifest.identity_authority;
+    if !valid_identifier(&authority.broker_id)
+        || authority.provider != "google_workspace"
+        || !valid_snowman_host(&authority.hosted_domain)
+        || !valid_scope(&authority.tenant_id)
+        || !valid_scope(&authority.client_id)
+        || !valid_scope(&authority.project_id)
+        || authority.tenant_id != authority.client_id
+        || !valid_kms_key_arn(&authority.signing_kms_key_arn)
+        || !(60..=3600).contains(&authority.max_session_seconds)
+        || !matches!(
+            authority.assurance_level.as_str(),
+            "mfa" | "phishing_resistant"
+        )
+        || decode_sha256(
+            &authority.assurance_evidence_sha256,
+            "assurance_evidence_sha256",
+        )
+        .is_err()
+        || authority.assurance_evaluated_at > Utc::now() + chrono::Duration::minutes(5)
+        || Utc::now() - authority.assurance_evaluated_at > chrono::Duration::days(120)
+    {
+        bail!("workforce identity authority violates the governed Google/KMS boundary");
+    }
     if manifest.identities.is_empty() || manifest.identities.len() > MAX_WORKFORCE_IDENTITIES {
         bail!("workforce manifest must contain between 1 and 64 service identities");
     }
@@ -387,6 +428,36 @@ fn valid_snowman_host(value: &str) -> bool {
                     character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
                 })
         })
+}
+
+fn valid_identifier(value: &str) -> bool {
+    (3..=200).contains(&value.len())
+        && value.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphanumeric()
+                || (index > 0 && matches!(byte, b'.' | b'_' | b':' | b'/' | b'-'))
+        })
+}
+
+fn valid_scope(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 120
+        && value.is_ascii()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn valid_kms_key_arn(value: &str) -> bool {
+    let parts: Vec<&str> = value.split(':').collect();
+    parts.len() == 6
+        && parts[0] == "arn"
+        && parts[1].starts_with("aws")
+        && parts[2] == "kms"
+        && !parts[3].is_empty()
+        && parts[4].len() == 12
+        && parts[4].bytes().all(|byte| byte.is_ascii_digit())
+        && parts[5].starts_with("key/")
+        && parts[5].len() == 40
 }
 
 fn random_hex() -> String {
@@ -634,6 +705,66 @@ async fn reconcile_workforce_manifest(
         bail!("workforce bootstrap found an active identity or model outside its authority");
     }
 
+    let authority = &manifest.identity_authority;
+    let assurance_evidence = decode_sha256(
+        &authority.assurance_evidence_sha256,
+        "assurance_evidence_sha256",
+    )?;
+    let broker = sqlx::query(
+        r#"
+        INSERT INTO snowman_workforce_identity_brokers
+          (community_id, broker_id, provider, hosted_domain, tenant_id,
+           client_id, project_id, assurance_level,
+           assurance_evidence_sha256, assurance_evaluated_at,
+           signing_kms_key_arn, max_session_seconds, status,
+           provisioning_authority)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'active','workforce_bootstrap')
+        ON CONFLICT (community_id, broker_id) DO UPDATE SET
+          provider=EXCLUDED.provider,
+          hosted_domain=EXCLUDED.hosted_domain,
+          tenant_id=EXCLUDED.tenant_id,
+          client_id=EXCLUDED.client_id,
+          project_id=EXCLUDED.project_id,
+          assurance_level=EXCLUDED.assurance_level,
+          assurance_evidence_sha256=EXCLUDED.assurance_evidence_sha256,
+          assurance_evaluated_at=EXCLUDED.assurance_evaluated_at,
+          signing_kms_key_arn=EXCLUDED.signing_kms_key_arn,
+          max_session_seconds=EXCLUDED.max_session_seconds,
+          status='active', updated_at=NOW(), revoked_at=NULL
+        WHERE snowman_workforce_identity_brokers.provisioning_authority='workforce_bootstrap'
+        RETURNING broker_id
+        "#,
+    )
+    .bind(community_id)
+    .bind(&authority.broker_id)
+    .bind(&authority.provider)
+    .bind(&authority.hosted_domain)
+    .bind(&authority.tenant_id)
+    .bind(&authority.client_id)
+    .bind(&authority.project_id)
+    .bind(&authority.assurance_level)
+    .bind(assurance_evidence.as_slice())
+    .bind(authority.assurance_evaluated_at)
+    .bind(&authority.signing_kms_key_arn)
+    .bind(authority.max_session_seconds)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if broker.is_none() {
+        bail!("workforce identity authority conflicts with another provisioning authority");
+    }
+    sqlx::query(
+        r#"
+        UPDATE snowman_workforce_identity_brokers
+        SET status='revoked', revoked_at=COALESCE(revoked_at,NOW()), updated_at=NOW()
+        WHERE community_id=$1 AND broker_id<>$2
+          AND provisioning_authority='workforce_bootstrap' AND status<>'revoked'
+        "#,
+    )
+    .bind(community_id)
+    .bind(&authority.broker_id)
+    .execute(&mut *tx)
+    .await?;
+
     for prepared in identities {
         let identity = &prepared.manifest;
         let subject_sha256 = digest_bytes(
@@ -865,9 +996,11 @@ async fn reconcile_workforce_manifest(
     sqlx::query(
         r#"
         INSERT INTO snowman_workforce_bootstrap_receipts
-          (community_id, manifest_sha256, identity_count, model_route_count, applied_at)
-        VALUES ($1,$2,$3,$4,NOW())
-        ON CONFLICT (community_id, manifest_sha256) DO UPDATE SET applied_at=NOW()
+          (community_id, manifest_sha256, identity_count, model_route_count,
+           identity_broker_count, applied_at)
+        VALUES ($1,$2,$3,$4,1,NOW())
+        ON CONFLICT (community_id, manifest_sha256) DO UPDATE SET
+          identity_broker_count=1, applied_at=NOW()
         "#,
     )
     .bind(community_id)
@@ -1044,6 +1177,21 @@ mod tests {
                 client_delivery: delivery,
                 quality_risk_reviewer: reviewer,
                 model_overrides: TeamModelOverrides::default(),
+            },
+            identity_authority: IdentityAuthorityManifest {
+                broker_id: "snowman-analyst360-identity".into(),
+                provider: "google_workspace".into(),
+                hosted_domain: "snowmanai.org".into(),
+                tenant_id: "aptive".into(),
+                client_id: "aptive".into(),
+                project_id: "aptive".into(),
+                signing_kms_key_arn:
+                    "arn:aws:kms:us-west-2:111111111111:key/00000000-0000-0000-0000-000000000001"
+                        .into(),
+                max_session_seconds: 900,
+                assurance_level: "mfa".into(),
+                assurance_evidence_sha256: "b".repeat(64),
+                assurance_evaluated_at: Utc::now(),
             },
         }
     }

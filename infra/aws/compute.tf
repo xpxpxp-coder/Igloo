@@ -132,6 +132,15 @@ data "aws_iam_policy_document" "relay_task" {
       values   = ["s3.${var.aws_region}.amazonaws.com"]
     }
   }
+  dynamic "statement" {
+    for_each = var.workforce_identity_authority == null ? [] : [var.workforce_identity_authority]
+    content {
+      sid       = "VerifyExactWorkforceIdentityAuthority"
+      effect    = "Allow"
+      actions   = ["kms:Verify"]
+      resources = [statement.value.signing_kms_key_arn]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "relay_task" {
@@ -360,6 +369,7 @@ resource "aws_ecs_task_definition" "relay" {
         { name = "SNOWMAN_VALKEY_IAM_USER_ID", value = aws_elasticache_user.relay.user_id },
         { name = "SNOWMAN_WORKFORCE_API_ENABLED", value = tostring(var.workforce_api_enabled) },
         { name = "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", value = "true" },
+        { name = "SNOWMAN_WORKFORCE_IDENTITY_API_ENABLED", value = tostring(var.workforce_identity_api_enabled) },
         { name = "SNOWMAN_WORKFORCE_WORKER_API_ENABLED", value = tostring(var.workforce_worker_api_enabled) },
         { name = "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID", value = var.workforce_lead_identity_id },
         { name = "SNOWMAN_MODEL_GATEWAY_URL", value = var.workforce_model_gateway_url },

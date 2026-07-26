@@ -39,6 +39,12 @@ evidence for a runtime, recovery, accessibility, or operational claim.
   nonce/state/PKCE, authentication time, and tenant binding fail closed.
 - A human-to-Nostr binding is explicit, tenant-scoped, auditable, revocable, and
   protected against reassignment.
+- Google provider tokens, email addresses, raw provider subjects, Analyst
+  cookies, and client data never cross the human-enrollment boundary; deployed
+  network capture, database inspection, and audit reconciliation prove it.
+- The identity assertion key is asymmetric, purpose-dedicated, and cross-account:
+  Analyst can sign but not administer Command Center identity state, while the
+  exact Command Center relay role can verify but cannot sign.
 - Roles map to named capabilities; no production path maps key possession to all
   known scopes.
 - Session duration, idle expiry, device/session inventory, logout, global

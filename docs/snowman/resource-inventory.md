@@ -146,10 +146,11 @@ record, not a client-side API key or direct vendor CLI.
   receipt/event digests. Analyst also has a dedicated least-privilege delivery
   worker and ECS role in source. Private AWS routing, key provisioning/bindings,
   capability-specific workers, and staged two-tenant proof remain to be completed.
-- Workforce identity/session/device/service schemas and fail-closed relay-key
-  resolution now exist in source. The Snowman identity broker must still verify
-  Google Workspace or AWS IAM Identity Center OIDC assertions and perform the
-  enrollment, renewal, logout, rotation, and revocation flows end to end.
+- Workforce identity/session/device/service schemas, privacy-preserving Google
+  Workspace/KMS enrollment, receiver-owned role/capability mapping, and
+  fail-closed relay-key resolution now exist in source. Renewal, logout,
+  single-device/global revocation, user removal, key rotation, client UX, and
+  staged end-to-end proof remain incomplete.
 - A monitored alert destination. Technical setup can be automated, but inbox
   subscription confirmation remains user-owned when AWS requests it.
 - For iOS distribution or push, a Snowman-controlled Apple Developer/APNs/App

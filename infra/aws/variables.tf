@@ -283,6 +283,49 @@ variable "analyst_event_api_enabled" {
   default     = false
 }
 
+variable "workforce_identity_api_enabled" {
+  type        = bool
+  description = "Enable the private KMS-authenticated Google Workspace human-session enrollment route."
+  default     = false
+}
+
+variable "workforce_identity_authority" {
+  description = "Exact Snowman identity authority, tenant scope, signing key, session ceiling, and reviewed Workspace MFA evidence."
+  type = object({
+    broker_id                 = string
+    provider                  = string
+    hosted_domain             = string
+    tenant_id                 = string
+    client_id                 = string
+    project_id                = string
+    signing_kms_key_arn       = string
+    max_session_seconds       = number
+    assurance_level           = string
+    assurance_evidence_sha256 = string
+    assurance_evaluated_at    = string
+  })
+  default  = null
+  nullable = true
+  validation {
+    condition = try(var.workforce_identity_authority == null || (
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$", var.workforce_identity_authority.broker_id)) &&
+      var.workforce_identity_authority.provider == "google_workspace" &&
+      (
+        var.workforce_identity_authority.hosted_domain == "snowmanai.org" ||
+        can(regex("^[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.snowmanai\\.org$", var.workforce_identity_authority.hosted_domain))
+      ) &&
+      var.workforce_identity_authority.tenant_id == var.workforce_identity_authority.client_id &&
+      alltrue([for value in [var.workforce_identity_authority.tenant_id, var.workforce_identity_authority.client_id, var.workforce_identity_authority.project_id] : can(regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$", value))]) &&
+      can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-fA-F-]{36}$", var.workforce_identity_authority.signing_kms_key_arn)) &&
+      var.workforce_identity_authority.max_session_seconds >= 60 && var.workforce_identity_authority.max_session_seconds <= 3600 &&
+      contains(["mfa", "phishing_resistant"], var.workforce_identity_authority.assurance_level) &&
+      can(regex("^[0-9a-f]{64}$", var.workforce_identity_authority.assurance_evidence_sha256)) &&
+      can(formatdate("YYYY-MM-DD'T'hh:mm:ssZ", var.workforce_identity_authority.assurance_evaluated_at))
+    ), false)
+    error_message = "The workforce identity authority must be an exact Snowman Google/KMS binding with tenant-consistent scope and reviewed MFA evidence."
+  }
+}
+
 variable "workforce_profiles" {
   description = "Per-identity durable workforce definitions. Secret values are populated out of band after creation."
   type = map(object({

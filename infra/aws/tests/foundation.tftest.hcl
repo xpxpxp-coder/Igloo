@@ -134,6 +134,19 @@ run "governed_workforce_bootstrap_manifest" {
     workforce_model_gateway_url = "https://models.staging.internal.snowmanai.org/v1"
     workforce_planning_model_id = "snowman-local-general-v1"
     workforce_private_hostnames = ["workforce.aptive.staging.snowmanai.org"]
+    workforce_identity_authority = {
+      broker_id                 = "snowman-analyst360-identity"
+      provider                  = "google_workspace"
+      hosted_domain             = "snowmanai.org"
+      tenant_id                 = "aptive"
+      client_id                 = "aptive"
+      project_id                = "default"
+      signing_kms_key_arn       = "arn:aws:kms:us-west-2:333333333333:key/00000000-0000-4000-8000-000000000030"
+      max_session_seconds       = 900
+      assurance_level           = "mfa"
+      assurance_evidence_sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      assurance_evaluated_at    = "2026-07-26T00:00:00Z"
+    }
     workforce_model_routes = {
       snowman-local-general-v1 = {
         suited_roles                         = ["lead", "governed_analyst", "client_delivery", "quality_risk_reviewer", "deadline_operations"]
@@ -182,6 +195,10 @@ run "governed_workforce_bootstrap_manifest" {
   assert {
     condition     = local.workforce_team_identity_ids.lead == var.workforce_lead_identity_id && local.workforce_role_capabilities.quality_risk_reviewer == ["artifact.build", "artifact.review", "workforce.context.read", "workforce.context.write", "workforce.tasks.execute"]
     error_message = "Team identity and reviewer capabilities must remain exact."
+  }
+  assert {
+    condition     = local.workforce_identity_authority_manifest.signing_kms_key_arn == var.workforce_identity_authority.signing_kms_key_arn
+    error_message = "Bootstrap must bind the exact Snowman identity-authority KMS key."
   }
 }
 

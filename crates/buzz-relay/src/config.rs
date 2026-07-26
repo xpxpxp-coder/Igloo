@@ -141,6 +141,8 @@ pub struct Config {
     /// Require every relay key to resolve to a live Snowman workforce human
     /// session or capability-bounded service identity before authentication.
     pub snowman_workforce_identity_required: bool,
+    /// Enables the private KMS-authenticated human device enrollment boundary.
+    pub snowman_workforce_identity_api_enabled: bool,
 
     /// Governed workforce request intake. `None` disables every workforce API
     /// route; enabling it requires closed membership, live workforce identity,
@@ -654,6 +656,14 @@ impl Config {
         }
         let snowman_workforce_identity_required =
             parse_bool("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", false)?;
+        let snowman_workforce_identity_api_enabled =
+            parse_bool("SNOWMAN_WORKFORCE_IDENTITY_API_ENABLED", false)?;
+        if snowman_workforce_identity_api_enabled && !snowman_workforce_identity_required {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_WORKFORCE_IDENTITY_API_ENABLED=true requires SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true"
+                    .to_string(),
+            ));
+        }
         if snowman_workforce_identity_required && !snowman_role_scopes {
             return Err(ConfigError::InvalidValue(
                 "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true requires SNOWMAN_ROLE_SCOPES=true"
@@ -1184,6 +1194,7 @@ impl Config {
             require_relay_membership,
             snowman_role_scopes,
             snowman_workforce_identity_required,
+            snowman_workforce_identity_api_enabled,
             snowman_workforce,
             snowman_workforce_worker_api_enabled,
             snowman_analyst_event_api_enabled,

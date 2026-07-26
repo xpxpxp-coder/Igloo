@@ -20,7 +20,8 @@ locals {
     client_delivery       = try(one([for profile in values(var.workforce_profiles) : profile.model_override if profile.specialist_role == "client_delivery"]), null)
     quality_risk_reviewer = try(one([for profile in values(var.workforce_profiles) : profile.model_override if profile.specialist_role == "quality_risk_reviewer"]), null)
   }
-  workforce_bootstrap_enabled = var.workforce_community_id != ""
+  workforce_bootstrap_enabled           = var.workforce_community_id != ""
+  workforce_identity_authority_manifest = var.workforce_identity_authority
   configured_worker_desired_count = sum(concat(
     [0], [for profile in values(var.workforce_profiles) : profile.desired_count]
   ))
@@ -96,6 +97,7 @@ locals {
       quality_risk_reviewer = local.workforce_team_identity_ids.quality_risk_reviewer
       model_overrides       = local.workforce_team_model_overrides
     }
+    identity_authority = local.workforce_identity_authority_manifest
   }) : ""
 }
 
@@ -111,6 +113,7 @@ check "workforce_profile_boundary" {
       length(var.trigger_profiles) > 0 ||
       length(var.reminder_profiles) > 0 ||
       length(var.workforce_model_routes) > 0 ||
+      var.workforce_identity_authority != null ||
       var.workforce_community_host != ""
     )
     error_message = "The workforce community and its service/model manifest must be configured together."
@@ -126,11 +129,23 @@ check "workforce_profile_boundary" {
       length(var.trigger_profiles) >= 1 &&
       length(var.reminder_profiles) >= 1 &&
       length(var.workforce_model_routes) >= 1 &&
+      var.workforce_identity_authority != null &&
       var.workforce_model_gateway_url != "" &&
       var.workforce_community_host != "" &&
       var.workforce_lead_identity_id == local.workforce_team_identity_ids.lead
     )
-    error_message = "A workforce bootstrap requires one lead/analyst/delivery/reviewer, plus scheduler, trigger, reminder, evaluated model route, Snowman gateway, and matching lead identity."
+    error_message = "A workforce bootstrap requires one lead/analyst/delivery/reviewer, scheduler, trigger, reminder, evaluated model route, Snowman gateway, identity authority with current MFA evidence, and matching lead identity."
+  }
+  assert {
+    condition = try(!local.workforce_bootstrap_enabled || (
+      split(":", var.workforce_identity_authority.signing_kms_key_arn)[3] == var.aws_region &&
+      split(":", var.workforce_identity_authority.signing_kms_key_arn)[4] == var.analyst360_workload_account_id
+    ), false)
+    error_message = "The workforce identity authority signing key must belong to the exact Analyst 360 workload account and region."
+  }
+  assert {
+    condition     = !var.workforce_identity_api_enabled || (var.workforce_identity_authority != null && var.workforce_private_ingress_enabled && var.relay_desired_count > 0)
+    error_message = "Human enrollment can activate only with the exact identity authority, private workforce ingress, and a live relay."
   }
   assert {
     condition = !local.workforce_bootstrap_enabled || alltrue([
