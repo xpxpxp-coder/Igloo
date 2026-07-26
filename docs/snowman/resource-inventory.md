@@ -58,9 +58,11 @@ record, not a client-side API key or direct vendor CLI.
   dedicated least-privilege Valkey namespace, and can route only to private
   Snowman origins or exact same-account SageMaker endpoints through a VPC
   interface endpoint. Its dormant ECS service/task and exact IAM/network
-  boundaries exist in source. Private cross-account ingress, a governed model
-  catalog deployment, the pinned Snowman-hosted AWS inference fleet, usage
-  reconciliation, and live zero-egress proof remain.
+  boundaries exist in source. A separate hard-dormant inference root now defines
+  network-isolated, digest-pinned SageMaker model/component coordinates,
+  object-locked weights, per-model identities, scale-to-zero, cold-start wake
+  alarms, and bounded capacity. Pinned model images/weights, role evaluations,
+  usage reconciliation, deployment, and live zero-egress proof remain.
   A default-off PrivateLink provider with Snowman TLS, endpoint acceptance, and
   exact Analyst-account principals now implements the cross-account ingress
   substrate; live certificate/DNS verification, endpoint acceptance, and

@@ -10,6 +10,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [ADR 0001: separate command-center control plane](adr/0001-separate-command-center-control-plane.md)
 - [ADR 0002: governed, durable AI workforce](adr/0002-governed-ai-workforce.md)
 - [ADR 0003: Snowman-only runtime and egress](adr/0003-snowman-only-runtime-boundary.md)
+- [ADR 0004: private specialist model fleet](adr/0004-private-specialist-model-fleet.md)
 - [Production acceptance criteria](production-acceptance-criteria.md)
 - [External dependency and data-egress register](external-dependency-register.md)
 - [Available resource and reuse inventory](resource-inventory.md)
@@ -18,6 +19,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Analyst 360 event and receipt boundary](analyst-event-boundary.md)
 - [Durable workforce worker](workforce-worker.md)
 - [Private model gateway](model-gateway.md)
+- [Private inference fleet](../../infra/aws-inference/README.md)
 
 These documents distinguish three states:
 

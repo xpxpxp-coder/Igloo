@@ -50,7 +50,10 @@ shared VPC is introduced.
 - Provision and prove the Analyst interface endpoint plus its TLS/DNS identity;
   the provider-side PrivateLink substrate is now defined but remains dormant.
 - Build, evaluate, pin, scan, sign, and deploy the Snowman-hosted inference
-  images and model catalog. Hosted third-party inference remains prohibited.
+  images and weights into the now-defined hard-dormant private inference fleet.
+  Hosted third-party inference remains prohibited.
+- Prove scale-from-zero retries retain the same generation/spend fence and do
+  not duplicate charges or artifacts during the expected cold-start failure.
 - Add response-receipt reconciliation to the Command Center spend ledger and a
   crash/retry test that proves a lost response cannot create untracked spend.
 - Add saturation, timeout, cancellation, malformed-backend, cross-tenant,

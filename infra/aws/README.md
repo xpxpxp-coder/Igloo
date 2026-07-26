@@ -55,9 +55,9 @@ root is deployable:
 2. governed database-role/key bootstrap that populates the relay runtime secret,
    AWS Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
    delivery, and tested recovery;
-3. ECS relay service plus internal scheduler, sandbox, and pinned
-   Snowman-hosted inference task
-   definitions/services with distinct least-privilege roles; private ingress
+3. ECS relay service plus internal scheduler and sandbox; pinned specialist
+   model images/weights and staged activation of the separate `aws-inference`
+   endpoint/component root; private ingress
    for the now-defined model-gateway service; plus staged activation of the
    now-defined workforce services;
 4. WAF, centralized encrypted logs/metrics/traces, alarms, synthetic probes,

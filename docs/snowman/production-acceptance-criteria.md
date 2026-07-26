@@ -69,6 +69,13 @@ evidence for a runtime, recovery, accessibility, or operational claim.
 - Model selection optimizes quality, latency, and cost only among routes allowed
   for the tenant and data class. Desktop and workers call a Snowman-controlled
   gateway; direct model-vendor credentials and endpoints never reach agents.
+- Every enabled self-hosted model has a digest-pinned Snowman image, verified
+  content-addressed weights, usage/provenance record, role-specific quality and
+  safety evaluation, private endpoint/component binding, bounded capacity, cost
+  alarm, rollback, and kill-switch evidence.
+- Scale-from-zero tests prove the expected first-call capacity failure is retried
+  under the same fenced generation and spend reservation until its deadline,
+  without duplicate charges, artifacts, approvals, or lifecycle completion.
 - A durable AWS queue, scheduler, lease/heartbeat protocol, idempotent execution,
   retries, cancellation, dead-letter handling, concurrency/rate limits, and
   runaway spend controls prove that work continues safely without a desktop
