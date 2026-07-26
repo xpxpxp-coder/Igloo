@@ -157,6 +157,11 @@ requireFragment(
   "client-ready work must use an independently identified quality/risk reviewer",
 );
 requireFragment(
+  "crates/snowman-workforce/src/lib.rs",
+  "validate_context_packet",
+  "replacement agents must receive only a bounded evidence-linked context manifest",
+);
+requireFragment(
   "crates/buzz-relay/src/api/workforce.rs",
   '"workforce.requests.cancel"',
   "human request cancellation must require an exact workforce capability",

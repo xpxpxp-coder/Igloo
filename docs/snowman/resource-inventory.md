@@ -59,6 +59,11 @@ claims require live verification before use.
   scheduler/worker services, sandbox isolation, proactive-policy evaluation,
   and staged failure proof still must be built before
   the product can honestly provide 24/7 service.
+- A deterministic context-manifest policy now gives replacement specialists a
+  bounded, classified, content-addressed handoff contract with objective,
+  provenance, evidence/artifact references, decision/open-question digests, and
+  governed next actions. Persistence and retrieval through the private worker
+  plane, expiry enforcement, and staged replacement-agent proof remain.
 - Governed human request intake and metadata-only status reads now exist at
   `/api/snowman/v1/work-requests`. The endpoint deliberately creates only a
   lead planning task. The private source boundary now leases that task, validates

@@ -94,6 +94,14 @@ quality/risk reviewer for client-ready delivery. Its proactive policy executes
 only useful, confident, low-risk, reversible, allowlisted work below a hard cost
 threshold and turns other useful work into an approval request.
 
+The kernel also validates a metadata-only `ContextPacketManifest` for
+replacement agents. It binds tenant, request, objective, authority, content and
+provenance digests; caps the handoff artifact at 1 MiB; permits only
+content-addressed Snowman/Analyst references; bounds decisions, open questions,
+evidence, artifacts, and next actions; and rejects ambient capabilities,
+prohibited actions, or missing approval gates. Raw client exports and transcript
+URLs are not valid handoffs.
+
 The `buzz-db` workforce store now adds durable request/task state reconciliation,
 fenced leases and recovery, exact-snapshot approvals, hard spend/token ledgers,
 an evaluated tenant model catalog, atomic lead-to-specialist DAG expansion,

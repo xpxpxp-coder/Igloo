@@ -15,6 +15,9 @@ It enforces:
   and rejection of direct model providers and ambient wildcard capabilities;
 - acyclic task graphs and a separately identified quality/risk reviewer after
   all producer tasks for client-ready delivery; and
+- bounded, classified, content-addressed handoff manifests that let replacement
+  agents resume from evidence, decisions, open-question digests, and governed
+  next actions without copying raw datasets or transcripts; and
 - automatic proactive execution only for useful, confident, low-risk,
   reversible, allowlisted actions below the hard cost ceiling. Other useful
   actions stop at human approval; prohibited or ungrounded actions are rejected.
