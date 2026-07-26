@@ -22,9 +22,7 @@ class AwsPreflightContractTests(unittest.TestCase):
             "var.relay_desired_count == 0",
             "var.worker_desired_count == 0",
             "var.model_gateway_desired_count == 0",
-            "var.relay_desired_count >= 2",
-            "var.worker_desired_count >= 2",
-            "var.model_gateway_desired_count >= 2",
+            "Runtime desired counts remain hard-zero",
             "!var.external_model_processors_enabled",
         )
         for fragment in required:

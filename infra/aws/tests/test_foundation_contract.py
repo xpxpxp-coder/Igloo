@@ -73,6 +73,25 @@ class AwsFoundationContractTests(unittest.TestCase):
         ):
             self.assertIn(fragment, outputs)
 
+    def test_dormant_relay_compute_is_least_privilege_and_non_root(self) -> None:
+        source = (ROOT / "compute.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'actions   = ["elasticache:Connect"]',
+            'readonlyRootFilesystem = true',
+            'user                   = "10001"',
+            'drop = ["ALL"]',
+            'image                  = var.container_image',
+            'BUZZ_AUTO_MIGRATE", value = "false"',
+            'SNOWMAN_VALKEY_IAM_ENABLED", value = "true"',
+            'SNOWMAN_WORKFORCE_API_ENABLED", value = "false"',
+            'condition     = var.relay_desired_count == 0',
+        ):
+            self.assertIn(fragment, source)
+        self.assertNotIn('resource "aws_ecs_service"', source)
+        self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
+        self.assertNotIn('"s3:*"', source)
+        self.assertNotIn('"kms:*"', source)
+
     def test_operations_are_encrypted_alerted_and_budgeted(self) -> None:
         source = (ROOT / "operations.tf").read_text(encoding="utf-8")
         for fragment in (

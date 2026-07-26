@@ -39,7 +39,10 @@ claims require live verification before use.
   SigV4 provider with automatic reauthentication/resubscription and the
   Terraform root emits its password-free runtime contract. It has not been planned against or
   applied to a live Snowman account because the current AWS SSO session is
-  expired; ECS workloads, ALB/WAF, backup vault lock, and recovery proof remain.
+  expired. A digest-pinned, non-root, read-only relay task definition and exact
+  roles now exist but are hard-dormant with no ECS service; database/key
+  bootstrap, ALB authenticated origin/WAF, worker/model services, backup vault
+  lock, and recovery proof remain.
 - The tenant-scoped Postgres workforce queue, fenced lease/recovery primitives,
   exact-snapshot approvals, capability-bound service identities, immutable
   context references, hard spend/token ledgers, aggregate request-state

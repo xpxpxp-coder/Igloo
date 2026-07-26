@@ -31,6 +31,18 @@ mock_provider "aws" {
     target = data.aws_iam_policy_document.operations_topic
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
+  override_data {
+    target = data.aws_iam_policy_document.ecs_task_trust
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.relay_execution
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.relay_task
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
 }
 
 variables {
@@ -82,6 +94,10 @@ run "dormant_staging_foundation" {
     condition     = aws_elasticache_replication_group.valkey.num_cache_clusters == 1
     error_message = "Dormant staging must use one cost-controlled Valkey node."
   }
+  assert {
+    condition     = aws_ecs_task_definition.relay.cpu == "512" && aws_ecs_task_definition.relay.memory == "1024"
+    error_message = "The dormant relay task must keep its cost-bounded CPU and memory allocation."
+  }
 }
 
 run "production_ha_foundation" {
@@ -90,10 +106,7 @@ run "production_ha_foundation" {
   variables {
     environment                 = "production"
     application_hostname        = "command.snowmanai.org"
-    relay_desired_count         = 2
-    worker_desired_count        = 2
-    model_gateway_desired_count = 2
-    backup_retention_days       = 35
+    backup_retention_days = 35
   }
 
   assert {

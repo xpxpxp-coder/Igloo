@@ -50,10 +50,11 @@ resource "terraform_data" "production_boundary_preflight" {
 
     precondition {
       condition = (
-        var.environment != "production" ||
-        (var.relay_desired_count >= 2 && var.worker_desired_count >= 2 && var.model_gateway_desired_count >= 2)
+        var.relay_desired_count == 0 &&
+        var.worker_desired_count == 0 &&
+        var.model_gateway_desired_count == 0
       )
-      error_message = "Production requires at least two tasks for every critical service."
+      error_message = "Runtime desired counts remain hard-zero until the edge, database bootstrap, worker sandbox, and model-gateway activation contracts pass."
     }
 
     precondition {

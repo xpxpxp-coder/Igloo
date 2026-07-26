@@ -190,6 +190,11 @@ data "aws_iam_policy_document" "object" {
     actions   = ["s3:PutObject"]
     resources = ["${each.value.arn}/*"]
     condition {
+      test     = "Null"
+      variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
+      values   = ["false"]
+    }
+    condition {
       test     = "StringNotEquals"
       variable = "s3:x-amz-server-side-encryption-aws-kms-key-id"
       values   = [aws_kms_key.data.arn]

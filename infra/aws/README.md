@@ -5,20 +5,24 @@ network, Postgres, Valkey, S3, KMS, secrets, queues, ECS roles/services, logs,
 backups, and cost controls. Nothing in this root grants access to Analyst 360
 stores; integration uses the private versioned API/event contracts only.
 
-The current checked-in phase includes the account/image/activation preflight
-and the managed substrate. It
+The current checked-in phase includes the account/image/activation preflight,
+managed substrate, and a dormant relay task contract. It
 fails before resource creation when the caller is in the wrong account, the
 management account is targeted, production shares the Analyst 360 workload
 account, the image is mutable or outside the exact Snowman ECR repository,
-baseline staging is not dormant, production critical services are not HA, or
-an external model processor is enabled. The substrate defines a three-AZ VPC,
+any runtime desired count is nonzero before its remaining gates, or an external
+model processor is enabled. The substrate defines a three-AZ VPC,
 Cloudflare-source-only edge security group, private ECS and isolated data
 subnets with no NAT or internet default route, exact AWS interface/gateway
 endpoints, managed PostgreSQL and IAM-authenticated TLS Valkey, object-locked
 KMS-encrypted artifact/audit buckets, versioned deletable media storage,
 asymmetric audit-signing KMS key,
 enhanced ECS telemetry, encrypted service log groups, alarms, an SNS operations
-topic, and an account-tag budget.
+topic, and an account-tag budget. The digest-pinned relay task definition runs
+as non-root with a read-only root filesystem, dropped Linux capabilities,
+writable scratch mounts, separate execution/task roles, exact ECR/log/secret,
+Valkey, media-S3, and S3-via-KMS grants, and no ECS service that could activate
+it. The runtime secret intentionally has no Terraform-managed value.
 Staging uses one interface-endpoint ENI, one RDS instance, and one Valkey node;
 production expands endpoints and managed state across availability zones.
 
@@ -27,10 +31,12 @@ root is deployable:
 
 1. ALB mutual origin authentication/WAF and proof that the Cloudflare-restricted
    origin security group has no alternate ingress path;
-2. exact task configuration secrets, AWS Backup vault-lock plans, restore
-   targets, CloudTrail/object-lock audit delivery, and tested recovery;
-3. digest-pinned ECS relay, workforce worker, scheduler, sandbox, and internal
-   model-gateway/inference services with distinct least-privilege roles;
+2. governed database-role/key bootstrap that populates the relay runtime secret,
+   AWS Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
+   delivery, and tested recovery;
+3. ECS relay service plus workforce worker, scheduler, sandbox, and internal
+   model-gateway/inference task definitions/services with distinct
+   least-privilege roles;
 4. WAF, centralized encrypted logs/metrics/traces, alarms, synthetic probes,
    budgets, autoscaling, dormant staging controls, and evidence export; and
 5. CI plan/policy tests, SBOM/provenance/signature enforcement, staged apply,

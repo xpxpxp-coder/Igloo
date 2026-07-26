@@ -67,6 +67,7 @@ const runtimeAuthorityFiles = [
   "infra/aws/preflight.tf",
   "infra/aws/network.tf",
   "infra/aws/data_plane.tf",
+  "infra/aws/compute.tf",
   "infra/aws/operations.tf",
   "infra/aws/outputs.tf",
 ];
@@ -134,6 +135,21 @@ requireFragment(
   "infra/aws/preflight.tf",
   "var.expected_workload_account_id != var.analyst360_workload_account_id",
   "production Command Center and Analyst 360 AWS authority must remain separate",
+);
+requireFragment(
+  "infra/aws/preflight.tf",
+  "var.relay_desired_count == 0",
+  "AWS runtime counts must remain hard-zero until activation gates pass",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  "readonlyRootFilesystem = true",
+  "the dormant relay task must use a read-only root filesystem",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  'user                   = "10001"',
+  "the dormant relay task must run as non-root",
 );
 requireFragment(
   "infra/aws/preflight.tf",

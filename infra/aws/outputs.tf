@@ -66,3 +66,14 @@ output "operations_posture" {
     log_group_names      = { for name, group in aws_cloudwatch_log_group.runtime : name => group.name }
   }
 }
+
+output "dormant_compute_posture" {
+  description = "Relay task and roles are defined but no service or desired runtime is activated."
+  value = {
+    relay_task_definition_arn = aws_ecs_task_definition.relay.arn
+    relay_execution_role_arn  = aws_iam_role.relay_execution.arn
+    relay_task_role_arn       = aws_iam_role.relay_task.arn
+    relay_runtime_secret_arn  = aws_secretsmanager_secret.relay_runtime.arn
+    activated_service_count   = 0
+  }
+}

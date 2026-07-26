@@ -77,10 +77,13 @@ the highest risks without changing the production-readiness verdict:
   alarms, and budgets; plus a tested streaming SigV4 provider, automatic Valkey
   reauthentication/resubscription, password-free runtime contract, and a
   key/channel/command-bounded Valkey IAM user. It remains unapplied.
+- a hard-zero, digest-pinned dormant relay task definition with non-root/read-
+  only execution, dropped capabilities, exact task/execution roles, an empty
+  governed runtime-secret shell, and no ECS service capable of starting it.
 
 These are implementation foundations, not staged proof. OIDC assertion exchange,
-private integration routing, AWS
-workers/scheduler/sandbox, KMS audit checkpoints, recovery/load/isolation
+private integration routing, the database/key bootstrap and authenticated edge,
+AWS workers/scheduler/sandbox, KMS audit checkpoints, recovery/load/isolation
 exercises, comprehensive branding, accessibility, UAT, and launch evidence remain
 open gates.
 
