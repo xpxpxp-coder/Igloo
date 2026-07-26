@@ -18,6 +18,14 @@ claims require live verification before use.
 | Igloo workflows/approvals | YAML workflows plus durable approval records and resume paths | Harden risk classification, role/capability approvers, unsupported actions, egress, idempotency, and evidence. |
 | AWS Rust SDK for KMS | Pinned `aws-config` and `aws-sdk-kms` dependencies compile in the production relay library | Use Snowman-account KMS Verify for Analyst assertions and a distinct Snowman-account KMS Sign key for delivery receipts. No exportable signing key or Block service is introduced. |
 
+Relay, push-gateway, and Helm publishers now default only to the
+`snowman-ai-org` registry namespace, verify attestations against that owner,
+and label images with the Snowman source repository. Production Terraform still
+requires a Snowman-account ECR digest. Creation/control of the final Snowman
+Command Center GitHub repository/package permissions and Apple/mobile signing
+identities remains owner-held; upstream Block signing jobs are unreachable on
+this fork and are not an acceptable Snowman release path.
+
 ## Snowman-controlled platform resources
 
 | Platform | Approved use | Verification before mutation |

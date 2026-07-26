@@ -71,6 +71,11 @@ const runtimeAuthorityFiles = [
   "mobile/lib/features/pairing/pairing_provider.dart",
   "mobile/lib/shared/deeplink/deep_link.dart",
   ".github/workflows/release.yml",
+  ".github/workflows/docker.yml",
+  ".github/workflows/helm-chart.yml",
+  ".github/workflows/push-gateway-helm-chart.yml",
+  "Dockerfile.push-gateway",
+  "deploy/compose/.env.example",
   "deploy/compose/compose.yml",
   "deploy/charts/buzz/values.yaml",
   "deploy/charts/buzz/templates/deployment.yaml",
@@ -322,6 +327,21 @@ requireFragment(
   "web/src/shared/lib/buzz-download.ts",
   'export const SNOWMAN_RELEASES_URL = "/downloads";',
   "release page must remain same-origin",
+);
+requireFragment(
+  ".github/workflows/docker.yml",
+  "ghcr.io/snowman-ai-org/snowman-command-center",
+  "container publication must default to the Snowman-owned registry namespace",
+);
+requireFragment(
+  ".github/workflows/docker.yml",
+  "--owner snowman-ai-org",
+  "container attestations must verify against the Snowman GitHub owner",
+);
+requireFragment(
+  "Dockerfile.push-gateway",
+  "https://github.com/snowman-ai-org/snowman-command-center",
+  "container provenance must identify the Snowman-owned source repository",
 );
 requireFragment(
   "crates/buzz-dev-mcp/src/shell.rs",
