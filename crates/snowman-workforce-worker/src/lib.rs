@@ -586,6 +586,11 @@ fn build_default_team_plan<'a>(
 ) -> Result<TeamPlan<'a>, Error> {
     validate_team(team)?;
     let task = &lease.task;
+    if task.context_references.len() > 62 {
+        return Err(Error::RelayContract(
+            "team requests reserve two context slots for dependency handoffs",
+        ));
+    }
     let analyst_id = deterministic_uuid("governed-analyst", &task.request_id.to_string());
     let delivery_id = deterministic_uuid("client-delivery", &task.request_id.to_string());
     let review_id = deterministic_uuid("quality-review", &task.request_id.to_string());
@@ -1033,6 +1038,34 @@ mod tests {
             reviewer.service_identity_id,
             first.tasks[1].service_identity_id
         );
+    }
+
+    #[test]
+    fn team_reserves_context_slots_for_dependency_handoffs() {
+        let mut value = task();
+        value.context_references = (0..62)
+            .map(|index| format!("analyst360:sha256:{index:064x}"))
+            .collect();
+        let lease = Lease {
+            lease_token: "lease-token".into(),
+            lease_generation: 2,
+            task: value,
+        };
+        assert!(build_default_team_plan(&lease, &team()).is_ok());
+
+        let mut overflow = task();
+        overflow.context_references = (0..63)
+            .map(|index| format!("analyst360:sha256:{index:064x}"))
+            .collect();
+        let lease = Lease {
+            lease_token: "lease-token".into(),
+            lease_generation: 2,
+            task: overflow,
+        };
+        assert!(matches!(
+            build_default_team_plan(&lease, &team()),
+            Err(Error::RelayContract(_))
+        ));
     }
 
     #[test]

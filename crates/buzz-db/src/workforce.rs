@@ -1803,10 +1803,21 @@ pub async fn get_work_request_status(
                status, attempt_count, max_attempts, deadline_at,
                execution_snapshot_sha256,
                ARRAY(
-                 SELECT c.context_reference
-                 FROM snowman_work_task_context_refs c
-                 WHERE c.community_id=t.community_id AND c.task_id=t.task_id
-                 ORDER BY c.context_reference
+                 SELECT context_reference FROM (
+                   SELECT c.context_reference
+                   FROM snowman_work_task_context_refs c
+                   WHERE c.community_id=t.community_id AND c.task_id=t.task_id
+                   UNION
+                   SELECT e.payload->>'context_reference'
+                   FROM snowman_work_task_dependencies d
+                   JOIN snowman_work_events e
+                     ON e.community_id=d.community_id
+                    AND e.task_id=d.depends_on_task_id
+                    AND e.event_type='context.published'
+                   WHERE d.community_id=t.community_id AND d.task_id=t.task_id
+                     AND e.payload->>'context_reference' IS NOT NULL
+                 ) available_context
+                 ORDER BY context_reference
                ) AS context_references
         FROM snowman_work_tasks t
         WHERE t.community_id=$1 AND t.request_id=$2
@@ -2075,9 +2086,20 @@ pub async fn claim_next_work_task(
                l.claim_id, l.generation AS lease_generation,
                l.expires_at AS lease_expires_at,
                ARRAY(
-                 SELECT c.context_reference FROM snowman_work_task_context_refs c
-                 WHERE c.community_id=t.community_id AND c.task_id=t.task_id
-                 ORDER BY c.context_reference
+                 SELECT context_reference FROM (
+                   SELECT c.context_reference FROM snowman_work_task_context_refs c
+                   WHERE c.community_id=t.community_id AND c.task_id=t.task_id
+                   UNION
+                   SELECT e.payload->>'context_reference'
+                   FROM snowman_work_task_dependencies d
+                   JOIN snowman_work_events e
+                     ON e.community_id=d.community_id
+                    AND e.task_id=d.depends_on_task_id
+                    AND e.event_type='context.published'
+                   WHERE d.community_id=t.community_id AND d.task_id=t.task_id
+                     AND e.payload->>'context_reference' IS NOT NULL
+                 ) available_context
+                 ORDER BY context_reference
                ) AS context_references
         FROM snowman_task_leases l
         JOIN snowman_work_tasks t
@@ -2156,9 +2178,20 @@ pub async fn claim_next_work_task(
                r.max_input_tokens AS request_max_input_tokens,
                r.max_output_tokens AS request_max_output_tokens,
                ARRAY(
-                 SELECT c.context_reference FROM snowman_work_task_context_refs c
-                 WHERE c.community_id=t.community_id AND c.task_id=t.task_id
-                 ORDER BY c.context_reference
+                 SELECT context_reference FROM (
+                   SELECT c.context_reference FROM snowman_work_task_context_refs c
+                   WHERE c.community_id=t.community_id AND c.task_id=t.task_id
+                   UNION
+                   SELECT e.payload->>'context_reference'
+                   FROM snowman_work_task_dependencies d
+                   JOIN snowman_work_events e
+                     ON e.community_id=d.community_id
+                    AND e.task_id=d.depends_on_task_id
+                    AND e.event_type='context.published'
+                   WHERE d.community_id=t.community_id AND d.task_id=t.task_id
+                     AND e.payload->>'context_reference' IS NOT NULL
+                 ) available_context
+                 ORDER BY context_reference
                ) AS context_references
         FROM snowman_work_tasks t
         JOIN snowman_work_requests r

@@ -31,6 +31,12 @@ vendor-model access.
    context packet and finish with immutable `analyst360:sha256:` coordinates.
    Failure/cancellation/expiry records only a bounded machine code and digest.
 
+Dependency scheduling now adds the single digest-bound context handoff emitted
+by each successful prerequisite to the downstream lease. The default team
+reserves two of the 64 context slots for these handoffs, so the delivery agent
+receives the analyst result and the independent reviewer receives both producer
+results without copying artifact bodies into Command Center storage.
+
 Stable downstream command IDs and request-derived timestamps make a worker
 crash/re-lease an exact Analyst idempotent replay rather than a second logical
 job. No objective or artifact body is written to worker logs.
