@@ -96,7 +96,10 @@ threshold and turns other useful work into an approval request.
 
 The `buzz-db` workforce store now adds durable request/task state reconciliation,
 fenced leases and recovery, exact-snapshot approvals, hard spend/token ledgers,
-and a tenant-serialized, domain-separated lifecycle-event hash chain that
-rejects credential-like payload fields. These are source foundations, not a
-claim that the AWS scheduler, workers, sandbox, model gateway, or external KMS
-checkpoints have passed staging.
+an evaluated tenant model catalog, atomic lead-to-specialist DAG expansion,
+dependency readiness, task-level ceilings, immutable context coordinates, and a
+tenant-serialized, domain-separated lifecycle-event hash chain that rejects
+credential-like payload fields. The private plan endpoint rehydrates request
+authority server-side and never accepts a caller-supplied gateway. These are
+source foundations, not a claim that the AWS scheduler, workers, sandbox, model
+gateway, or external KMS checkpoints have passed staging.

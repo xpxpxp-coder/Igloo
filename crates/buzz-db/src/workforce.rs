@@ -36,10 +36,18 @@ pub struct NewWorkTask {
     pub model_gateway_route: String,
     /// Model selected for this specialist task.
     pub model_id: String,
+    /// Hard task-level cost ceiling in millionths of a US dollar.
+    pub max_cost_microusd: i64,
+    /// Planned task input-token reservation.
+    pub expected_input_tokens: i64,
+    /// Hard task output-token ceiling.
+    pub max_output_tokens: i64,
     /// Digest of the exact capability/model/context/action snapshot to approve.
     pub execution_snapshot_sha256: [u8; 32],
     /// Machine-readable artifact quality and output contract.
     pub expected_artifact_contract: Value,
+    /// Bounded immutable context coordinates supplied to this specialist.
+    pub context_references: Vec<String>,
     /// Optional immutable context packet reference.
     pub context_packet_id: Option<Uuid>,
     /// `low`, `moderate`, `high`, or `prohibited`.
@@ -81,6 +89,8 @@ pub struct NewWorkRequest {
     pub max_input_tokens: i64,
     /// Hard aggregate output-token ceiling.
     pub max_output_tokens: i64,
+    /// Whether the final product requires independent client-ready review.
+    pub client_ready_delivery: bool,
     /// Initial specialist task graph.
     pub tasks: Vec<NewWorkTask>,
 }
@@ -120,10 +130,18 @@ pub struct LeasedWorkTask {
     pub model_gateway_route: String,
     /// Selected model identifier.
     pub model_id: String,
+    /// Hard task-level cost ceiling.
+    pub task_max_cost_microusd: i64,
+    /// Planned task input-token reservation.
+    pub expected_input_tokens: i64,
+    /// Hard task output-token ceiling.
+    pub task_max_output_tokens: i64,
     /// Digest binding any approval to this exact execution snapshot.
     pub execution_snapshot_sha256: [u8; 32],
     /// Expected work-product contract.
     pub expected_artifact_contract: Value,
+    /// Immutable bounded context coordinates for this task.
+    pub context_references: Vec<String>,
     /// Optional immutable context packet reference.
     pub context_packet_id: Option<Uuid>,
     /// Risk tier.
@@ -251,6 +269,95 @@ pub struct EnqueuedWorkRequest {
     pub inserted: bool,
 }
 
+/// Server-authoritative request envelope used to govern a planner proposal.
+#[derive(Debug, Clone)]
+pub struct WorkPlanEnvelope {
+    /// Request being expanded.
+    pub request_id: Uuid,
+    /// Currently leased lead planning task.
+    pub lead_task_id: Uuid,
+    /// Digest of the private objective text.
+    pub objective_sha256: [u8; 32],
+    /// Server-owned data classification.
+    pub classification: String,
+    /// Whether independent downstream review is mandatory.
+    pub client_ready_delivery: bool,
+    /// Server-owned request deadline.
+    pub deadline_at: Option<DateTime<Utc>>,
+    /// Remaining request cost ceiling.
+    pub max_cost_microusd: i64,
+    /// Remaining request input-token ceiling.
+    pub max_input_tokens: i64,
+    /// Remaining request output-token ceiling.
+    pub max_output_tokens: i64,
+}
+
+/// One evaluated model route provisioned for a tenant by Snowman operations.
+#[derive(Debug, Clone)]
+pub struct StoredModelRoute {
+    /// Stable model identifier understood by the Snowman gateway.
+    pub model_id: String,
+    /// Snowman-controlled gateway URL.
+    pub gateway_url: String,
+    /// Specialist roles evaluated for this route.
+    pub suited_roles: Vec<String>,
+    /// Data classifications the route may process.
+    pub allowed_classifications: Vec<String>,
+    /// Controlled-evaluation quality score.
+    pub quality_score: i32,
+    /// Controlled-evaluation latency score.
+    pub latency_score: i32,
+    /// Conservative blended cost ceiling.
+    pub max_cost_microusd_per_million_tokens: i64,
+    /// Maximum accepted context size.
+    pub max_context_tokens: i64,
+}
+
+/// One specialist task plus its complete DAG and context coordinates.
+#[derive(Debug, Clone)]
+pub struct NewPlannedTask {
+    /// Fully governed task record.
+    pub task: NewWorkTask,
+    /// In-plan prerequisites that must succeed first.
+    pub depends_on: Vec<Uuid>,
+}
+
+/// Exact governed plan committed by the currently leased lead task.
+#[derive(Debug, Clone)]
+pub struct NewWorkPlan {
+    /// Idempotent plan identifier.
+    pub plan_id: Uuid,
+    /// Request being expanded.
+    pub request_id: Uuid,
+    /// Lead planning task consumed by the expansion.
+    pub lead_task_id: Uuid,
+    /// Authenticated lead service identity.
+    pub planner_identity_id: Uuid,
+    /// Current lease fencing generation.
+    pub lease_generation: i64,
+    /// Digest of the current bearer lease token.
+    pub lease_token_sha256: [u8; 32],
+    /// Canonical digest of the governed plan and authority coordinates.
+    pub plan_sha256: [u8; 32],
+    /// Specialist DAG to persist.
+    pub tasks: Vec<NewPlannedTask>,
+    /// Server-observed commit time.
+    pub committed_at: DateTime<Utc>,
+}
+
+/// Idempotent result of a governed specialist plan commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommittedWorkPlan {
+    /// Stable committed plan identifier.
+    pub plan_id: Uuid,
+    /// Stable request identifier.
+    pub request_id: Uuid,
+    /// Specialist task count in the plan.
+    pub task_count: usize,
+    /// True for the first commit and false for an exact replay.
+    pub inserted: bool,
+}
+
 /// Governed request status returned to authorized command-center callers.
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkRequestStatus {
@@ -262,6 +369,8 @@ pub struct WorkRequestStatus {
     pub request_contract_sha256: String,
     /// Data classification applied to this request.
     pub classification: String,
+    /// Whether an independent client-ready review is required.
+    pub client_ready_delivery: bool,
     /// Aggregate lifecycle status.
     pub status: String,
     /// Optional user deadline.
@@ -301,10 +410,18 @@ pub struct WorkTaskStatus {
     pub specialist_role: String,
     /// Selected model, invoked only through the Snowman model gateway.
     pub model_id: String,
+    /// Hard task-level cost ceiling in millionths of a US dollar.
+    pub max_cost_microusd: i64,
+    /// Planned task input-token reservation.
+    pub expected_input_tokens: i64,
+    /// Hard task output-token ceiling.
+    pub max_output_tokens: i64,
     /// Deny-by-default task capability set.
     pub required_capabilities: Vec<String>,
     /// Machine-readable expected work product.
     pub expected_artifact_contract: Value,
+    /// Immutable context coordinates available to the specialist.
+    pub context_references: Vec<String>,
     /// Immutable Analyst 360 or Snowman context packet reference.
     pub context_packet_id: Option<Uuid>,
     /// Risk classification.
@@ -367,8 +484,9 @@ pub async fn enqueue_work_request(
         INSERT INTO snowman_work_requests
           (community_id, request_id, idempotency_key_sha256, requester_identity,
            objective, objective_sha256, request_contract_sha256, classification,
-           status, deadline_at, max_cost_microusd, max_input_tokens, max_output_tokens)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'requested',$9,$10,$11,$12)
+           status, deadline_at, max_cost_microusd, max_input_tokens, max_output_tokens,
+           client_ready_delivery)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'requested',$9,$10,$11,$12,$13)
         ON CONFLICT (community_id, idempotency_key_sha256) DO NOTHING
         RETURNING request_id
         "#,
@@ -385,13 +503,14 @@ pub async fn enqueue_work_request(
     .bind(request.max_cost_microusd)
     .bind(request.max_input_tokens)
     .bind(request.max_output_tokens)
+    .bind(request.client_ready_delivery)
     .fetch_optional(&mut *tx)
     .await?;
 
     if inserted.is_none() {
         let existing = sqlx::query(
             "SELECT request_id, objective_sha256, request_contract_sha256, requester_identity, classification, deadline_at, \
-                    max_cost_microusd, max_input_tokens, max_output_tokens \
+                    max_cost_microusd, max_input_tokens, max_output_tokens, client_ready_delivery \
              FROM snowman_work_requests \
              WHERE community_id=$1 AND idempotency_key_sha256=$2",
         )
@@ -411,6 +530,9 @@ pub async fn enqueue_work_request(
             && existing.try_get::<i64, _>("max_cost_microusd")? == request.max_cost_microusd
             && existing.try_get::<i64, _>("max_input_tokens")? == request.max_input_tokens
             && existing.try_get::<i64, _>("max_output_tokens")? == request.max_output_tokens;
+        let exact_replay = exact_replay
+            && existing.try_get::<bool, _>("client_ready_delivery")?
+                == request.client_ready_delivery;
         if !exact_replay {
             return Err(DbError::AccessDenied(
                 "Snowman workforce idempotency key was reused for a different request".into(),
@@ -471,6 +593,392 @@ pub async fn enqueue_work_request(
     })
 }
 
+/// Load the server-owned request constraints a lead planner may not override.
+pub async fn work_plan_envelope(
+    pool: &PgPool,
+    community_id: CommunityId,
+    request_id: Uuid,
+    lead_task_id: Uuid,
+) -> Result<Option<WorkPlanEnvelope>> {
+    let row = sqlx::query(
+        r#"
+        SELECT r.request_id, r.objective_sha256, r.classification,
+               r.client_ready_delivery, r.deadline_at,
+               GREATEST(r.max_cost_microusd - COALESCE(SUM(s.cost_microusd),0),0)::bigint AS max_cost_microusd,
+               GREATEST(r.max_input_tokens - COALESCE(SUM(s.input_tokens),0),0)::bigint AS max_input_tokens,
+               GREATEST(r.max_output_tokens - COALESCE(SUM(s.output_tokens),0),0)::bigint AS max_output_tokens,
+               t.task_id AS lead_task_id
+        FROM snowman_work_requests r
+        JOIN snowman_work_tasks t
+          ON t.community_id=r.community_id AND t.request_id=r.request_id
+         AND t.task_id=$3 AND t.specialist_role='lead'
+        LEFT JOIN snowman_spend_ledger s
+          ON s.community_id=r.community_id AND s.request_id=r.request_id
+        WHERE r.community_id=$1 AND r.request_id=$2
+          AND r.status NOT IN ('completed','failed','cancelled','expired')
+        GROUP BY r.community_id, r.request_id, t.community_id, t.task_id
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(request_id)
+    .bind(lead_task_id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(|row| -> Result<WorkPlanEnvelope> {
+        Ok(WorkPlanEnvelope {
+            request_id: row.try_get("request_id")?,
+            lead_task_id: row.try_get("lead_task_id")?,
+            objective_sha256: vec_to_sha256(row.try_get("objective_sha256")?)?,
+            classification: row.try_get("classification")?,
+            client_ready_delivery: row.try_get("client_ready_delivery")?,
+            deadline_at: row.try_get("deadline_at")?,
+            max_cost_microusd: row.try_get("max_cost_microusd")?,
+            max_input_tokens: row.try_get("max_input_tokens")?,
+            max_output_tokens: row.try_get("max_output_tokens")?,
+        })
+    })
+    .transpose()
+}
+
+/// Load only active, evaluated, tenant-local model routes.
+pub async fn active_model_routes(
+    pool: &PgPool,
+    community_id: CommunityId,
+) -> Result<Vec<StoredModelRoute>> {
+    sqlx::query(
+        r#"
+        SELECT model_id, gateway_url, suited_roles, allowed_classifications,
+               quality_score, latency_score,
+               max_cost_microusd_per_million_tokens, max_context_tokens
+        FROM snowman_model_routes
+        WHERE community_id=$1 AND status='active' AND evaluated_at <= NOW()
+        ORDER BY model_id
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|row| -> Result<StoredModelRoute> {
+        Ok(StoredModelRoute {
+            model_id: row.try_get("model_id")?,
+            gateway_url: row.try_get("gateway_url")?,
+            suited_roles: row.try_get("suited_roles")?,
+            allowed_classifications: row.try_get("allowed_classifications")?,
+            quality_score: row.try_get("quality_score")?,
+            latency_score: row.try_get("latency_score")?,
+            max_cost_microusd_per_million_tokens: row
+                .try_get("max_cost_microusd_per_million_tokens")?,
+            max_context_tokens: row.try_get("max_context_tokens")?,
+        })
+    })
+    .collect()
+}
+
+/// Atomically replace a leased lead planning task with its governed DAG.
+pub async fn commit_work_plan(
+    pool: &PgPool,
+    community_id: CommunityId,
+    plan: &NewWorkPlan,
+) -> Result<CommittedWorkPlan> {
+    if plan.plan_id.is_nil()
+        || plan.request_id.is_nil()
+        || plan.lead_task_id.is_nil()
+        || plan.planner_identity_id.is_nil()
+        || plan.lease_generation <= 0
+        || plan.plan_sha256 == [0; 32]
+        || plan.tasks.is_empty()
+        || plan.tasks.len() > 64
+    {
+        return Err(DbError::InvalidData(
+            "governed team plan identity is invalid".into(),
+        ));
+    }
+    let community_id = *community_id.as_uuid();
+    let mut tx = pool.begin().await?;
+    let existing = sqlx::query(
+        "SELECT plan_id, request_id, lead_task_id, plan_sha256, committed_by_identity_id \
+         FROM snowman_team_plans WHERE community_id=$1 AND request_id=$2 FOR UPDATE",
+    )
+    .bind(community_id)
+    .bind(plan.request_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(existing) = existing {
+        let exact = existing.try_get::<Uuid, _>("plan_id")? == plan.plan_id
+            && existing.try_get::<Uuid, _>("lead_task_id")? == plan.lead_task_id
+            && existing.try_get::<Uuid, _>("committed_by_identity_id")? == plan.planner_identity_id
+            && existing.try_get::<Vec<u8>, _>("plan_sha256")?.as_slice()
+                == plan.plan_sha256.as_slice();
+        if !exact {
+            return Err(DbError::AccessDenied(
+                "work request already has a different committed team plan".into(),
+            ));
+        }
+        tx.commit().await?;
+        return Ok(CommittedWorkPlan {
+            plan_id: plan.plan_id,
+            request_id: plan.request_id,
+            task_count: plan.tasks.len(),
+            inserted: false,
+        });
+    }
+
+    let authority = sqlx::query(
+        r#"
+        SELECT r.max_cost_microusd, r.max_input_tokens, r.max_output_tokens,
+               r.classification
+        FROM snowman_work_requests r
+        JOIN snowman_work_tasks t
+          ON t.community_id=r.community_id AND t.request_id=r.request_id
+         AND t.task_id=$3 AND t.specialist_role='lead' AND t.status='leased'
+        JOIN snowman_task_leases l
+          ON l.community_id=t.community_id AND l.task_id=t.task_id
+         AND l.worker_identity_id=$4 AND l.generation=$5
+         AND l.lease_token_sha256=$6 AND l.expires_at > NOW()
+        WHERE r.community_id=$1 AND r.request_id=$2
+          AND r.status NOT IN ('completed','failed','cancelled','expired')
+        FOR UPDATE OF r
+        "#,
+    )
+    .bind(community_id)
+    .bind(plan.request_id)
+    .bind(plan.lead_task_id)
+    .bind(plan.planner_identity_id)
+    .bind(plan.lease_generation)
+    .bind(plan.lease_token_sha256.as_slice())
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| DbError::AccessDenied("planning lease is stale, expired, or unbound".into()))?;
+    let used = sqlx::query(
+        r#"
+        SELECT COALESCE(SUM(cost_microusd),0)::bigint AS used_cost,
+               COALESCE(SUM(input_tokens),0)::bigint AS used_input,
+               COALESCE(SUM(output_tokens),0)::bigint AS used_output
+        FROM snowman_spend_ledger
+        WHERE community_id=$1 AND request_id=$2
+        "#,
+    )
+    .bind(community_id)
+    .bind(plan.request_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let existing_task_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM snowman_work_tasks WHERE community_id=$1 AND request_id=$2",
+    )
+    .bind(community_id)
+    .bind(plan.request_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if existing_task_count != 1 {
+        return Err(DbError::AccessDenied(
+            "team plan expansion requires exactly one lead planning task".into(),
+        ));
+    }
+
+    let mut ids = std::collections::HashSet::new();
+    let mut identities = std::collections::HashSet::new();
+    let mut cost = 0_i64;
+    let mut input = 0_i64;
+    let mut output = 0_i64;
+    let request_classification: String = authority.try_get("classification")?;
+    for planned in &plan.tasks {
+        let task = &planned.task;
+        if task.task_id == plan.lead_task_id
+            || !ids.insert(task.task_id)
+            || !identities.insert(task.service_identity_id)
+            || task.service_identity_id == plan.planner_identity_id
+        {
+            return Err(DbError::AccessDenied(
+                "specialist task and service identities must be unique".into(),
+            ));
+        }
+        if task.max_cost_microusd < 0
+            || task.expected_input_tokens < 0
+            || task.max_output_tokens < 0
+        {
+            return Err(DbError::InvalidData(
+                "specialist task budget reservations must be non-negative".into(),
+            ));
+        }
+        validate_model_gateway_route(&task.model_gateway_route)?;
+        if task.context_references.len() > 64
+            || task
+                .context_references
+                .iter()
+                .any(|item| !is_context_reference(item))
+            || task.risk_tier == "prohibited"
+            || (!task.reversible && !task.approval_required)
+            || !valid_capability_set(&task.required_capabilities)
+        {
+            return Err(DbError::AccessDenied(
+                "specialist task violates plan policy".into(),
+            ));
+        }
+        cost = cost.checked_add(task.max_cost_microusd).ok_or_else(|| {
+            DbError::InvalidData("specialist task cost reservations overflowed".into())
+        })?;
+        input = input
+            .checked_add(task.expected_input_tokens)
+            .ok_or_else(|| {
+                DbError::InvalidData("specialist task input reservations overflowed".into())
+            })?;
+        output = output.checked_add(task.max_output_tokens).ok_or_else(|| {
+            DbError::InvalidData("specialist task output reservations overflowed".into())
+        })?;
+        let identity_ready: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+              SELECT 1 FROM snowman_workforce_identities i
+              WHERE i.community_id=$1 AND i.identity_id=$2
+                AND i.identity_type='service' AND i.role='agent' AND i.status='active'
+                AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > NOW())
+                AND NOT EXISTS (
+                  SELECT 1 FROM unnest($3::text[]) required(capability)
+                  WHERE NOT EXISTS (
+                    SELECT 1 FROM snowman_workforce_capability_grants g
+                    WHERE g.community_id=i.community_id AND g.identity_id=i.identity_id
+                      AND g.capability=required.capability AND g.revoked_at IS NULL
+                      AND (g.expires_at IS NULL OR g.expires_at > NOW())
+                  )
+                )
+            )
+            "#,
+        )
+        .bind(community_id)
+        .bind(task.service_identity_id)
+        .bind(&task.required_capabilities)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !identity_ready {
+            return Err(DbError::AccessDenied(
+                "specialist service identity lacks an active capability grant".into(),
+            ));
+        }
+        let model_ready: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+              SELECT 1 FROM snowman_model_routes m
+              WHERE m.community_id=$1 AND m.model_id=$2 AND m.gateway_url=$3
+                AND m.status='active' AND m.evaluated_at <= NOW()
+                AND $4=ANY(m.suited_roles)
+                AND $5=ANY(m.allowed_classifications)
+            )
+            "#,
+        )
+        .bind(community_id)
+        .bind(&task.model_id)
+        .bind(&task.model_gateway_route)
+        .bind(&task.specialist_role)
+        .bind(&request_classification)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !model_ready {
+            return Err(DbError::AccessDenied(
+                "specialist model route is not active for its role and classification".into(),
+            ));
+        }
+    }
+    for planned in &plan.tasks {
+        if planned
+            .depends_on
+            .iter()
+            .any(|dependency| !ids.contains(dependency))
+        {
+            return Err(DbError::AccessDenied(
+                "team plan contains a dependency outside its task graph".into(),
+            ));
+        }
+    }
+    if !planned_graph_is_acyclic(&plan.tasks) {
+        return Err(DbError::AccessDenied(
+            "team plan contains a self-dependency or cycle".into(),
+        ));
+    }
+    let remaining_cost =
+        authority.try_get::<i64, _>("max_cost_microusd")? - used.try_get::<i64, _>("used_cost")?;
+    let remaining_input =
+        authority.try_get::<i64, _>("max_input_tokens")? - used.try_get::<i64, _>("used_input")?;
+    let remaining_output = authority.try_get::<i64, _>("max_output_tokens")?
+        - used.try_get::<i64, _>("used_output")?;
+    if cost > remaining_cost.max(0)
+        || input > remaining_input.max(0)
+        || output > remaining_output.max(0)
+    {
+        return Err(DbError::AccessDenied(
+            "specialist plan exceeds the remaining request budget".into(),
+        ));
+    }
+
+    sqlx::query(
+        "INSERT INTO snowman_team_plans \
+         (community_id,plan_id,request_id,lead_task_id,plan_sha256,committed_by_identity_id,committed_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7)",
+    )
+    .bind(community_id)
+    .bind(plan.plan_id)
+    .bind(plan.request_id)
+    .bind(plan.lead_task_id)
+    .bind(plan.plan_sha256.as_slice())
+    .bind(plan.planner_identity_id)
+    .bind(plan.committed_at)
+    .execute(&mut *tx)
+    .await?;
+    for planned in &plan.tasks {
+        insert_task(&mut tx, community_id, plan.request_id, &planned.task).await?;
+    }
+    for planned in &plan.tasks {
+        for dependency in &planned.depends_on {
+            sqlx::query(
+                "INSERT INTO snowman_work_task_dependencies \
+                 (community_id,request_id,task_id,depends_on_task_id) VALUES ($1,$2,$3,$4)",
+            )
+            .bind(community_id)
+            .bind(plan.request_id)
+            .bind(planned.task.task_id)
+            .bind(dependency)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    sqlx::query(
+        "UPDATE snowman_work_tasks SET status='succeeded', updated_at=NOW() \
+         WHERE community_id=$1 AND task_id=$2",
+    )
+    .bind(community_id)
+    .bind(plan.lead_task_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM snowman_task_leases WHERE community_id=$1 AND task_id=$2")
+        .bind(community_id)
+        .bind(plan.lead_task_id)
+        .execute(&mut *tx)
+        .await?;
+    let event = NewWorkEvent {
+        event_id: plan.plan_id,
+        request_id: plan.request_id,
+        task_id: Some(plan.lead_task_id),
+        event_type: "plan.committed".into(),
+        actor_identity: format!("snowman-service:{}", plan.planner_identity_id),
+        payload: serde_json::json!({
+            "schema_version": "snowman.work.event.v1",
+            "plan_sha256": hex::encode(plan.plan_sha256),
+            "specialist_task_count": plan.tasks.len(),
+            "unique_service_identity_count": identities.len(),
+        }),
+        occurred_at: plan.committed_at,
+    };
+    append_work_event_tx(&mut tx, community_id, &event).await?;
+    refresh_request_status(&mut tx, community_id, plan.request_id).await?;
+    tx.commit().await?;
+    Ok(CommittedWorkPlan {
+        plan_id: plan.plan_id,
+        request_id: plan.request_id,
+        task_count: plan.tasks.len(),
+        inserted: true,
+    })
+}
+
 /// Read one request from the writer with strict tenant scoping.
 ///
 /// Raw objective text and requester identifiers are deliberately omitted. The
@@ -486,6 +994,7 @@ pub async fn get_work_request_status(
         r#"
         SELECT r.request_id, r.objective_sha256, r.request_contract_sha256,
                r.classification, r.status,
+               r.client_ready_delivery,
                r.deadline_at, r.max_cost_microusd, r.max_input_tokens,
                r.max_output_tokens, r.created_at, r.updated_at,
                COALESCE(SUM(s.cost_microusd), 0)::bigint AS used_cost_microusd,
@@ -509,12 +1018,19 @@ pub async fn get_work_request_status(
     let task_rows = sqlx::query(
         r#"
         SELECT task_id, parent_task_id, specialist_role, model_id,
+               max_cost_microusd, expected_input_tokens, max_output_tokens,
                required_capabilities, expected_artifact_contract,
                context_packet_id, risk_tier, reversible, approval_required,
                status, attempt_count, max_attempts, deadline_at,
-               execution_snapshot_sha256
-        FROM snowman_work_tasks
-        WHERE community_id=$1 AND request_id=$2
+               execution_snapshot_sha256,
+               ARRAY(
+                 SELECT c.context_reference
+                 FROM snowman_work_task_context_refs c
+                 WHERE c.community_id=t.community_id AND c.task_id=t.task_id
+                 ORDER BY c.context_reference
+               ) AS context_references
+        FROM snowman_work_tasks t
+        WHERE t.community_id=$1 AND t.request_id=$2
         ORDER BY created_at, task_id
         "#,
     )
@@ -530,8 +1046,12 @@ pub async fn get_work_request_status(
                 parent_task_id: row.try_get("parent_task_id")?,
                 specialist_role: row.try_get("specialist_role")?,
                 model_id: row.try_get("model_id")?,
+                max_cost_microusd: row.try_get("max_cost_microusd")?,
+                expected_input_tokens: row.try_get("expected_input_tokens")?,
+                max_output_tokens: row.try_get("max_output_tokens")?,
                 required_capabilities: row.try_get("required_capabilities")?,
                 expected_artifact_contract: row.try_get("expected_artifact_contract")?,
+                context_references: row.try_get("context_references")?,
                 context_packet_id: row.try_get("context_packet_id")?,
                 risk_tier: row.try_get("risk_tier")?,
                 reversible: row.try_get("reversible")?,
@@ -595,6 +1115,7 @@ pub async fn get_work_request_status(
             request.try_get::<Vec<u8>, _>("request_contract_sha256")?,
         ),
         classification: request.try_get("classification")?,
+        client_ready_delivery: request.try_get("client_ready_delivery")?,
         status: request.try_get("status")?,
         deadline_at: request.try_get("deadline_at")?,
         max_cost_microusd: request.try_get("max_cost_microusd")?,
@@ -630,10 +1151,17 @@ pub async fn claim_next_work_task(
     let existing = sqlx::query(
         r#"
         SELECT t.*, r.objective, r.request_contract_sha256, r.classification,
-               r.deadline_at AS request_deadline_at, r.max_cost_microusd,
-               r.max_input_tokens, r.max_output_tokens,
+               r.deadline_at AS request_deadline_at,
+               r.max_cost_microusd AS request_max_cost_microusd,
+               r.max_input_tokens AS request_max_input_tokens,
+               r.max_output_tokens AS request_max_output_tokens,
                l.claim_id, l.generation AS lease_generation,
-               l.expires_at AS lease_expires_at
+               l.expires_at AS lease_expires_at,
+               ARRAY(
+                 SELECT c.context_reference FROM snowman_work_task_context_refs c
+                 WHERE c.community_id=t.community_id AND c.task_id=t.task_id
+                 ORDER BY c.context_reference
+               ) AS context_references
         FROM snowman_task_leases l
         JOIN snowman_work_tasks t
           ON t.community_id=l.community_id AND t.task_id=l.task_id
@@ -641,6 +1169,40 @@ pub async fn claim_next_work_task(
           ON r.community_id=t.community_id AND r.request_id=t.request_id
         WHERE l.community_id=$1 AND l.worker_identity_id=$2 AND l.claim_id=$3
           AND l.lease_token_sha256=$4 AND l.expires_at > NOW()
+          AND EXISTS (
+            SELECT 1 FROM snowman_workforce_identities i
+            WHERE i.community_id=t.community_id AND i.identity_id=t.service_identity_id
+              AND i.identity_type='service' AND i.role='agent' AND i.status='active'
+              AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > NOW())
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest(t.required_capabilities) required(capability)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM snowman_workforce_capability_grants g
+              WHERE g.community_id=t.community_id AND g.identity_id=t.service_identity_id
+                AND g.capability=required.capability AND g.revoked_at IS NULL
+                AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            )
+          )
+          AND EXISTS (
+            SELECT 1 FROM snowman_model_routes m
+            WHERE m.community_id=t.community_id AND m.model_id=t.model_id
+              AND m.gateway_url=t.model_gateway_route
+              AND m.status='active' AND m.evaluated_at <= NOW()
+              AND t.specialist_role=ANY(m.suited_roles)
+              AND r.classification=ANY(m.allowed_classifications)
+          )
+          AND (
+            NOT t.approval_required OR (
+              SELECT a.decision='approved'
+                     AND a.task_snapshot_sha256=t.execution_snapshot_sha256
+                     AND a.expires_at > NOW()
+              FROM snowman_work_approvals a
+              WHERE a.community_id=t.community_id AND a.request_id=t.request_id
+                AND a.task_id=t.task_id
+              ORDER BY a.decided_at DESC, a.approval_id DESC LIMIT 1
+            ) IS TRUE
+          )
         "#,
     )
     .bind(community_id)
@@ -671,13 +1233,29 @@ pub async fn claim_next_work_task(
     let candidate = sqlx::query(
         r#"
         SELECT t.*, r.objective, r.request_contract_sha256, r.classification,
-               r.deadline_at AS request_deadline_at, r.max_cost_microusd,
-               r.max_input_tokens, r.max_output_tokens
+               r.deadline_at AS request_deadline_at,
+               r.max_cost_microusd AS request_max_cost_microusd,
+               r.max_input_tokens AS request_max_input_tokens,
+               r.max_output_tokens AS request_max_output_tokens,
+               ARRAY(
+                 SELECT c.context_reference FROM snowman_work_task_context_refs c
+                 WHERE c.community_id=t.community_id AND c.task_id=t.task_id
+                 ORDER BY c.context_reference
+               ) AS context_references
         FROM snowman_work_tasks t
         JOIN snowman_work_requests r
           ON r.community_id=t.community_id AND r.request_id=t.request_id
         WHERE t.community_id=$1 AND t.service_identity_id=$2
           AND t.status='queued' AND t.available_at <= NOW()
+          AND NOT EXISTS (
+            SELECT 1
+            FROM snowman_work_task_dependencies d
+            JOIN snowman_work_tasks dependency
+              ON dependency.community_id=d.community_id
+             AND dependency.task_id=d.depends_on_task_id
+            WHERE d.community_id=t.community_id AND d.task_id=t.task_id
+              AND dependency.status <> 'succeeded'
+          )
           AND (t.deadline_at IS NULL OR t.deadline_at > NOW())
           AND EXISTS (
             SELECT 1 FROM snowman_workforce_identities i
@@ -695,6 +1273,15 @@ pub async fn claim_next_work_task(
                 AND g.capability=required.capability AND g.revoked_at IS NULL
                 AND (g.expires_at IS NULL OR g.expires_at > NOW())
             )
+          )
+          AND EXISTS (
+            SELECT 1 FROM snowman_model_routes m
+            WHERE m.community_id=t.community_id
+              AND m.model_id=t.model_id
+              AND m.gateway_url=t.model_gateway_route
+              AND m.status='active' AND m.evaluated_at <= NOW()
+              AND t.specialist_role=ANY(m.suited_roles)
+              AND r.classification=ANY(m.allowed_classifications)
           )
           AND (
             NOT t.approval_required OR (
@@ -787,16 +1374,20 @@ pub async fn claim_next_work_task(
         request_contract_sha256: vec_to_sha256(task.try_get("request_contract_sha256")?)?,
         classification: task.try_get("classification")?,
         request_deadline_at: task.try_get("request_deadline_at")?,
-        max_cost_microusd: task.try_get("max_cost_microusd")?,
-        max_input_tokens: task.try_get("max_input_tokens")?,
-        max_output_tokens: task.try_get("max_output_tokens")?,
+        max_cost_microusd: task.try_get("request_max_cost_microusd")?,
+        max_input_tokens: task.try_get("request_max_input_tokens")?,
+        max_output_tokens: task.try_get("request_max_output_tokens")?,
         specialist_role: task.try_get("specialist_role")?,
         service_identity_id: task.try_get("service_identity_id")?,
         required_capabilities: task.try_get("required_capabilities")?,
         model_gateway_route: task.try_get("model_gateway_route")?,
         model_id: task.try_get("model_id")?,
+        task_max_cost_microusd: task.try_get("max_cost_microusd")?,
+        expected_input_tokens: task.try_get("expected_input_tokens")?,
+        task_max_output_tokens: task.try_get("max_output_tokens")?,
         execution_snapshot_sha256: vec_to_sha256(task.try_get("execution_snapshot_sha256")?)?,
         expected_artifact_contract: task.try_get("expected_artifact_contract")?,
+        context_references: task.try_get("context_references")?,
         context_packet_id: task.try_get("context_packet_id")?,
         risk_tier: task.try_get("risk_tier")?,
         reversible: task.try_get("reversible")?,
@@ -816,16 +1407,20 @@ fn leased_work_task_from_row(row: &sqlx::postgres::PgRow) -> Result<LeasedWorkTa
         request_contract_sha256: vec_to_sha256(row.try_get("request_contract_sha256")?)?,
         classification: row.try_get("classification")?,
         request_deadline_at: row.try_get("request_deadline_at")?,
-        max_cost_microusd: row.try_get("max_cost_microusd")?,
-        max_input_tokens: row.try_get("max_input_tokens")?,
-        max_output_tokens: row.try_get("max_output_tokens")?,
+        max_cost_microusd: row.try_get("request_max_cost_microusd")?,
+        max_input_tokens: row.try_get("request_max_input_tokens")?,
+        max_output_tokens: row.try_get("request_max_output_tokens")?,
         specialist_role: row.try_get("specialist_role")?,
         service_identity_id: row.try_get("service_identity_id")?,
         required_capabilities: row.try_get("required_capabilities")?,
         model_gateway_route: row.try_get("model_gateway_route")?,
         model_id: row.try_get("model_id")?,
+        task_max_cost_microusd: row.try_get("max_cost_microusd")?,
+        expected_input_tokens: row.try_get("expected_input_tokens")?,
+        task_max_output_tokens: row.try_get("max_output_tokens")?,
         execution_snapshot_sha256: vec_to_sha256(row.try_get("execution_snapshot_sha256")?)?,
         expected_artifact_contract: row.try_get("expected_artifact_contract")?,
+        context_references: row.try_get("context_references")?,
         context_packet_id: row.try_get("context_packet_id")?,
         risk_tier: row.try_get("risk_tier")?,
         reversible: row.try_get("reversible")?,
@@ -852,9 +1447,46 @@ pub async fn heartbeat_work_task(
     }
     let result = sqlx::query(
         r#"
-        UPDATE snowman_task_leases SET heartbeat_at=NOW(), expires_at=$6
-        WHERE community_id=$1 AND task_id=$2 AND worker_identity_id=$3
-          AND generation=$4 AND lease_token_sha256=$5 AND expires_at > NOW()
+        UPDATE snowman_task_leases l SET heartbeat_at=NOW(), expires_at=$6
+        FROM snowman_work_tasks t, snowman_work_requests r
+        WHERE l.community_id=$1 AND l.task_id=$2 AND l.worker_identity_id=$3
+          AND l.generation=$4 AND l.lease_token_sha256=$5 AND l.expires_at > NOW()
+          AND t.community_id=l.community_id AND t.task_id=l.task_id
+          AND r.community_id=t.community_id AND r.request_id=t.request_id
+          AND EXISTS (
+            SELECT 1 FROM snowman_workforce_identities i
+            WHERE i.community_id=t.community_id AND i.identity_id=t.service_identity_id
+              AND i.identity_type='service' AND i.role='agent' AND i.status='active'
+              AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > NOW())
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest(t.required_capabilities) required(capability)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM snowman_workforce_capability_grants g
+              WHERE g.community_id=t.community_id AND g.identity_id=t.service_identity_id
+                AND g.capability=required.capability AND g.revoked_at IS NULL
+                AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            )
+          )
+          AND EXISTS (
+            SELECT 1 FROM snowman_model_routes m
+            WHERE m.community_id=t.community_id AND m.model_id=t.model_id
+              AND m.gateway_url=t.model_gateway_route
+              AND m.status='active' AND m.evaluated_at <= NOW()
+              AND t.specialist_role=ANY(m.suited_roles)
+              AND r.classification=ANY(m.allowed_classifications)
+          )
+          AND (
+            NOT t.approval_required OR (
+              SELECT a.decision='approved'
+                     AND a.task_snapshot_sha256=t.execution_snapshot_sha256
+                     AND a.expires_at > NOW()
+              FROM snowman_work_approvals a
+              WHERE a.community_id=t.community_id AND a.request_id=t.request_id
+                AND a.task_id=t.task_id
+              ORDER BY a.decided_at DESC, a.approval_id DESC LIMIT 1
+            ) IS TRUE
+          )
         "#,
     )
     .bind(community_id.as_uuid())
@@ -916,11 +1548,48 @@ pub async fn finish_work_task(
         UPDATE snowman_work_tasks t
         SET status=$6, updated_at=NOW()
         WHERE t.community_id=$1 AND t.task_id=$2 AND t.status IN ('leased','running','reviewing')
+          AND t.service_identity_id=$3
           AND EXISTS (
             SELECT 1 FROM snowman_task_leases l
             WHERE l.community_id=$1 AND l.task_id=$2 AND l.worker_identity_id=$3
               AND l.generation=$4 AND l.lease_token_sha256=$5
               AND l.expires_at > NOW()
+          )
+          AND EXISTS (
+            SELECT 1 FROM snowman_workforce_identities i
+            WHERE i.community_id=t.community_id AND i.identity_id=t.service_identity_id
+              AND i.identity_type='service' AND i.role='agent' AND i.status='active'
+              AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > NOW())
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest(t.required_capabilities) required(capability)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM snowman_workforce_capability_grants g
+              WHERE g.community_id=t.community_id AND g.identity_id=t.service_identity_id
+                AND g.capability=required.capability AND g.revoked_at IS NULL
+                AND (g.expires_at IS NULL OR g.expires_at > NOW())
+            )
+          )
+          AND EXISTS (
+            SELECT 1 FROM snowman_model_routes m
+            JOIN snowman_work_requests r
+              ON r.community_id=t.community_id AND r.request_id=t.request_id
+            WHERE m.community_id=t.community_id AND m.model_id=t.model_id
+              AND m.gateway_url=t.model_gateway_route
+              AND m.status='active' AND m.evaluated_at <= NOW()
+              AND t.specialist_role=ANY(m.suited_roles)
+              AND r.classification=ANY(m.allowed_classifications)
+          )
+          AND (
+            NOT t.approval_required OR (
+              SELECT a.decision='approved'
+                     AND a.task_snapshot_sha256=t.execution_snapshot_sha256
+                     AND a.expires_at > NOW()
+              FROM snowman_work_approvals a
+              WHERE a.community_id=t.community_id AND a.request_id=t.request_id
+                AND a.task_id=t.task_id
+              ORDER BY a.decided_at DESC, a.approval_id DESC LIMIT 1
+            ) IS TRUE
           )
         "#,
     )
@@ -1177,11 +1846,43 @@ pub async fn record_work_spend(
         ));
     }
     let task = sqlx::query(
-        "SELECT t.request_id, t.model_id, EXISTS ( \
+        "SELECT t.request_id, t.model_id, t.max_cost_microusd, t.max_output_tokens, EXISTS ( \
            SELECT 1 FROM snowman_task_leases l \
            WHERE l.community_id=t.community_id AND l.task_id=t.task_id \
              AND l.worker_identity_id=$3 AND l.generation=$4 \
              AND l.lease_token_sha256=$5 AND l.expires_at > NOW() \
+         ) AND t.service_identity_id=$3 AND EXISTS ( \
+           SELECT 1 FROM snowman_workforce_identities i \
+           WHERE i.community_id=t.community_id AND i.identity_id=t.service_identity_id \
+             AND i.identity_type='service' AND i.role='agent' AND i.status='active' \
+             AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > NOW()) \
+         ) AND NOT EXISTS ( \
+           SELECT 1 FROM unnest(t.required_capabilities) required(capability) \
+           WHERE NOT EXISTS ( \
+             SELECT 1 FROM snowman_workforce_capability_grants g \
+             WHERE g.community_id=t.community_id AND g.identity_id=t.service_identity_id \
+               AND g.capability=required.capability AND g.revoked_at IS NULL \
+               AND (g.expires_at IS NULL OR g.expires_at > NOW()) \
+           ) \
+         ) AND EXISTS ( \
+           SELECT 1 FROM snowman_model_routes m \
+           JOIN snowman_work_requests r \
+             ON r.community_id=t.community_id AND r.request_id=t.request_id \
+           WHERE m.community_id=t.community_id AND m.model_id=t.model_id \
+             AND m.gateway_url=t.model_gateway_route \
+             AND m.status='active' AND m.evaluated_at <= NOW() \
+             AND t.specialist_role=ANY(m.suited_roles) \
+             AND r.classification=ANY(m.allowed_classifications) \
+         ) AND ( \
+           NOT t.approval_required OR ( \
+             SELECT a.decision='approved' \
+                    AND a.task_snapshot_sha256=t.execution_snapshot_sha256 \
+                    AND a.expires_at > NOW() \
+             FROM snowman_work_approvals a \
+             WHERE a.community_id=t.community_id AND a.request_id=t.request_id \
+               AND a.task_id=t.task_id \
+             ORDER BY a.decided_at DESC, a.approval_id DESC LIMIT 1 \
+           ) IS TRUE \
          ) AS live_lease \
          FROM snowman_work_tasks t \
          WHERE t.community_id=$1 AND t.task_id=$2 FOR UPDATE OF t",
@@ -1200,6 +1901,27 @@ pub async fn record_work_spend(
         return Err(DbError::AccessDenied(
             "spend receipt does not match the live task lease, request, and governed model route"
                 .into(),
+        ));
+    }
+    let task_used = sqlx::query(
+        r#"
+        SELECT COALESCE(SUM(cost_microusd),0)::bigint AS cost,
+               COALESCE(SUM(output_tokens),0)::bigint AS output
+        FROM snowman_spend_ledger
+        WHERE community_id=$1 AND task_id=$2
+        "#,
+    )
+    .bind(community_id)
+    .bind(entry.task_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if task_used.try_get::<i64, _>("cost")? + entry.cost_microusd
+        > task.try_get::<i64, _>("max_cost_microusd")?
+        || task_used.try_get::<i64, _>("output")? + entry.output_tokens
+            > task.try_get::<i64, _>("max_output_tokens")?
+    {
+        return Err(DbError::AccessDenied(
+            "Snowman specialist task cost or output-token ceiling would be exceeded".into(),
         ));
     }
     let budget = sqlx::query(
@@ -1420,10 +2142,11 @@ async fn insert_task(
         INSERT INTO snowman_work_tasks
           (community_id, task_id, request_id, parent_task_id, specialist_role,
            service_identity_id, assigned_agent_pubkey, required_capabilities,
-           model_gateway_route, model_id, execution_snapshot_sha256, expected_artifact_contract,
+           model_gateway_route, model_id, max_cost_microusd, expected_input_tokens,
+           max_output_tokens, execution_snapshot_sha256, expected_artifact_contract,
            context_packet_id, risk_tier, reversible, approval_required, status,
            priority, available_at, deadline_at, max_attempts)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
         "#,
     )
     .bind(community_id)
@@ -1436,6 +2159,9 @@ async fn insert_task(
     .bind(&task.required_capabilities)
     .bind(&task.model_gateway_route)
     .bind(&task.model_id)
+    .bind(task.max_cost_microusd)
+    .bind(task.expected_input_tokens)
+    .bind(task.max_output_tokens)
     .bind(task.execution_snapshot_sha256.as_slice())
     .bind(&task.expected_artifact_contract)
     .bind(task.context_packet_id)
@@ -1453,6 +2179,18 @@ async fn insert_task(
     .bind(task.max_attempts)
     .execute(&mut **tx)
     .await?;
+    for reference in &task.context_references {
+        sqlx::query(
+            "INSERT INTO snowman_work_task_context_refs \
+             (community_id, request_id, task_id, context_reference) VALUES ($1,$2,$3,$4)",
+        )
+        .bind(community_id)
+        .bind(request_id)
+        .bind(task.task_id)
+        .bind(reference)
+        .execute(&mut **tx)
+        .await?;
+    }
     Ok(())
 }
 
@@ -1476,6 +2214,9 @@ fn validate_new_request(request: &NewWorkRequest) -> Result<()> {
         ));
     }
     let mut task_ids = std::collections::HashSet::new();
+    let mut reserved_cost = 0_i64;
+    let mut reserved_input = 0_i64;
+    let mut reserved_output = 0_i64;
     for task in &request.tasks {
         if !task_ids.insert(task.task_id) {
             return Err(DbError::InvalidData(
@@ -1483,11 +2224,51 @@ fn validate_new_request(request: &NewWorkRequest) -> Result<()> {
             ));
         }
         validate_model_gateway_route(&task.model_gateway_route)?;
+        if task.max_cost_microusd < 0
+            || task.expected_input_tokens < 0
+            || task.max_output_tokens < 0
+        {
+            return Err(DbError::InvalidData(
+                "task budgets must be non-negative".into(),
+            ));
+        }
+        reserved_cost = reserved_cost
+            .checked_add(task.max_cost_microusd)
+            .ok_or_else(|| DbError::InvalidData("task cost budget overflowed".into()))?;
+        reserved_input = reserved_input
+            .checked_add(task.expected_input_tokens)
+            .ok_or_else(|| DbError::InvalidData("task input budget overflowed".into()))?;
+        reserved_output = reserved_output
+            .checked_add(task.max_output_tokens)
+            .ok_or_else(|| DbError::InvalidData("task output budget overflowed".into()))?;
+        if task.context_references.len() > 64
+            || task
+                .context_references
+                .iter()
+                .any(|reference| !is_context_reference(reference))
+        {
+            return Err(DbError::AccessDenied(
+                "task context must use at most 64 immutable Snowman or Analyst references".into(),
+            ));
+        }
+        if !valid_capability_set(&task.required_capabilities) {
+            return Err(DbError::AccessDenied(
+                "task capabilities must be explicit, namespaced, and non-ambient".into(),
+            ));
+        }
         if task.risk_tier == "prohibited" || (!task.reversible && !task.approval_required) {
             return Err(DbError::AccessDenied(
                 "prohibited or irreversible work requires a different human-gated plan".into(),
             ));
         }
+    }
+    if reserved_cost > request.max_cost_microusd
+        || reserved_input > request.max_input_tokens
+        || reserved_output > request.max_output_tokens
+    {
+        return Err(DbError::AccessDenied(
+            "task reservations exceed the request budget".into(),
+        ));
     }
     Ok(())
 }
@@ -1512,6 +2293,71 @@ fn validate_model_gateway_route(route: &str) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn valid_capability_set(capabilities: &[String]) -> bool {
+    !capabilities.is_empty()
+        && capabilities.len() <= 32
+        && capabilities.iter().all(|capability| {
+            capability.len() <= 128
+                && capability.contains('.')
+                && capability.chars().all(|character| {
+                    character.is_ascii_lowercase()
+                        || character.is_ascii_digit()
+                        || matches!(character, '.' | '_')
+                })
+                && !matches!(
+                    capability.as_str(),
+                    "admin.all" | "aws.all" | "filesystem.all" | "network.all" | "tool.all"
+                )
+        })
+}
+
+fn planned_graph_is_acyclic(tasks: &[NewPlannedTask]) -> bool {
+    use std::collections::{HashMap, HashSet};
+
+    let graph: HashMap<_, _> = tasks
+        .iter()
+        .map(|planned| (planned.task.task_id, planned.depends_on.as_slice()))
+        .collect();
+    fn visit(
+        task_id: Uuid,
+        graph: &HashMap<Uuid, &[Uuid]>,
+        visiting: &mut HashSet<Uuid>,
+        visited: &mut HashSet<Uuid>,
+    ) -> bool {
+        if visited.contains(&task_id) {
+            return true;
+        }
+        if !visiting.insert(task_id) {
+            return false;
+        }
+        let acyclic = graph[&task_id]
+            .iter()
+            .all(|dependency| visit(*dependency, graph, visiting, visited));
+        visiting.remove(&task_id);
+        if acyclic {
+            visited.insert(task_id);
+        }
+        acyclic
+    }
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    graph
+        .keys()
+        .all(|task_id| visit(*task_id, &graph, &mut visiting, &mut visited))
+}
+
+fn is_context_reference(reference: &str) -> bool {
+    let digest = reference
+        .strip_prefix("analyst360:sha256:")
+        .or_else(|| reference.strip_prefix("snowman:sha256:"));
+    digest.is_some_and(|value| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    })
 }
 
 fn validate_work_event(event: &NewWorkEvent) -> Result<()> {
@@ -1640,6 +2486,7 @@ mod tests {
             max_cost_microusd: 5_000_000,
             max_input_tokens: 500_000,
             max_output_tokens: 100_000,
+            client_ready_delivery: true,
             tasks: vec![NewWorkTask {
                 task_id: Uuid::new_v4(),
                 parent_task_id: None,
@@ -1649,8 +2496,12 @@ mod tests {
                 required_capabilities: vec!["context.read".into()],
                 model_gateway_route: "https://models.snowmanai.org/anthropic".into(),
                 model_id: "snowman-research-model".into(),
+                max_cost_microusd: 1_000_000,
+                expected_input_tokens: 10_000,
+                max_output_tokens: 2_000,
                 execution_snapshot_sha256: sha256(b"safe-task-v1"),
                 expected_artifact_contract: serde_json::json!({"type": "brief"}),
+                context_references: vec![format!("analyst360:sha256:{}", "a".repeat(64))],
                 context_packet_id: None,
                 risk_tier: "low".into(),
                 reversible: true,

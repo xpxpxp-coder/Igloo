@@ -5,7 +5,7 @@
 //! capability-bounded planning task, and returns a metadata-only status view.
 //! Specialist execution remains behind the private worker plane.
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use axum::{
     extract::{Path, State},
@@ -21,7 +21,14 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use buzz_auth::LimitType;
-use buzz_db::workforce::{NewWorkRequest, NewWorkTask, SpendEntry, WorkTaskCompletion};
+use buzz_db::workforce::{
+    NewPlannedTask, NewWorkPlan, NewWorkRequest, NewWorkTask, SpendEntry, StoredModelRoute,
+    WorkTaskCompletion,
+};
+use snowman_workforce::{
+    govern_team_plan, Classification, GovernedTeamPlan, ModelRoute, PlannedTask, RiskTier,
+    SpecialistRole,
+};
 
 use crate::{authorization, state::AppState};
 
@@ -103,6 +110,39 @@ struct FinishWorkTaskRequest {
     #[serde(default)]
     failure_code: Option<String>,
     occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommitTeamPlanRequest {
+    schema_version: String,
+    plan_id: Uuid,
+    request_id: Uuid,
+    generation: i64,
+    lease_token: String,
+    tasks: Vec<ProposedTeamTask>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposedTeamTask {
+    task_id: Uuid,
+    service_identity_id: Uuid,
+    specialist_role: SpecialistRole,
+    #[serde(default)]
+    depends_on: BTreeSet<Uuid>,
+    required_capabilities: BTreeSet<String>,
+    #[serde(default)]
+    context_references: BTreeSet<String>,
+    #[serde(default)]
+    requested_model_id: Option<String>,
+    expected_input_tokens: u64,
+    max_output_tokens: u64,
+    max_cost_microusd: u64,
+    risk_tier: RiskTier,
+    reversible: bool,
+    approval_required: bool,
+    expected_artifact_type: String,
 }
 
 fn default_classification() -> String {
@@ -259,7 +299,7 @@ pub async fn create_work_request(
         .snowman_workforce
         .as_ref()
         .expect("workforce presence checked during authentication");
-    let lead_ready = state
+    let lead_can_plan = state
         .db
         .active_service_identity_has_capability(
             tenant.community(),
@@ -268,10 +308,33 @@ pub async fn create_work_request(
         )
         .await
         .map_err(|_| internal_error("workforce lead identity verification failed"))?;
-    if !lead_ready {
+    let lead_can_execute = state
+        .db
+        .active_service_identity_has_capability(
+            tenant.community(),
+            workforce.lead_service_identity_id,
+            "workforce.tasks.execute",
+        )
+        .await
+        .map_err(|_| internal_error("workforce lead identity verification failed"))?;
+    let model_routes = state
+        .db
+        .active_model_routes(tenant.community())
+        .await
+        .map_err(|_| internal_error("workforce planning model verification failed"))?;
+    let planning_model_ready = model_routes.iter().any(|route| {
+        route.model_id == workforce.planning_model_id
+            && route.gateway_url == workforce.model_gateway_url
+            && route.suited_roles.iter().any(|role| role == "lead")
+            && route
+                .allowed_classifications
+                .iter()
+                .any(|classification| classification == &input.classification)
+    });
+    if !lead_can_plan || !lead_can_execute || !planning_model_ready {
         return Err(api_error(
             StatusCode::SERVICE_UNAVAILABLE,
-            "Snowman workforce planning service is not ready",
+            "Snowman workforce planning identity or evaluated model route is not ready",
         ));
     }
     let objective = input.objective.trim().to_string();
@@ -305,6 +368,9 @@ pub async fn create_work_request(
         required_capabilities: vec!["workforce.plan".to_string()],
         model_gateway_route: workforce.model_gateway_url.clone(),
         model_id: workforce.planning_model_id.clone(),
+        max_cost_microusd: input.max_cost_microusd.min(2_000_000),
+        expected_input_tokens: input.max_input_tokens.min(100_000),
+        max_output_tokens: input.max_output_tokens.min(20_000),
         execution_snapshot_sha256: snapshot_sha256,
         expected_artifact_contract: json!({
             "schema_version": "snowman.team_plan.v1",
@@ -319,6 +385,7 @@ pub async fn create_work_request(
                 "unsafe_or_irreversible_steps_require_approval": true
             }
         }),
+        context_references: input.context_references.clone(),
         context_packet_id: None,
         risk_tier: "low".to_string(),
         reversible: true,
@@ -339,6 +406,7 @@ pub async fn create_work_request(
         max_cost_microusd: input.max_cost_microusd,
         max_input_tokens: input.max_input_tokens,
         max_output_tokens: input.max_output_tokens,
+        client_ready_delivery: input.client_ready_delivery,
         tasks: vec![task],
     };
     let accepted = state
@@ -476,14 +544,242 @@ pub async fn claim_work_task(
             "required_capabilities": task.required_capabilities,
             "model_gateway_route": task.model_gateway_route,
             "model_id": task.model_id,
+            "task_max_cost_microusd": task.task_max_cost_microusd,
+            "expected_input_tokens": task.expected_input_tokens,
+            "task_max_output_tokens": task.task_max_output_tokens,
             "execution_snapshot_sha256": hex::encode(task.execution_snapshot_sha256),
             "expected_artifact_contract": task.expected_artifact_contract,
+            "context_references": task.context_references,
             "context_packet_id": task.context_packet_id,
             "risk_tier": task.risk_tier,
             "reversible": task.reversible,
             "approval_required": task.approval_required,
         }
     })))
+}
+
+/// Validate a lead planner proposal, choose approved best-fit models, and
+/// atomically replace the lead task with a durable specialist DAG.
+pub async fn commit_team_plan(
+    State(state): State<Arc<AppState>>,
+    Path(lead_task_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/tasks/{lead_task_id}/plan");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.plan",
+        "service",
+    )
+    .await?;
+    let input: CommitTeamPlanRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid team plan JSON"))?;
+    if input.schema_version != "snowman.team_plan.proposal.v1"
+        || input.plan_id.is_nil()
+        || input.request_id.is_nil()
+        || lead_task_id.is_nil()
+        || input.generation <= 0
+        || input.tasks.is_empty()
+        || input.tasks.len() > 64
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "team plan has an invalid schema, identity, generation, or task count",
+        ));
+    }
+    let lease_token_sha256 = decode_lease_token(&input.lease_token)?;
+    let envelope = state
+        .db
+        .work_plan_envelope(tenant.community(), input.request_id, lead_task_id)
+        .await
+        .map_err(|_| internal_error("workforce plan envelope read failed"))?
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::CONFLICT,
+                "work request or lead planning task is not active",
+            )
+        })?;
+    let classification = parse_classification(&envelope.classification).ok_or_else(|| {
+        internal_error("workforce request contains an unsupported classification")
+    })?;
+    let catalog_rows = state
+        .db
+        .active_model_routes(tenant.community())
+        .await
+        .map_err(|_| internal_error("workforce model catalog read failed"))?;
+    let catalog = catalog_rows
+        .into_iter()
+        .map(model_route_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    if catalog.is_empty() {
+        return Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no evaluated Snowman model routes are active for this workspace",
+        ));
+    }
+    let proposed_tasks = input
+        .tasks
+        .into_iter()
+        .map(|task| PlannedTask {
+            task_id: task.task_id,
+            service_identity_id: task.service_identity_id,
+            specialist_role: task.specialist_role,
+            depends_on: task.depends_on,
+            required_capabilities: task.required_capabilities,
+            context_packet_refs: task.context_references,
+            requested_model_id: task.requested_model_id,
+            selected_model_id: None,
+            selected_gateway_url: None,
+            expected_input_tokens: task.expected_input_tokens,
+            max_output_tokens: task.max_output_tokens,
+            max_cost_microusd: task.max_cost_microusd,
+            risk_tier: task.risk_tier,
+            reversible: task.reversible,
+            approval_required: task.approval_required,
+            expected_artifact_type: task.expected_artifact_type,
+        })
+        .collect();
+    let governed = govern_team_plan(
+        GovernedTeamPlan {
+            request_id: envelope.request_id,
+            community_id: *tenant.community().as_uuid(),
+            objective_sha256: envelope.objective_sha256,
+            classification,
+            client_ready_delivery: envelope.client_ready_delivery,
+            max_cost_microusd: nonnegative_u64(envelope.max_cost_microusd)?,
+            max_input_tokens: nonnegative_u64(envelope.max_input_tokens)?,
+            max_output_tokens: nonnegative_u64(envelope.max_output_tokens)?,
+            tasks: proposed_tasks,
+        },
+        &catalog,
+    )
+    .map_err(|error| {
+        tracing::warn!(community = %tenant.community(), %error, "team plan rejected by policy");
+        api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "team plan violates workforce policy",
+        )
+    })?;
+    let plan_sha256 = governed_plan_digest(
+        input.plan_id,
+        lead_task_id,
+        principal.identity_id,
+        input.generation,
+        &governed,
+    )?;
+    let committed_at = Utc::now();
+    let mut tasks = Vec::with_capacity(governed.tasks.len());
+    for task in &governed.tasks {
+        let model_id = task
+            .selected_model_id
+            .clone()
+            .ok_or_else(|| internal_error("governed task is missing a selected model"))?;
+        let model_gateway_route = task
+            .selected_gateway_url
+            .clone()
+            .ok_or_else(|| internal_error("governed task is missing a selected gateway"))?;
+        let snapshot = specialist_snapshot(
+            tenant.community().as_uuid(),
+            input.plan_id,
+            lead_task_id,
+            &plan_sha256,
+            task,
+        )?;
+        let context_references: Vec<_> = task.context_packet_refs.iter().cloned().collect();
+        tasks.push(NewPlannedTask {
+            depends_on: task.depends_on.iter().copied().collect(),
+            task: NewWorkTask {
+                task_id: task.task_id,
+                parent_task_id: Some(lead_task_id),
+                specialist_role: specialist_role_name(task.specialist_role).to_string(),
+                service_identity_id: task.service_identity_id,
+                assigned_agent_pubkey: None,
+                required_capabilities: task.required_capabilities.iter().cloned().collect(),
+                model_gateway_route,
+                model_id,
+                max_cost_microusd: bounded_i64(task.max_cost_microusd, "task cost ceiling")?,
+                expected_input_tokens: bounded_i64(
+                    task.expected_input_tokens,
+                    "task input-token reservation",
+                )?,
+                max_output_tokens: bounded_i64(
+                    task.max_output_tokens,
+                    "task output-token ceiling",
+                )?,
+                execution_snapshot_sha256: snapshot,
+                expected_artifact_contract: json!({
+                    "schema_version": "snowman.artifact.contract.v1",
+                    "artifact_type": task.expected_artifact_type,
+                    "plan_sha256": hex::encode(plan_sha256),
+                    "context_references": context_references,
+                    "dependency_task_ids": task.depends_on,
+                    "selected_model_id": task.selected_model_id,
+                    "client_ready_delivery": envelope.client_ready_delivery,
+                }),
+                context_references,
+                context_packet_id: None,
+                risk_tier: risk_tier_name(task.risk_tier).to_string(),
+                reversible: task.reversible,
+                approval_required: task.approval_required,
+                priority: if task.specialist_role == SpecialistRole::QualityRiskReviewer {
+                    40
+                } else {
+                    60
+                },
+                available_at: committed_at,
+                deadline_at: envelope.deadline_at,
+                max_attempts: 3,
+            },
+        });
+    }
+    let plan = NewWorkPlan {
+        plan_id: input.plan_id,
+        request_id: input.request_id,
+        lead_task_id,
+        planner_identity_id: principal.identity_id,
+        lease_generation: input.generation,
+        lease_token_sha256,
+        plan_sha256,
+        tasks,
+        committed_at,
+    };
+    let result = state
+        .db
+        .commit_work_plan(tenant.community(), &plan)
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "team plan conflicts with current lease, identity, capability, or budget state",
+            ),
+            _ => internal_error("workforce team plan persistence failed"),
+        })?;
+    metrics::counter!(
+        "snowman_workforce_team_plans_total",
+        "outcome" => if result.inserted { "committed" } else { "replayed" }
+    )
+    .increment(1);
+    Ok((
+        if result.inserted {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(json!({
+            "schema_version": "snowman.team_plan.committed.v1",
+            "plan_id": result.plan_id,
+            "request_id": result.request_id,
+            "plan_sha256": hex::encode(plan_sha256),
+            "specialist_task_count": result.task_count,
+            "inserted": result.inserted,
+        })),
+    ))
 }
 
 /// Renew one live lease without changing its fencing generation.
@@ -687,6 +983,144 @@ pub async fn finish_work_task(
         "completion_id": completion.completion_id,
         "status": if completion.succeeded { "succeeded" } else { "failed" },
     })))
+}
+
+fn parse_classification(value: &str) -> Option<Classification> {
+    match value {
+        "internal" => Some(Classification::Internal),
+        "confidential" => Some(Classification::Confidential),
+        "restricted" => Some(Classification::Restricted),
+        _ => None,
+    }
+}
+
+fn parse_specialist_role(value: &str) -> Option<SpecialistRole> {
+    match value {
+        "lead" => Some(SpecialistRole::Lead),
+        "client_delivery" => Some(SpecialistRole::ClientDelivery),
+        "research_evidence" => Some(SpecialistRole::ResearchEvidence),
+        "governed_analyst" => Some(SpecialistRole::GovernedAnalyst),
+        "quality_risk_reviewer" => Some(SpecialistRole::QualityRiskReviewer),
+        "deadline_operations" => Some(SpecialistRole::DeadlineOperations),
+        _ => None,
+    }
+}
+
+const fn specialist_role_name(value: SpecialistRole) -> &'static str {
+    match value {
+        SpecialistRole::Lead => "lead",
+        SpecialistRole::ClientDelivery => "client_delivery",
+        SpecialistRole::ResearchEvidence => "research_evidence",
+        SpecialistRole::GovernedAnalyst => "governed_analyst",
+        SpecialistRole::QualityRiskReviewer => "quality_risk_reviewer",
+        SpecialistRole::DeadlineOperations => "deadline_operations",
+    }
+}
+
+const fn risk_tier_name(value: RiskTier) -> &'static str {
+    match value {
+        RiskTier::Low => "low",
+        RiskTier::Moderate => "moderate",
+        RiskTier::High => "high",
+        RiskTier::Prohibited => "prohibited",
+    }
+}
+
+fn model_route_from_row(row: StoredModelRoute) -> Result<ModelRoute, (StatusCode, Json<Value>)> {
+    let suited_roles = row
+        .suited_roles
+        .iter()
+        .map(|role| parse_specialist_role(role))
+        .collect::<Option<BTreeSet<_>>>()
+        .ok_or_else(|| internal_error("model catalog contains an unsupported specialist role"))?;
+    let allowed_classifications = row
+        .allowed_classifications
+        .iter()
+        .map(|classification| parse_classification(classification))
+        .collect::<Option<BTreeSet<_>>>()
+        .ok_or_else(|| internal_error("model catalog contains an unsupported classification"))?;
+    Ok(ModelRoute {
+        model_id: row.model_id,
+        gateway_url: row.gateway_url,
+        suited_roles,
+        allowed_classifications,
+        quality_score: u16::try_from(row.quality_score)
+            .map_err(|_| internal_error("model catalog quality score is invalid"))?,
+        latency_score: u16::try_from(row.latency_score)
+            .map_err(|_| internal_error("model catalog latency score is invalid"))?,
+        max_cost_microusd_per_million_tokens: u64::try_from(
+            row.max_cost_microusd_per_million_tokens,
+        )
+        .map_err(|_| internal_error("model catalog cost ceiling is invalid"))?,
+        max_context_tokens: u64::try_from(row.max_context_tokens)
+            .map_err(|_| internal_error("model catalog context ceiling is invalid"))?,
+    })
+}
+
+fn nonnegative_u64(value: i64) -> Result<u64, (StatusCode, Json<Value>)> {
+    u64::try_from(value).map_err(|_| internal_error("work request budget is invalid"))
+}
+
+fn bounded_i64(value: u64, field: &str) -> Result<i64, (StatusCode, Json<Value>)> {
+    i64::try_from(value).map_err(|_| {
+        api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &format!("{field} exceeds the supported bound"),
+        )
+    })
+}
+
+fn governed_plan_digest(
+    plan_id: Uuid,
+    lead_task_id: Uuid,
+    planner_identity_id: Uuid,
+    generation: i64,
+    plan: &GovernedTeamPlan,
+) -> Result<[u8; 32], (StatusCode, Json<Value>)> {
+    let canonical = serde_json::to_vec(plan)
+        .map_err(|_| internal_error("governed team plan canonicalization failed"))?;
+    let generation = generation.to_be_bytes();
+    Ok(domain_digest(
+        b"snowman.team-plan.v1\0",
+        &[
+            plan_id.as_bytes(),
+            lead_task_id.as_bytes(),
+            planner_identity_id.as_bytes(),
+            generation.as_slice(),
+            canonical.as_slice(),
+        ],
+    ))
+}
+
+fn specialist_snapshot(
+    community_id: &Uuid,
+    plan_id: Uuid,
+    lead_task_id: Uuid,
+    plan_sha256: &[u8; 32],
+    task: &PlannedTask,
+) -> Result<[u8; 32], (StatusCode, Json<Value>)> {
+    let canonical = serde_json::to_vec(task)
+        .map_err(|_| internal_error("specialist task canonicalization failed"))?;
+    Ok(domain_digest(
+        b"snowman.specialist-task-snapshot.v1\0",
+        &[
+            community_id.as_bytes(),
+            plan_id.as_bytes(),
+            lead_task_id.as_bytes(),
+            plan_sha256,
+            canonical.as_slice(),
+        ],
+    ))
+}
+
+fn domain_digest(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    for field in fields {
+        hasher.update((field.len() as u64).to_be_bytes());
+        hasher.update(field);
+    }
+    hasher.finalize().into()
 }
 
 fn require_worker_api(state: &AppState) -> Result<(), (StatusCode, Json<Value>)> {

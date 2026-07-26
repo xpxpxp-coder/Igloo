@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 29);
+        assert_eq!(migrations.len(), 30);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -954,6 +954,14 @@ mod tests {
         assert!(analyst.contains("receipt_kms_key_arn"));
         assert!(analyst.contains("PRIMARY KEY (community_id, event_id)"));
         assert!(!analyst.contains("raw_client_data"));
+
+        assert_eq!(migrations[29].version, 30);
+        let team_plans = migrations[29].sql.as_str();
+        assert!(team_plans.contains("snowman_model_routes"));
+        assert!(team_plans.contains("snowman_team_plans"));
+        assert!(team_plans.contains("snowman_work_task_dependencies"));
+        assert!(team_plans.contains("snowman_work_task_context_refs"));
+        assert!(!team_plans.contains("raw_client_data"));
     }
 
     #[test]

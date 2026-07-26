@@ -32,6 +32,7 @@ const runtimeAuthorityFiles = [
   "migrations/0027_snowman_workforce_request_contract.sql",
   "migrations/0028_snowman_workforce_claim_idempotency.sql",
   "migrations/0029_snowman_analyst_event_boundary.sql",
+  "migrations/0030_snowman_governed_team_plans.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",

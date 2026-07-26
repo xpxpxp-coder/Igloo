@@ -58,14 +58,14 @@ requires all of the following:
 - closed membership, governed relay roles, and live workforce identity
   enforcement;
 - `SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID` for an active tenant-local service
-  identity holding `workforce.plan`;
+  identity holding both `workforce.plan` and `workforce.tasks.execute`;
 - `SNOWMAN_MODEL_GATEWAY_URL` on a Snowman-controlled HTTPS domain; and
 - `SNOWMAN_PLANNING_MODEL_ID` from the evaluated model catalog.
 
-The Helm chart keeps intake disabled by default until that identity and gateway
-exist. AWS workers, scheduler, sandbox, private worker network deployment and
-runtime proof, plan persistence, cancellation, approvals, and staged failure
-evidence remain open launch gates.
+The Helm chart keeps intake disabled by default until that identity, gateway,
+and an active tenant-local evaluated catalog row exist. AWS workers, scheduler,
+sandbox, private worker network deployment and runtime proof, cancellation,
+approvals, and staged failure evidence remain open launch gates.
 
 ## Private worker control path
 
@@ -74,16 +74,35 @@ Source support now exists for a separately addressed private worker service:
 | Route | Behavior |
 | --- | --- |
 | `POST /internal/snowman/v1/workforce/tasks/claim` | Idempotently leases the next task assigned to the authenticated service identity. |
+| `POST /internal/snowman/v1/workforce/tasks/{lead_task_id}/plan` | Rehydrates server-owned request constraints, evaluates a proposed specialist DAG, selects approved models, and atomically replaces the leased lead task. |
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/heartbeat` | Renews only the matching live fencing generation and bearer lease. |
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/spend` | Records an actor-, task-, request-, model-, and provider-receipt-bound ledger entry under hard caps. |
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/finish` | Atomically records a terminal result and hash-chain evidence event under the current lease. |
 
 Every route requires a live `service` workforce binding and the exact
-`workforce.tasks.execute` capability. Task claim also rechecks all task-specific
-capabilities in PostgreSQL. A worker-generated `claim_id` and a deterministic,
+capability appropriate to the operation. Claim, heartbeat, spend, and finish use
+`workforce.tasks.execute`; plan commit uses `workforce.plan` and the same live
+lease proof. Task claim also rechecks every task-specific capability and the
+active role/classification model route in PostgreSQL. A worker-generated
+`claim_id` and a deterministic,
 domain-separated relay HMAC make lost claim responses retryable without a
 second lease. Lease tokens are stored only as SHA-256 digests. Spend and finish
 operations are idempotent and reject stale fencing generations.
+Claim replay, heartbeat, spend, and completion also revalidate the live
+task-specific grants, service-identity lifecycle, current approval snapshot, and
+catalog route; revocation or route suspension cannot be bypassed by retaining an
+unexpired lease token.
+
+The proposal schema never accepts a gateway URL or selected model. It accepts a
+bounded role, distinct service identity, requested model override (optional),
+capabilities, immutable context references, DAG edges, budgets, risk posture,
+and artifact type. The policy kernel rejects cycles, ambient capabilities,
+duplicate identities, unsafe irreversible execution, and missing independent
+client-ready review. It chooses the best evaluated route allowed for the tenant
+and data class. PostgreSQL then independently rechecks the lease, remaining
+request budget, active service identities and grants, catalog status, route,
+role, classification, and DAG before one atomic commit. Exact retries return the
+original plan; conflicting retries fail closed.
 
 `SNOWMAN_WORKFORCE_WORKER_API_ENABLED` defaults false independently of public
 intake. Production public relay tasks must keep it false. Only a private

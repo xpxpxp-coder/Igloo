@@ -37,12 +37,14 @@ claims require live verification before use.
   reconciliation, and a serialized secret-rejecting lifecycle-event hash chain
   now exist in source. AWS
   scheduler/worker services, sandbox isolation, proactive-policy evaluation,
-  cancellation/plan-expansion APIs, and staged failure proof still must be built before
+  cancellation, and staged failure proof still must be built before
   the product can honestly provide 24/7 service.
 - Governed human request intake and metadata-only status reads now exist at
   `/api/snowman/v1/work-requests`. The endpoint deliberately creates only a
-  lead planning task; private worker identity, validated plan expansion, and
-  AWS execution are still required before the request can run end to end.
+  lead planning task. The private source boundary now leases that task, validates
+  and atomically persists its specialist DAG, selects a best-fit approved model
+  per role, and fences spend/completion. Provisioned private worker identities,
+  catalog rows, AWS execution, and staged proof are still required end to end.
 - A default-off, tenant-bound Analyst event ingress now verifies strict
   asymmetric KMS service assertions, rejects unknown or scope-mismatched fields,
   consumes replay nonces transactionally, stores only minimized lifecycle

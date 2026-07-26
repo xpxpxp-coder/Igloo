@@ -2957,6 +2957,33 @@ impl Db {
         workforce::enqueue_work_request(&self.pool, community, request).await
     }
 
+    /// Load the server-owned constraints for a lead planner proposal.
+    pub async fn work_plan_envelope(
+        &self,
+        community: CommunityId,
+        request_id: Uuid,
+        lead_task_id: Uuid,
+    ) -> Result<Option<workforce::WorkPlanEnvelope>> {
+        workforce::work_plan_envelope(&self.pool, community, request_id, lead_task_id).await
+    }
+
+    /// Load active evaluated model routes for one tenant.
+    pub async fn active_model_routes(
+        &self,
+        community: CommunityId,
+    ) -> Result<Vec<workforce::StoredModelRoute>> {
+        workforce::active_model_routes(&self.pool, community).await
+    }
+
+    /// Atomically replace a live leased lead task with a governed specialist DAG.
+    pub async fn commit_work_plan(
+        &self,
+        community: CommunityId,
+        plan: &workforce::NewWorkPlan,
+    ) -> Result<workforce::CommittedWorkPlan> {
+        workforce::commit_work_plan(&self.pool, community, plan).await
+    }
+
     /// Read current Snowman work-request state from the writer.
     pub async fn get_work_request_status(
         &self,

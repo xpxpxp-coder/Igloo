@@ -88,6 +88,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(api::workforce::heartbeat_work_task),
         )
         .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/plan",
+            post(api::workforce::commit_team_plan),
+        )
+        .route(
             "/internal/snowman/v1/workforce/tasks/{task_id}/spend",
             post(api::workforce::record_work_spend),
         )

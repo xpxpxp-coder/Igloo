@@ -232,8 +232,10 @@ fn validate_plan_shape(plan: &GovernedTeamPlan) -> Result<(), PolicyError> {
             "task token ceilings exceed the request ceiling".into(),
         ));
     }
+    let mut service_identities = BTreeSet::new();
     for task in &plan.tasks {
         if task.service_identity_id.is_nil()
+            || !service_identities.insert(task.service_identity_id)
             || task.required_capabilities.is_empty()
             || task.required_capabilities.len() > MAX_CAPABILITIES_PER_TASK
             || task.context_packet_refs.len() > MAX_CONTEXT_REFS_PER_TASK
@@ -250,7 +252,7 @@ fn validate_plan_shape(plan: &GovernedTeamPlan) -> Result<(), PolicyError> {
                 .any(|reference| !is_context_reference(reference))
         {
             return Err(PolicyError::InvalidPlan(format!(
-                "task {} violates capability, context, risk, or artifact bounds",
+                "task {} violates identity, capability, context, risk, or artifact bounds",
                 task.task_id
             )));
         }
@@ -423,7 +425,10 @@ fn is_context_reference(value: &str) -> bool {
         .strip_prefix("analyst360:sha256:")
         .or_else(|| value.strip_prefix("snowman:sha256:"));
     digest.is_some_and(|digest| {
-        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     })
 }
 
@@ -581,5 +586,31 @@ mod tests {
         assert!(!validate_gateway("https://api.openai.com/v1"));
         assert!(!validate_gateway("https://snowmanai.org.evil.example/v1"));
         assert!(is_dangerous_ambient_capability("aws.all"));
+        assert!(!is_context_reference(&format!(
+            "snowman:sha256:{}",
+            "A".repeat(64)
+        )));
+    }
+
+    #[test]
+    fn rejects_service_identity_reuse_between_specialists() {
+        let first = task(SpecialistRole::ResearchEvidence);
+        let mut second = task(SpecialistRole::ClientDelivery);
+        second.service_identity_id = first.service_identity_id;
+        let plan = GovernedTeamPlan {
+            request_id: Uuid::new_v4(),
+            community_id: Uuid::new_v4(),
+            objective_sha256: [3; 32],
+            classification: Classification::Internal,
+            client_ready_delivery: false,
+            max_cost_microusd: 50_000,
+            max_input_tokens: 30_000,
+            max_output_tokens: 10_000,
+            tasks: vec![first, second],
+        };
+        assert!(matches!(
+            govern_team_plan(plan, &[]),
+            Err(PolicyError::InvalidPlan(_))
+        ));
     }
 }
