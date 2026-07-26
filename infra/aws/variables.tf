@@ -122,6 +122,48 @@ variable "model_gateway_desired_count" {
   }
 }
 
+variable "model_gateway_private_ingress_enabled" {
+  type        = bool
+  description = "Create the internal TLS NLB and cross-account PrivateLink endpoint service for the model gateway."
+  default     = false
+}
+
+variable "model_gateway_tls_certificate_arn" {
+  type        = string
+  description = "Exact Command Center account ACM certificate for the private model-gateway hostname."
+  default     = ""
+  validation {
+    condition = (
+      !var.model_gateway_private_ingress_enabled ||
+      can(regex("^arn:aws(?:-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/[0-9a-fA-F-]{36}$", var.model_gateway_tls_certificate_arn))
+    )
+    error_message = "Private model-gateway ingress requires an exact ACM certificate ARN."
+  }
+}
+
+variable "model_gateway_private_dns_name" {
+  type        = string
+  description = "Snowman-owned private DNS identity advertised by the endpoint service."
+  default     = "models.internal.snowmanai.org"
+  validation {
+    condition     = can(regex("^models(?:[.]staging)?[.]internal[.]snowmanai[.]org$", lower(var.model_gateway_private_dns_name)))
+    error_message = "model_gateway_private_dns_name must be the exact staging or production Snowman private model hostname."
+  }
+}
+
+variable "model_gateway_consumer_principal_arns" {
+  type        = set(string)
+  description = "Exact Analyst workload IAM principals allowed to create a model-gateway interface endpoint."
+  default     = []
+  validation {
+    condition = alltrue([
+      for arn in var.model_gateway_consumer_principal_arns :
+      can(regex("^arn:aws(?:-[a-z]+)?:iam::[0-9]{12}:(?:root|role/[A-Za-z0-9+=,.@_/-]{1,512})$", arn))
+    ])
+    error_message = "Every model-gateway consumer must be an exact AWS account-root or role principal ARN."
+  }
+}
+
 variable "model_gateway_principals" {
   description = "Analyst workload policies allowed to call the private model gateway. Map keys are exact service principal IDs."
   type = map(object({

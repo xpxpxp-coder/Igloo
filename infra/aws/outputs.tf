@@ -1,16 +1,30 @@
 output "production_boundary" {
   description = "Account, region, image, and activation coordinates reviewed by preflight."
   value = {
-    account_id                  = data.aws_caller_identity.current.account_id
-    region                      = data.aws_region.current.name
-    environment                 = var.environment
-    image                       = var.container_image
-    external_model_processors   = var.external_model_processors_enabled
-    relay_desired_count         = var.relay_desired_count
-    worker_desired_count        = var.worker_desired_count
-    workforce_profile_count     = length(var.workforce_profiles)
-    model_gateway_desired_count = var.model_gateway_desired_count
+    account_id                            = data.aws_caller_identity.current.account_id
+    region                                = data.aws_region.current.name
+    environment                           = var.environment
+    image                                 = var.container_image
+    external_model_processors             = var.external_model_processors_enabled
+    relay_desired_count                   = var.relay_desired_count
+    worker_desired_count                  = var.worker_desired_count
+    workforce_profile_count               = length(var.workforce_profiles)
+    model_gateway_desired_count           = var.model_gateway_desired_count
+    model_gateway_private_ingress_enabled = var.model_gateway_private_ingress_enabled
   }
+}
+
+output "model_gateway_private_link" {
+  description = "Cross-account private model-gateway handoff; the consumer must use the exact service name and verified Snowman private DNS identity."
+  value = var.model_gateway_private_ingress_enabled ? {
+    service_name                   = aws_vpc_endpoint_service.model_gateway[0].service_name
+    service_id                     = aws_vpc_endpoint_service.model_gateway[0].id
+    private_dns_name               = var.model_gateway_private_dns_name
+    private_dns_verification_state = aws_vpc_endpoint_service.model_gateway[0].private_dns_name_configuration[0].state
+    nlb_arn                        = aws_lb.model_gateway_private[0].arn
+    tls_listener_arn               = aws_lb_listener.model_gateway_private[0].arn
+    accepted_principals            = sort(tolist(var.model_gateway_consumer_principal_arns))
+  } : null
 }
 
 output "network_posture" {

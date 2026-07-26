@@ -60,6 +60,10 @@ record, not a client-side API key or direct vendor CLI.
   boundaries exist in source. Private cross-account ingress, a governed model
   catalog deployment, the pinned Snowman-hosted AWS inference fleet, usage
   reconciliation, and live zero-egress proof remain.
+  A default-off PrivateLink provider with Snowman TLS, endpoint acceptance, and
+  exact Analyst-account principals now implements the cross-account ingress
+  substrate; live certificate/DNS verification, endpoint acceptance, and
+  connectivity proof remain.
 - The Command Center AWS root now defines and validates the isolated managed
   substrate: three-AZ network layout, no NAT/private internet route, exact AWS
   endpoints, managed PostgreSQL, IAM-authenticated TLS Valkey, KMS/object-lock

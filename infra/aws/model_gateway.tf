@@ -39,6 +39,108 @@ check "model_gateway_activation_boundary" {
     ])
     error_message = "Every model-gateway caller key must belong to the exact Analyst workload account and region."
   }
+  assert {
+    condition = !var.model_gateway_private_ingress_enabled || (
+      length(var.model_gateway_consumer_principal_arns) > 0 &&
+      split(":", var.model_gateway_tls_certificate_arn)[3] == var.aws_region &&
+      split(":", var.model_gateway_tls_certificate_arn)[4] == var.expected_workload_account_id &&
+      alltrue([
+        for arn in var.model_gateway_consumer_principal_arns :
+        split(":", arn)[4] == var.analyst360_workload_account_id
+      ])
+    )
+    error_message = "Private model-gateway ingress requires a local-region certificate and only exact Analyst-account consumer principals."
+  }
+}
+
+resource "aws_security_group" "model_gateway_private_link_nlb" {
+  count = var.model_gateway_private_ingress_enabled ? 1 : 0
+
+  name        = "${local.workload_name}-model-gateway-private-link"
+  description = "PrivateLink-only NLB path to the Snowman model gateway"
+  vpc_id      = aws_vpc.command_center.id
+}
+
+resource "aws_vpc_security_group_egress_rule" "model_gateway_private_link_to_gateway" {
+  count = var.model_gateway_private_ingress_enabled ? 1 : 0
+
+  security_group_id            = aws_security_group.model_gateway_private_link_nlb[0].id
+  referenced_security_group_id = aws_security_group.model_gateway.id
+  from_port                    = 8443
+  to_port                      = 8443
+  ip_protocol                  = "tcp"
+  description                  = "TLS termination NLB to the policy gateway only"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "model_gateway_from_private_link" {
+  count = var.model_gateway_private_ingress_enabled ? 1 : 0
+
+  security_group_id            = aws_security_group.model_gateway.id
+  referenced_security_group_id = aws_security_group.model_gateway_private_link_nlb[0].id
+  from_port                    = 8443
+  to_port                      = 8443
+  ip_protocol                  = "tcp"
+  description                  = "PrivateLink NLB to model gateway only"
+}
+
+resource "aws_lb" "model_gateway_private" {
+  count = var.model_gateway_private_ingress_enabled ? 1 : 0
+
+  name                                                         = substr("${local.workload_name}-models", 0, 32)
+  internal                                                     = true
+  load_balancer_type                                           = "network"
+  subnets                                                      = [for key in sort(keys(aws_subnet.private)) : aws_subnet.private[key].id]
+  security_groups                                              = [aws_security_group.model_gateway_private_link_nlb[0].id]
+  enforce_security_group_inbound_rules_on_private_link_traffic = "off"
+  enable_cross_zone_load_balancing                             = true
+  enable_deletion_protection                                   = var.deletion_protection
+}
+
+resource "aws_lb_target_group" "model_gateway_private" {
+  count = var.model_gateway_private_ingress_enabled ? 1 : 0
+
+  name        = substr("${local.workload_name}-models", 0, 32)
+  port        = 8443
+  protocol    = "TCP"
+  target_type = "ip"
+  vpc_id      = aws_vpc.command_center.id
+
+  deregistration_delay = 30
+  health_check {
+    enabled             = true
+    protocol            = "HTTP"
+    path                = "/_readiness"
+    port                = "traffic-port"
+    matcher             = "200"
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    interval            = 30
+    timeout             = 5
+  }
+}
+
+resource "aws_lb_listener" "model_gateway_private" {
+  count = var.model_gateway_private_ingress_enabled ? 1 : 0
+
+  load_balancer_arn = aws_lb.model_gateway_private[0].arn
+  port              = 443
+  protocol          = "TLS"
+  certificate_arn   = var.model_gateway_tls_certificate_arn
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.model_gateway_private[0].arn
+  }
+}
+
+resource "aws_vpc_endpoint_service" "model_gateway" {
+  count = var.model_gateway_private_ingress_enabled ? 1 : 0
+
+  acceptance_required        = true
+  network_load_balancer_arns = [aws_lb.model_gateway_private[0].arn]
+  allowed_principals         = sort(tolist(var.model_gateway_consumer_principal_arns))
+  private_dns_name           = var.model_gateway_private_dns_name
 }
 
 resource "aws_iam_role" "model_gateway_execution" {
@@ -192,9 +294,20 @@ resource "aws_ecs_service" "model_gateway" {
     rollback = true
   }
 
+  dynamic "load_balancer" {
+    for_each = var.model_gateway_private_ingress_enabled ? [1] : []
+    content {
+      target_group_arn = aws_lb_target_group.model_gateway_private[0].arn
+      container_name   = "model-gateway"
+      container_port   = 8443
+    }
+  }
+
   network_configuration {
     subnets          = [for key in sort(keys(aws_subnet.private)) : aws_subnet.private[key].id]
     security_groups  = [aws_security_group.model_gateway.id]
     assign_public_ip = false
   }
+
+  depends_on = [aws_lb_listener.model_gateway_private]
 }

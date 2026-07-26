@@ -173,6 +173,26 @@ class AwsFoundationContractTests(unittest.TestCase):
         self.assertNotIn('"kms:*"', source)
         self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
 
+    def test_model_gateway_private_link_has_no_public_or_ambient_ingress(self) -> None:
+        source = (ROOT / "model_gateway.tf").read_text(encoding="utf-8")
+        outputs = (ROOT / "outputs.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'resource "aws_vpc_endpoint_service" "model_gateway"',
+            'acceptance_required        = true',
+            'allowed_principals         = sort(tolist(var.model_gateway_consumer_principal_arns))',
+            'enforce_security_group_inbound_rules_on_private_link_traffic = "off"',
+            'protocol          = "TLS"',
+            'ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"',
+            'target_type = "ip"',
+            'referenced_security_group_id = aws_security_group.model_gateway.id',
+        ):
+            self.assertIn(fragment, source)
+        self.assertRegex(source, r"internal\s*=\s*true")
+        self.assertRegex(source, r'load_balancer_type\s*=\s*"network"')
+        self.assertIn('output "model_gateway_private_link"', outputs)
+        self.assertNotIn('internet_facing', source)
+        self.assertNotIn('cidr_ipv4', source)
+
     def test_operations_are_encrypted_alerted_and_budgeted(self) -> None:
         source = (ROOT / "operations.tf").read_text(encoding="utf-8")
         for fragment in (

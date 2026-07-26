@@ -32,6 +32,14 @@ list. Runtime secrets intentionally have no Terraform-managed values.
 Staging uses one interface-endpoint ENI, one RDS instance, and one Valkey node;
 production expands endpoints and managed state across availability zones.
 
+The model gateway has a default-off cross-account PrivateLink provider contract:
+an internal TLS Network Load Balancer, exact Snowman ACM certificate, endpoint
+service with acceptance required, and an exact Analyst-account IAM-principal
+allowlist. The NLB has no CIDR ingress and can forward only to the gateway
+security group. Its endpoint service name and private-DNS verification state are
+exported for the separate Analyst root; no VPC peering, public model endpoint,
+or shared data tier is introduced.
+
 The following resource layers still have to be added and proven before this
 root is deployable:
 

@@ -32,6 +32,14 @@ ECS task runs without a public IP, as non-root, with a read-only root filesystem
 and all Linux capabilities dropped. Its task role has only exact `kms:Verify`
 and exact ElastiCache connection grants.
 
+The AWS root now also defines a default-off cross-account PrivateLink provider.
+It uses an internal Network Load Balancer with Snowman TLS, endpoint-service
+acceptance, and an exact Analyst-account principal allowlist. PrivateLink
+traffic bypasses the NLB's empty client-ingress rule set only at the AWS service
+boundary; the NLB security group can egress solely to the model-gateway security
+group on port 8443. No public load balancer, public IP, CIDR ingress, peering, or
+shared VPC is introduced.
+
 ## Remaining production gates
 
 - Provision a private Analyst-to-gateway ingress path and TLS/DNS identity with
