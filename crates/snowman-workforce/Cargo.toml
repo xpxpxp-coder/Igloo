@@ -1,0 +1,16 @@
+[package]
+name = "snowman-workforce"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/snowman-ai-org/snowman-command-center"
+description = "Governed specialist-team planning and proactive-action policy for Snowman 360"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+

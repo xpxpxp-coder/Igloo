@@ -165,6 +165,37 @@ pub struct WorkApproval {
     pub expires_at: DateTime<Utc>,
 }
 
+/// One immutable workforce lifecycle event. Payloads are bounded metadata and
+/// artifact references, never credentials or raw client datasets.
+#[derive(Debug, Clone)]
+pub struct NewWorkEvent {
+    /// Stable event ID supplied by the producer for idempotent correlation.
+    pub event_id: Uuid,
+    /// Work request identifier.
+    pub request_id: Uuid,
+    /// Optional specialist task identifier.
+    pub task_id: Option<Uuid>,
+    /// Namespaced lifecycle type such as `task.claimed`.
+    pub event_type: String,
+    /// Authenticated workforce or service identity.
+    pub actor_identity: String,
+    /// Bounded, secret-free metadata and immutable references.
+    pub payload: Value,
+    /// Producer-observed event time.
+    pub occurred_at: DateTime<Utc>,
+}
+
+/// Hash-chain coordinates returned after an event is durably appended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppendedWorkEvent {
+    /// Monotonic request-local sequence number.
+    pub sequence: i64,
+    /// Previous hash, absent only for the first event.
+    pub previous_event_sha256: Option<[u8; 32]>,
+    /// Digest of the domain-separated canonical event fields.
+    pub event_sha256: [u8; 32],
+}
+
 /// Insert a work request and its initial task graph exactly once.
 ///
 /// Reusing an idempotency key with the same objective returns the original
@@ -226,13 +257,7 @@ pub async fn enqueue_work_request(
     for task in &request.tasks {
         insert_task(&mut tx, community_id, request.request_id, task).await?;
     }
-    sqlx::query(
-        "UPDATE snowman_work_requests SET status='planned', updated_at=NOW() WHERE community_id=$1 AND request_id=$2",
-    )
-    .bind(community_id)
-    .bind(request.request_id)
-    .execute(&mut *tx)
-    .await?;
+    refresh_request_status(&mut tx, community_id, request.request_id).await?;
     tx.commit().await?;
     Ok(request.request_id)
 }
@@ -331,6 +356,12 @@ pub async fn claim_next_work_task(
     .bind(task_id)
     .execute(&mut *tx)
     .await?;
+    refresh_request_status(
+        &mut tx,
+        community_id,
+        task.try_get::<Uuid, _>("request_id")?,
+    )
+    .await?;
     tx.commit().await?;
 
     Ok(Some(LeasedWorkTask {
@@ -425,6 +456,14 @@ pub async fn finish_work_task(
             .bind(task_id)
             .execute(&mut *tx)
             .await?;
+        let request_id = sqlx::query_scalar::<_, Uuid>(
+            "SELECT request_id FROM snowman_work_tasks WHERE community_id=$1 AND task_id=$2",
+        )
+        .bind(community_id)
+        .bind(task_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        refresh_request_status(&mut tx, *community_id, request_id).await?;
     }
     tx.commit().await?;
     Ok(result.rows_affected() == 1)
@@ -434,7 +473,7 @@ pub async fn finish_work_task(
 pub async fn recover_expired_work_tasks(pool: &PgPool, community_id: CommunityId) -> Result<u64> {
     let community_id = *community_id.as_uuid();
     let mut tx = pool.begin().await?;
-    let result = sqlx::query(
+    let recovered = sqlx::query(
         r#"
         UPDATE snowman_work_tasks t SET
           status=CASE WHEN t.attempt_count >= t.max_attempts THEN 'dead_lettered' ELSE 'queued' END,
@@ -448,17 +487,121 @@ pub async fn recover_expired_work_tasks(pool: &PgPool, community_id: CommunityId
         FROM snowman_task_leases l
         WHERE t.community_id=$1 AND l.community_id=t.community_id AND l.task_id=t.task_id
           AND l.expires_at <= NOW() AND t.status IN ('leased','running','reviewing')
+        RETURNING t.request_id
         "#,
     )
     .bind(community_id)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
+    let mut request_ids = std::collections::HashSet::new();
+    for row in &recovered {
+        request_ids.insert(row.try_get::<Uuid, _>("request_id")?);
+    }
     sqlx::query("DELETE FROM snowman_task_leases WHERE community_id=$1 AND expires_at <= NOW()")
         .bind(community_id)
         .execute(&mut *tx)
         .await?;
+    for request_id in request_ids {
+        refresh_request_status(&mut tx, community_id, request_id).await?;
+    }
     tx.commit().await?;
-    Ok(result.rows_affected())
+    Ok(recovered.len() as u64)
+}
+
+/// Append one request-local event under a PostgreSQL advisory lock so parallel
+/// workers cannot fork the sequence or hash chain. Exact event-ID replays return
+/// the original coordinates; conflicting reuse fails closed.
+pub async fn append_work_event(
+    pool: &PgPool,
+    community_id: CommunityId,
+    event: &NewWorkEvent,
+) -> Result<AppendedWorkEvent> {
+    validate_work_event(event)?;
+    let community_id = *community_id.as_uuid();
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2::text, 0))")
+        .bind(community_id)
+        .bind(event.request_id)
+        .execute(&mut *tx)
+        .await?;
+
+    if let Some(existing) = sqlx::query(
+        "SELECT request_id, sequence, event_type, actor_identity, payload, occurred_at, \
+                previous_event_sha256, event_sha256, task_id \
+         FROM snowman_work_events WHERE community_id=$1 AND event_id=$2",
+    )
+    .bind(community_id)
+    .bind(event.event_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    {
+        let previous = optional_vec_to_sha256(existing.try_get("previous_event_sha256")?)?;
+        let digest = vec_to_sha256(existing.try_get("event_sha256")?)?;
+        let exact_replay = existing.try_get::<Uuid, _>("request_id")? == event.request_id
+            && existing.try_get::<String, _>("event_type")? == event.event_type
+            && existing.try_get::<String, _>("actor_identity")? == event.actor_identity
+            && existing.try_get::<Value, _>("payload")? == event.payload
+            && existing.try_get::<DateTime<Utc>, _>("occurred_at")? == event.occurred_at
+            && existing.try_get::<Option<Uuid>, _>("task_id")? == event.task_id;
+        if !exact_replay {
+            return Err(DbError::AccessDenied(
+                "work event ID was reused with different evidence".into(),
+            ));
+        }
+        let result = AppendedWorkEvent {
+            sequence: existing.try_get("sequence")?,
+            previous_event_sha256: previous,
+            event_sha256: digest,
+        };
+        tx.commit().await?;
+        return Ok(result);
+    }
+
+    let previous = sqlx::query(
+        "SELECT sequence, event_sha256 FROM snowman_work_events \
+         WHERE community_id=$1 AND request_id=$2 ORDER BY sequence DESC LIMIT 1",
+    )
+    .bind(community_id)
+    .bind(event.request_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let sequence = previous
+        .as_ref()
+        .map(|row| row.try_get::<i64, _>("sequence"))
+        .transpose()?
+        .map_or(0, |value| value + 1);
+    let previous_digest = previous
+        .map(|row| vec_to_sha256(row.try_get("event_sha256")?))
+        .transpose()?;
+    let event_digest = work_event_digest(community_id, sequence, previous_digest, event)?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO snowman_work_events
+          (community_id, event_id, request_id, task_id, sequence, event_type,
+           actor_identity, payload, previous_event_sha256, event_sha256, occurred_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        "#,
+    )
+    .bind(community_id)
+    .bind(event.event_id)
+    .bind(event.request_id)
+    .bind(event.task_id)
+    .bind(sequence)
+    .bind(&event.event_type)
+    .bind(&event.actor_identity)
+    .bind(&event.payload)
+    .bind(previous_digest.map(|value| value.to_vec()))
+    .bind(event_digest.as_slice())
+    .bind(event.occurred_at)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(AppendedWorkEvent {
+        sequence,
+        previous_event_sha256: previous_digest,
+        event_sha256: event_digest,
+    })
 }
 
 /// Record spend atomically after enforcing the request's hard cost/token caps.
@@ -639,7 +782,61 @@ pub async fn record_work_approval(
     .bind(next_status)
     .execute(&mut *tx)
     .await?;
+    refresh_request_status(&mut tx, community_id, approval.request_id).await?;
     tx.commit().await?;
+    Ok(())
+}
+
+async fn refresh_request_status(
+    tx: &mut Transaction<'_, Postgres>,
+    community_id: Uuid,
+    request_id: Uuid,
+) -> Result<()> {
+    let counts = sqlx::query(
+        r#"
+        SELECT COUNT(*)::bigint AS total,
+          COUNT(*) FILTER (WHERE status IN ('succeeded','failed','cancelled','expired','dead_lettered'))::bigint AS terminal,
+          COUNT(*) FILTER (WHERE status IN ('failed','expired','dead_lettered'))::bigint AS failed,
+          COUNT(*) FILTER (WHERE status='cancelled')::bigint AS cancelled,
+          COUNT(*) FILTER (WHERE status='awaiting_approval')::bigint AS awaiting,
+          COUNT(*) FILTER (WHERE status IN ('leased','running','reviewing'))::bigint AS active
+        FROM snowman_work_tasks WHERE community_id=$1 AND request_id=$2
+        "#,
+    )
+    .bind(community_id)
+    .bind(request_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    let total: i64 = counts.try_get("total")?;
+    let terminal: i64 = counts.try_get("terminal")?;
+    let failed: i64 = counts.try_get("failed")?;
+    let cancelled: i64 = counts.try_get("cancelled")?;
+    let awaiting: i64 = counts.try_get("awaiting")?;
+    let active: i64 = counts.try_get("active")?;
+    let next = if total > 0 && terminal == total {
+        if failed > 0 {
+            "failed"
+        } else if cancelled > 0 {
+            "cancelled"
+        } else {
+            "completed"
+        }
+    } else if active > 0 {
+        "running"
+    } else if awaiting > 0 {
+        "awaiting_approval"
+    } else {
+        "planned"
+    };
+    sqlx::query(
+        "UPDATE snowman_work_requests SET status=$3, updated_at=NOW() \
+         WHERE community_id=$1 AND request_id=$2 AND status <> 'cancelled'",
+    )
+    .bind(community_id)
+    .bind(request_id)
+    .bind(next)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -747,6 +944,101 @@ fn validate_model_gateway_route(route: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_work_event(event: &NewWorkEvent) -> Result<()> {
+    let event_type = event.event_type.trim();
+    if event_type.is_empty()
+        || event_type != event.event_type
+        || event_type.len() > 128
+        || !event_type.contains('.')
+        || !event_type.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '_' | '-')
+        })
+        || event.actor_identity.trim().is_empty()
+        || event.actor_identity.trim() != event.actor_identity
+        || event.actor_identity.len() > 256
+    {
+        return Err(DbError::InvalidData(
+            "work event requires a namespaced type and bounded actor identity".into(),
+        ));
+    }
+    let payload = serde_json::to_vec(&event.payload)
+        .map_err(|error| DbError::InvalidData(format!("invalid work event payload: {error}")))?;
+    if payload.len() > 65_536 {
+        return Err(DbError::InvalidData(
+            "work event payload exceeds the 64 KiB metadata limit".into(),
+        ));
+    }
+    if value_contains_secret_key(&event.payload) {
+        return Err(DbError::AccessDenied(
+            "work event payload contains a credential-like field".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn value_contains_secret_key(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => map.iter().any(|(key, value)| {
+            let normalized = key.to_ascii_lowercase();
+            matches!(
+                normalized.as_str(),
+                "authorization"
+                    | "credential"
+                    | "credentials"
+                    | "password"
+                    | "private_key"
+                    | "secret"
+                    | "token"
+            ) || value_contains_secret_key(value)
+        }),
+        Value::Array(values) => values.iter().any(value_contains_secret_key),
+        _ => false,
+    }
+}
+
+fn work_event_digest(
+    community_id: Uuid,
+    sequence: i64,
+    previous_event_sha256: Option<[u8; 32]>,
+    event: &NewWorkEvent,
+) -> Result<[u8; 32]> {
+    let payload = serde_json::to_vec(&event.payload)
+        .map_err(|error| DbError::InvalidData(format!("invalid work event payload: {error}")))?;
+    let sequence_bytes = sequence.to_be_bytes();
+    let occurred_at = event
+        .occurred_at
+        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let task_id_bytes = event.task_id.map(|value| *value.as_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(b"snowman.work.event.v1\0");
+    update_digest_field(&mut hasher, community_id.as_bytes());
+    update_digest_field(&mut hasher, event.request_id.as_bytes());
+    update_digest_field(
+        &mut hasher,
+        task_id_bytes.as_ref().map_or(&[], |value| value.as_slice()),
+    );
+    update_digest_field(&mut hasher, &sequence_bytes);
+    update_digest_field(
+        &mut hasher,
+        previous_event_sha256
+            .as_ref()
+            .map_or(&[], |value| value.as_slice()),
+    );
+    update_digest_field(&mut hasher, event.event_id.as_bytes());
+    update_digest_field(&mut hasher, event.event_type.as_bytes());
+    update_digest_field(&mut hasher, event.actor_identity.as_bytes());
+    update_digest_field(&mut hasher, occurred_at.as_bytes());
+    update_digest_field(&mut hasher, &payload);
+    Ok(hasher.finalize().into())
+}
+
+fn update_digest_field(hasher: &mut Sha256, field: &[u8]) {
+    hasher.update((field.len() as u64).to_be_bytes());
+    hasher.update(field);
+}
+
 fn sha256(value: &[u8]) -> [u8; 32] {
     Sha256::digest(value).into()
 }
@@ -755,6 +1047,10 @@ fn vec_to_sha256(value: Vec<u8>) -> Result<[u8; 32]> {
     value
         .try_into()
         .map_err(|_| DbError::InvalidData("expected a 32-byte SHA-256 digest".into()))
+}
+
+fn optional_vec_to_sha256(value: Option<Vec<u8>>) -> Result<Option<[u8; 32]>> {
+    value.map(vec_to_sha256).transpose()
 }
 
 #[cfg(test)]
@@ -793,6 +1089,23 @@ mod tests {
                 deadline_at: None,
                 max_attempts: 3,
             }],
+        }
+    }
+
+    fn event() -> NewWorkEvent {
+        NewWorkEvent {
+            event_id: Uuid::from_u128(1),
+            request_id: Uuid::from_u128(2),
+            task_id: Some(Uuid::from_u128(3)),
+            event_type: "task.claimed".into(),
+            actor_identity: "snowman-service:research-worker".into(),
+            payload: serde_json::json!({
+                "artifact_ref": "sha256:abc",
+                "lease_generation": 1
+            }),
+            occurred_at: DateTime::parse_from_rfc3339("2026-07-26T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
         }
     }
 
@@ -837,6 +1150,31 @@ mod tests {
         assert!(matches!(
             validate_new_request(&invalid),
             Err(DbError::InvalidData(_))
+        ));
+    }
+
+    #[test]
+    fn work_event_digest_is_deterministic_and_chain_bound() {
+        let event = event();
+        let community = Uuid::from_u128(4);
+        let first = work_event_digest(community, 0, None, &event).unwrap();
+        assert_eq!(
+            first,
+            work_event_digest(community, 0, None, &event).unwrap()
+        );
+        assert_ne!(
+            first,
+            work_event_digest(community, 1, Some(first), &event).unwrap()
+        );
+    }
+
+    #[test]
+    fn work_event_rejects_nested_credentials() {
+        let mut invalid = event();
+        invalid.payload = serde_json::json!({"details": {"authorization": "Bearer nope"}});
+        assert!(matches!(
+            validate_work_event(&invalid),
+            Err(DbError::AccessDenied(_))
         ));
     }
 }

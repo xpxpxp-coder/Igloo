@@ -82,3 +82,21 @@ not as a substitute for technical verification.
   controls; a running desktop is not part of the production availability model.
 - “Next best action” remains useful and proactive without becoming unbounded
   autonomous authority.
+
+## Implemented foundation
+
+The `snowman-workforce` policy kernel now validates bounded, acyclic specialist
+plans; requires explicit tenant service identities, capabilities, context
+digests, artifact contracts, budgets, risk, reversibility, and approval posture;
+selects the strongest policy-approved per-role model (or validates a configured
+override) behind Snowman DNS; and requires a separately identified downstream
+quality/risk reviewer for client-ready delivery. Its proactive policy executes
+only useful, confident, low-risk, reversible, allowlisted work below a hard cost
+threshold and turns other useful work into an approval request.
+
+The `buzz-db` workforce store now adds durable request/task state reconciliation,
+fenced leases and recovery, exact-snapshot approvals, hard spend/token ledgers,
+and a tenant-serialized, domain-separated lifecycle-event hash chain that
+rejects credential-like payload fields. These are source foundations, not a
+claim that the AWS scheduler, workers, sandbox, model gateway, or external KMS
+checkpoints have passed staging.

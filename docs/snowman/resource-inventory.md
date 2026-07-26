@@ -32,7 +32,9 @@ claims require live verification before use.
   is not yet deployed or proven.
 - The tenant-scoped Postgres workforce queue, fenced lease/recovery primitives,
   exact-snapshot approvals, capability-bound service identities, immutable
-  context references, and hard spend/token ledgers now exist in source. AWS
+  context references, hard spend/token ledgers, aggregate request-state
+  reconciliation, and a serialized secret-rejecting lifecycle-event hash chain
+  now exist in source. AWS
   scheduler/worker services, sandbox isolation, proactive-policy evaluation,
   cancellation/event APIs, and staged failure proof still must be built before
   the product can honestly provide 24/7 service.
@@ -56,3 +58,9 @@ claims require live verification before use.
   final app-store agreements and final production activation.
 
 Everything else remains an engineering or evidence task and should be automated.
+
+The Command Center AWS root now has an exact-version, exact-account,
+digest-image, dormant-staging, production-HA, separate-Analyst-account, and
+zero-external-model preflight. The latest read-only AWS identity call found the
+configured SSO session expired, so this is source evidence only; no plan or
+apply claim has been made.

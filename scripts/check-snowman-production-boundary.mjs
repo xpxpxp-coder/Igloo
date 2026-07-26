@@ -23,6 +23,7 @@ const runtimeAuthorityFiles = [
   "crates/buzz-workflow/src/schema.rs",
   "crates/buzz-db/src/workforce.rs",
   "crates/buzz-db/src/workforce_identity.rs",
+  "crates/snowman-workforce/src/lib.rs",
   "migrations/0025_snowman_workforce.sql",
   "migrations/0026_snowman_workforce_identity.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
@@ -50,6 +51,9 @@ const runtimeAuthorityFiles = [
   "deploy/charts/buzz-push-gateway/values.yaml",
   "deploy/charts/buzz-push-gateway/values-production.yaml",
   "deploy/charts/buzz-push-gateway/values.schema.json",
+  "infra/aws/versions.tf",
+  "infra/aws/variables.tf",
+  "infra/aws/preflight.tf",
 ];
 
 const forbidden = [
@@ -95,6 +99,36 @@ requireFragment(
   "mobile/lib/features/pairing/pairing_provider.dart",
   "Relay URL is outside the Snowman-controlled boundary",
   "mobile pairing must enforce the Snowman transport boundary",
+);
+requireFragment(
+  "crates/snowman-workforce/src/lib.rs",
+  "DisallowedModelOverride",
+  "per-agent model overrides must remain governed by the approved catalog",
+);
+requireFragment(
+  "crates/snowman-workforce/src/lib.rs",
+  "ExecuteAutomatically",
+  "proactive action policy must distinguish automatic work from human-gated work",
+);
+requireFragment(
+  "crates/snowman-workforce/src/lib.rs",
+  "producer_identities",
+  "client-ready work must use an independently identified quality/risk reviewer",
+);
+requireFragment(
+  "infra/aws/preflight.tf",
+  "var.expected_workload_account_id != var.analyst360_workload_account_id",
+  "production Command Center and Analyst 360 AWS authority must remain separate",
+);
+requireFragment(
+  "infra/aws/preflight.tf",
+  "!var.external_model_processors_enabled",
+  "AWS baseline must fail closed on external model processors",
+);
+requireFragment(
+  "infra/aws/preflight.tf",
+  "var.relay_desired_count == 0 && var.worker_desired_count == 0",
+  "baseline staging must remain dormant",
 );
 requireFragment(
   "crates/buzz-workflow/src/schema.rs",
@@ -180,6 +214,16 @@ requireFragment(
   "crates/buzz-db/src/workforce.rs",
   "execution_snapshot_sha256",
   "human approvals must bind to an exact execution snapshot",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "pg_advisory_xact_lock",
+  "workforce event and spend writers must serialize conflicting mutations",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "snowman.work.event.v1",
+  "workforce lifecycle events must use a domain-separated hash chain",
 );
 requireFragment(
   "crates/buzz-db/src/workforce_identity.rs",
