@@ -344,6 +344,11 @@ requireFragment(
   "model discovery must enforce the Snowman model boundary",
 );
 requireFragment(
+  "desktop/src-tauri/src/managed_agents/discovery.rs",
+  'cfg!(debug_assertions) || runtime.id == "buzz-agent"',
+  "release clients must expose only the Snowman-gateway agent runtime",
+);
+requireFragment(
   "web/src/shared/lib/buzz-download.ts",
   'export const SNOWMAN_RELEASES_URL = "/downloads";',
   "release page must remain same-origin",

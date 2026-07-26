@@ -34,6 +34,14 @@ mirrored into Snowman's artifact pipeline, so background removal currently
 fails locally to the normal unsegmented recording path rather than making an
 undeclared network request.
 
+Production desktop builds expose only the bundled Snowman Agent runtime. The
+upstream Codex, Claude, and Goose harness adapters remain available solely in
+debug builds for compatibility testing because their vendor CLIs can establish
+provider-direct connections. Production per-agent model selection therefore
+routes only through `models.snowmanai.org`; enabling any hosted third-party
+processor requires a separately approved Snowman gateway route and data-flow
+record, not a client-side API key or direct vendor CLI.
+
 ## Snowman-controlled platform resources
 
 | Platform | Approved use | Verification before mutation |

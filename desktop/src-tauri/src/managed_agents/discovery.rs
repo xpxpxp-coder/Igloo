@@ -17,6 +17,13 @@ pub(crate) use runtime_metadata::KnownAcpRuntime;
 /// but opening agent configuration must never fetch third-party image assets.
 const SNOWMAN_AGENT_AVATAR_URL: &str = "/snowman-agent.svg";
 
+/// Release builds must never discover or launch a vendor CLI that can bypass
+/// the Snowman model gateway. Debug builds retain upstream harnesses for local
+/// compatibility testing; shipped clients expose only the bundled agent.
+fn runtime_allowed_by_product_boundary(runtime: &KnownAcpRuntime) -> bool {
+    cfg!(debug_assertions) || runtime.id == "buzz-agent"
+}
+
 fn common_binary_paths() -> &'static [PathBuf] {
     static PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
     PATHS.get_or_init(|| {
@@ -194,7 +201,10 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
 
 /// Skill discovery directories declared by known runtimes.
 pub(crate) fn known_skill_dirs() -> impl Iterator<Item = &'static str> {
-    KNOWN_ACP_RUNTIMES.iter().filter_map(|p| p.skill_dir)
+    KNOWN_ACP_RUNTIMES
+        .iter()
+        .filter(|runtime| runtime_allowed_by_product_boundary(runtime))
+        .filter_map(|runtime| runtime.skill_dir)
 }
 
 fn workspace_root_dir() -> PathBuf {
@@ -247,18 +257,23 @@ fn normalize_command_identity(command: &str) -> String {
 pub(crate) fn known_acp_runtime(command: &str) -> Option<&'static KnownAcpRuntime> {
     let normalized = normalize_command_identity(command);
 
-    KNOWN_ACP_RUNTIMES.iter().find(|runtime| {
-        normalized == runtime.id
-            || runtime
-                .commands
-                .iter()
-                .any(|command| normalized == normalize_command_identity(command))
-            || runtime.aliases.iter().any(|alias| normalized == *alias)
-    })
+    KNOWN_ACP_RUNTIMES
+        .iter()
+        .filter(|runtime| runtime_allowed_by_product_boundary(runtime))
+        .find(|runtime| {
+            normalized == runtime.id
+                || runtime
+                    .commands
+                    .iter()
+                    .any(|command| normalized == normalize_command_identity(command))
+                || runtime.aliases.iter().any(|alias| normalized == *alias)
+        })
 }
 
 pub(crate) fn known_acp_runtime_exact(id: &str) -> Option<&'static KnownAcpRuntime> {
-    KNOWN_ACP_RUNTIMES.iter().find(|p| p.id == id)
+    KNOWN_ACP_RUNTIMES
+        .iter()
+        .find(|runtime| runtime.id == id && runtime_allowed_by_product_boundary(runtime))
 }
 
 /// The agent command a freshly-created agent defaults to when the create
@@ -294,6 +309,7 @@ pub fn record_agent_command(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .filter(|value| cfg!(debug_assertions) || known_acp_runtime(value).is_some())
     {
         return pin.to_string();
     }
@@ -326,6 +342,7 @@ pub fn effective_agent_command(
     if let Some(pin) = agent_command_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .filter(|value| cfg!(debug_assertions) || known_acp_runtime(value).is_some())
     {
         return pin.to_string();
     }
@@ -1300,6 +1317,7 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
     // Phase 1: build all entries (fast — no probes yet).
     let mut partials: Vec<PartialEntry> = KNOWN_ACP_RUNTIMES
         .iter()
+        .filter(|runtime| runtime_allowed_by_product_boundary(runtime))
         .map(discover_acp_runtime_phase1)
         .collect();
 
