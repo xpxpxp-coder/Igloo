@@ -305,6 +305,12 @@ pub struct NewContextPacket {
     pub manifest: ContextPacketManifest,
     /// Authenticated tenant-local service identity publishing the handoff.
     pub created_by_identity_id: Uuid,
+    /// Task whose live fenced lease authorizes this publication.
+    pub source_task_id: Uuid,
+    /// Current lease generation for the source task.
+    pub lease_generation: i64,
+    /// SHA-256 of the source task's bearer lease token.
+    pub lease_token_sha256: [u8; 32],
     /// Authority-local immutable artifact identifier.
     pub artifact_id: String,
     /// Immutable artifact version or generation.
@@ -324,6 +330,25 @@ pub struct PublishedContextPacket {
     pub request_id: Uuid,
     /// True only when this call inserted the packet and evidence event.
     pub inserted: bool,
+}
+
+/// A validated metadata-only context handoff visible to one assigned specialist.
+#[derive(Debug, Clone)]
+pub struct StoredContextPacket {
+    /// Policy-validated manifest; it contains no raw artifact body.
+    pub manifest: ContextPacketManifest,
+    /// Authority-local immutable artifact identifier.
+    pub artifact_id: String,
+    /// Immutable artifact version or generation.
+    pub artifact_version: String,
+    /// Optional hard expiry for the handoff.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// Tenant-local service identity that published the packet.
+    pub created_by_identity_id: Uuid,
+    /// Digest of the canonical manifest persisted with the packet.
+    pub manifest_sha256: [u8; 32],
+    /// Server-observed publication time.
+    pub created_at: DateTime<Utc>,
 }
 
 /// Server-authoritative request envelope used to govern a planner proposal.
@@ -742,6 +767,9 @@ pub async fn publish_context_packet(
         .map_err(|error| DbError::InvalidData(error.to_string()))?;
     if packet.manifest.community_id != *community_id.as_uuid()
         || packet.created_by_identity_id.is_nil()
+        || packet.source_task_id.is_nil()
+        || packet.lease_generation <= 0
+        || packet.lease_token_sha256 == [0; 32]
         || packet.artifact_id.trim() != packet.artifact_id
         || packet.artifact_id.is_empty()
         || packet.artifact_id.len() > 512
@@ -765,6 +793,47 @@ pub async fn publish_context_packet(
     let authority = context_authority_name(packet.manifest.authority);
     let classification = classification_name(packet.manifest.classification);
     let mut tx = pool.begin().await?;
+    let lease_authorized: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+          SELECT 1
+          FROM snowman_work_requests r
+          JOIN snowman_work_tasks t
+            ON t.community_id=r.community_id AND t.request_id=r.request_id
+          JOIN snowman_task_leases l
+            ON l.community_id=t.community_id AND l.task_id=t.task_id
+          JOIN snowman_workforce_identities i
+            ON i.community_id=t.community_id AND i.identity_id=t.service_identity_id
+          JOIN snowman_workforce_capability_grants g
+            ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+          WHERE r.community_id=$1 AND r.request_id=$2
+            AND r.status NOT IN ('cancelled', 'expired')
+            AND t.task_id=$3 AND t.service_identity_id=$4
+            AND t.status IN ('leased', 'running')
+            AND l.worker_identity_id=$4 AND l.generation=$5
+            AND l.lease_token_sha256=$6 AND l.expires_at > NOW()
+            AND i.identity_type='service' AND i.role='agent'
+            AND i.status='active' AND i.revoked_at IS NULL
+            AND (i.expires_at IS NULL OR i.expires_at > NOW())
+            AND g.capability='workforce.context.write'
+            AND g.revoked_at IS NULL
+            AND (g.expires_at IS NULL OR g.expires_at > NOW())
+        )
+        "#,
+    )
+    .bind(community_id)
+    .bind(packet.manifest.request_id)
+    .bind(packet.source_task_id)
+    .bind(packet.created_by_identity_id)
+    .bind(packet.lease_generation)
+    .bind(packet.lease_token_sha256.as_slice())
+    .fetch_one(&mut *tx)
+    .await?;
+    if !lease_authorized {
+        return Err(DbError::AccessDenied(
+            "context publication requires the publisher's live fenced task lease".into(),
+        ));
+    }
     let existing = sqlx::query(
         r#"
         SELECT p.request_id, p.authority, p.artifact_id, p.artifact_version,
@@ -825,6 +894,11 @@ pub async fn publish_context_packet(
                        AND g.revoked_at IS NULL
                        AND (g.expires_at IS NULL OR g.expires_at > NOW())
                    )
+               ) AND EXISTS (
+                 SELECT 1 FROM snowman_work_tasks t
+                 WHERE t.community_id=r.community_id AND t.request_id=r.request_id
+                   AND t.service_identity_id=$3
+                   AND t.status IN ('queued', 'leased', 'running', 'awaiting_approval', 'reviewing')
                ) AS publisher_authorized
         FROM snowman_work_requests r
         WHERE r.community_id=$1 AND r.request_id=$2
@@ -935,7 +1009,7 @@ pub async fn publish_context_packet(
     let event = NewWorkEvent {
         event_id: packet.manifest.context_packet_id,
         request_id: packet.manifest.request_id,
-        task_id: None,
+        task_id: Some(packet.source_task_id),
         event_type: "context.published".into(),
         actor_identity: format!("snowman-service:{}", packet.created_by_identity_id),
         payload: serde_json::json!({
@@ -960,6 +1034,124 @@ pub async fn publish_context_packet(
     })
 }
 
+/// Load current, non-expired handoffs for an active specialist assignment.
+///
+/// Both identity capability and request assignment are re-evaluated in the
+/// same statement that reads the packets. Revocation therefore closes access
+/// without relying solely on the HTTP authorization layer.
+pub async fn list_context_packets(
+    pool: &PgPool,
+    community_id: CommunityId,
+    request_id: Uuid,
+    reader_identity_id: Uuid,
+) -> Result<Vec<StoredContextPacket>> {
+    if request_id.is_nil() || reader_identity_id.is_nil() {
+        return Err(DbError::InvalidData(
+            "context packet reader or request is invalid".into(),
+        ));
+    }
+    let rows = sqlx::query(
+        r#"
+        SELECT p.context_packet_id, p.classification, p.authority,
+               p.artifact_id, p.artifact_version, p.content_sha256,
+               p.size_bytes, p.expires_at, p.created_at,
+               m.created_by_identity_id, m.objective_sha256,
+               m.content_reference, m.source_event_sha256, m.manifest_sha256,
+               m.artifact_references, m.evidence_references,
+               m.decision_digests, m.open_question_digests, m.next_actions
+        FROM snowman_context_packets p
+        JOIN snowman_context_packet_manifests m
+          ON m.community_id=p.community_id AND m.context_packet_id=p.context_packet_id
+        JOIN snowman_work_requests r
+          ON r.community_id=p.community_id AND r.request_id=p.request_id
+        WHERE p.community_id=$1 AND p.request_id=$2
+          AND (p.expires_at IS NULL OR p.expires_at > NOW())
+          AND r.status NOT IN ('cancelled', 'expired')
+          AND EXISTS (
+            SELECT 1 FROM snowman_workforce_identities i
+            JOIN snowman_workforce_capability_grants g
+              ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+            WHERE i.community_id=p.community_id AND i.identity_id=$3
+              AND i.identity_type='service' AND i.role='agent'
+              AND i.status='active' AND i.revoked_at IS NULL
+              AND (i.expires_at IS NULL OR i.expires_at > NOW())
+              AND g.capability='workforce.context.read'
+              AND g.revoked_at IS NULL
+              AND (g.expires_at IS NULL OR g.expires_at > NOW())
+          )
+          AND EXISTS (
+            SELECT 1 FROM snowman_work_tasks t
+            WHERE t.community_id=p.community_id AND t.request_id=p.request_id
+              AND t.service_identity_id=$3
+              AND t.status IN ('queued', 'leased', 'running', 'awaiting_approval', 'reviewing')
+          )
+        ORDER BY p.created_at, p.context_packet_id
+        LIMIT 128
+        "#,
+    )
+    .bind(*community_id.as_uuid())
+    .bind(request_id)
+    .bind(reader_identity_id)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            let classification =
+                parse_classification_name(&row.try_get::<String, _>("classification")?)?;
+            let authority = parse_context_authority_name(&row.try_get::<String, _>("authority")?)?;
+            let next_actions = serde_json::from_value(row.try_get::<Value, _>("next_actions")?)
+                .map_err(|error| {
+                    DbError::InvalidData(format!(
+                        "stored context next actions are invalid: {error}"
+                    ))
+                })?;
+            let size_bytes = u64::try_from(row.try_get::<i64, _>("size_bytes")?)
+                .map_err(|_| DbError::InvalidData("stored context size is negative".into()))?;
+            let manifest = ContextPacketManifest {
+                context_packet_id: row.try_get("context_packet_id")?,
+                request_id,
+                community_id: *community_id.as_uuid(),
+                classification,
+                authority,
+                objective_sha256: vec_to_sha256(row.try_get("objective_sha256")?)?,
+                content_reference: row.try_get("content_reference")?,
+                content_sha256: vec_to_sha256(row.try_get("content_sha256")?)?,
+                source_event_sha256: vec_to_sha256(row.try_get("source_event_sha256")?)?,
+                size_bytes,
+                artifact_references: row
+                    .try_get::<Vec<String>, _>("artifact_references")?
+                    .into_iter()
+                    .collect(),
+                evidence_references: row
+                    .try_get::<Vec<String>, _>("evidence_references")?
+                    .into_iter()
+                    .collect(),
+                decision_digests: row
+                    .try_get::<Vec<String>, _>("decision_digests")?
+                    .into_iter()
+                    .collect(),
+                open_question_digests: row
+                    .try_get::<Vec<String>, _>("open_question_digests")?
+                    .into_iter()
+                    .collect(),
+                next_actions,
+            };
+            validate_context_packet(&manifest)
+                .map_err(|error| DbError::InvalidData(error.to_string()))?;
+            Ok(StoredContextPacket {
+                manifest,
+                artifact_id: row.try_get("artifact_id")?,
+                artifact_version: row.try_get("artifact_version")?,
+                expires_at: row.try_get("expires_at")?,
+                created_by_identity_id: row.try_get("created_by_identity_id")?,
+                manifest_sha256: vec_to_sha256(row.try_get("manifest_sha256")?)?,
+                created_at: row.try_get("created_at")?,
+            })
+        })
+        .collect()
+}
+
 const fn classification_name(classification: Classification) -> &'static str {
     match classification {
         Classification::Internal => "internal",
@@ -972,6 +1164,27 @@ const fn context_authority_name(authority: ContextAuthority) -> &'static str {
     match authority {
         ContextAuthority::Analyst360 => "analyst360",
         ContextAuthority::SnowmanCommandCenter => "snowman-command-center",
+    }
+}
+
+fn parse_classification_name(value: &str) -> Result<Classification> {
+    match value {
+        "internal" => Ok(Classification::Internal),
+        "confidential" => Ok(Classification::Confidential),
+        "restricted" => Ok(Classification::Restricted),
+        _ => Err(DbError::InvalidData(
+            "stored context classification is invalid".into(),
+        )),
+    }
+}
+
+fn parse_context_authority_name(value: &str) -> Result<ContextAuthority> {
+    match value {
+        "analyst360" => Ok(ContextAuthority::Analyst360),
+        "snowman-command-center" => Ok(ContextAuthority::SnowmanCommandCenter),
+        _ => Err(DbError::InvalidData(
+            "stored context authority is invalid".into(),
+        )),
     }
 }
 

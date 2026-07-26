@@ -65,8 +65,10 @@ claims require live verification before use.
   governed next actions. Tenant-scoped, idempotent persistence now verifies an
   active `workforce.context.write` service identity, matches the request's
   objective/classification, stores only the bounded manifest plus immutable
-  artifact coordinates, and appends `context.published` evidence. Private API
-  publication/retrieval, expiry enforcement, and staged replacement-agent proof
+  artifact coordinates, and appends `context.published` evidence. The private
+  API now publishes and lists non-expired manifests only for an active assigned
+  service identity with the exact read/write capability; it never returns the
+  artifact body. Staged replacement-agent and artifact-authority retrieval proof
   remain.
 - Governed human request intake and metadata-only status reads now exist at
   `/api/snowman/v1/work-requests`. The endpoint deliberately creates only a

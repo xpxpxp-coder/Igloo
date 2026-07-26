@@ -109,6 +109,15 @@ reuse fails closed, and each publication appends a minimized hash-chain receipt.
 The stored record contains immutable coordinates and digests, never the raw
 handoff artifact.
 
+The private worker plane exposes only authenticated publish/list operations at
+`/internal/snowman/v1/workforce/requests/{request_id}/context-packets`. A live
+tenant-local service identity needs the exact `workforce.context.write` or
+`workforce.context.read` grant and an active task assignment on that request.
+Publication additionally requires the writer's current task ID, lease
+generation, bearer-token digest, and unexpired lease; stale or replaced workers
+cannot publish. Listing revalidates its conditions in the database statement,
+omits expired packets, and returns metadata/digests rather than artifact bodies.
+
 The `buzz-db` workforce store now adds durable request/task state reconciliation,
 fenced leases and recovery, exact-snapshot approvals, hard spend/token ledgers,
 an evaluated tenant model catalog, atomic lead-to-specialist DAG expansion,

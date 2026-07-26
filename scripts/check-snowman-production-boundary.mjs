@@ -168,6 +168,26 @@ requireFragment(
   "context handoffs must require an exact tenant-local publisher capability",
 );
 requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "context publication requires the publisher's live fenced task lease",
+  "stale or unleased agents must not publish workforce memory",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "workforce.context.read",
+  "context retrieval must require an exact tenant-local reader capability",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "t.service_identity_id=$3",
+  "context access must require an active assignment on the exact request",
+);
+requireFragment(
+  "crates/buzz-relay/src/router.rs",
+  "/internal/snowman/v1/workforce/requests/{request_id}/context-packets",
+  "context handoffs must remain behind the private workforce plane",
+);
+requireFragment(
   "crates/buzz-relay/src/api/workforce.rs",
   '"workforce.requests.cancel"',
   "human request cancellation must require an exact workforce capability",

@@ -2986,6 +2986,16 @@ impl Db {
         workforce::publish_context_packet(&self.pool, community, packet).await
     }
 
+    /// List non-expired handoffs visible to one assigned specialist.
+    pub async fn list_context_packets(
+        &self,
+        community: CommunityId,
+        request_id: Uuid,
+        reader_identity_id: Uuid,
+    ) -> Result<Vec<workforce::StoredContextPacket>> {
+        workforce::list_context_packets(&self.pool, community, request_id, reader_identity_id).await
+    }
+
     /// Atomically replace a live leased lead task with a governed specialist DAG.
     pub async fn commit_work_plan(
         &self,

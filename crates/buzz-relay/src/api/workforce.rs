@@ -22,12 +22,13 @@ use uuid::Uuid;
 
 use buzz_auth::LimitType;
 use buzz_db::workforce::{
-    NewPlannedTask, NewWorkPlan, NewWorkRequest, NewWorkTask, SpendEntry, StoredModelRoute,
-    WorkApproval, WorkRequestCancellation, WorkTaskCompletion,
+    NewContextPacket, NewPlannedTask, NewWorkPlan, NewWorkRequest, NewWorkTask, SpendEntry,
+    StoredContextPacket, StoredModelRoute, WorkApproval, WorkRequestCancellation,
+    WorkTaskCompletion,
 };
 use snowman_workforce::{
-    govern_team_plan, Classification, GovernedTeamPlan, ModelRoute, PlannedTask, RiskTier,
-    SpecialistRole,
+    govern_team_plan, Classification, ContextAuthority, ContextNextAction, ContextPacketManifest,
+    GovernedTeamPlan, ModelRoute, PlannedTask, RiskTier, SpecialistRole,
 };
 
 use crate::{authorization, state::AppState};
@@ -140,6 +141,51 @@ struct CommitTeamPlanRequest {
     generation: i64,
     lease_token: String,
     tasks: Vec<ProposedTeamTask>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublishContextPacketRequest {
+    schema_version: String,
+    context_packet_id: Uuid,
+    source_task_id: Uuid,
+    generation: i64,
+    lease_token: String,
+    classification: Classification,
+    authority: ContextAuthority,
+    objective_sha256: String,
+    content_reference: String,
+    content_sha256: String,
+    source_event_sha256: String,
+    size_bytes: u64,
+    #[serde(default)]
+    artifact_references: BTreeSet<String>,
+    #[serde(default)]
+    evidence_references: BTreeSet<String>,
+    #[serde(default)]
+    decision_digests: BTreeSet<String>,
+    #[serde(default)]
+    open_question_digests: BTreeSet<String>,
+    #[serde(default)]
+    next_actions: Vec<ContextNextActionInput>,
+    artifact_id: String,
+    artifact_version: String,
+    #[serde(default)]
+    expires_at: Option<DateTime<Utc>>,
+    occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextNextActionInput {
+    action_id: Uuid,
+    capability: String,
+    risk_tier: RiskTier,
+    reversible: bool,
+    approval_required: bool,
+    expected_cost_microusd: u64,
+    confidence_basis_points: u16,
+    usefulness_sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -710,6 +756,154 @@ pub async fn claim_work_task(
             "reversible": task.reversible,
             "approval_required": task.approval_required,
         }
+    })))
+}
+
+/// Publish one bounded metadata-only context handoff for this request.
+pub async fn publish_context_packet(
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/requests/{request_id}/context-packets");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.context.write",
+        "service",
+    )
+    .await?;
+    let input: PublishContextPacketRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid context packet JSON"))?;
+    if input.schema_version != "snowman.workforce.context.publish.v1"
+        || request_id.is_nil()
+        || input.context_packet_id.is_nil()
+        || input.source_task_id.is_nil()
+        || input.generation <= 0
+        || !is_recent_worker_time(input.occurred_at)
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "context packet has an invalid schema, identity, or publication time",
+        ));
+    }
+    let next_actions = input
+        .next_actions
+        .into_iter()
+        .map(|action| {
+            Ok(ContextNextAction {
+                action_id: action.action_id,
+                capability: action.capability,
+                risk_tier: action.risk_tier,
+                reversible: action.reversible,
+                approval_required: action.approval_required,
+                expected_cost_microusd: action.expected_cost_microusd,
+                confidence_basis_points: action.confidence_basis_points,
+                usefulness_sha256: parse_sha256(
+                    &action.usefulness_sha256,
+                    "next_actions[].usefulness_sha256",
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, (StatusCode, Json<Value>)>>()?;
+    let manifest = ContextPacketManifest {
+        context_packet_id: input.context_packet_id,
+        request_id,
+        community_id: *tenant.community().as_uuid(),
+        classification: input.classification,
+        authority: input.authority,
+        objective_sha256: parse_sha256(&input.objective_sha256, "objective_sha256")?,
+        content_reference: input.content_reference,
+        content_sha256: parse_sha256(&input.content_sha256, "content_sha256")?,
+        source_event_sha256: parse_sha256(&input.source_event_sha256, "source_event_sha256")?,
+        size_bytes: input.size_bytes,
+        artifact_references: input.artifact_references,
+        evidence_references: input.evidence_references,
+        decision_digests: input.decision_digests,
+        open_question_digests: input.open_question_digests,
+        next_actions,
+    };
+    let packet = NewContextPacket {
+        manifest,
+        created_by_identity_id: principal.identity_id,
+        source_task_id: input.source_task_id,
+        lease_generation: input.generation,
+        lease_token_sha256: decode_lease_token(&input.lease_token)?,
+        artifact_id: input.artifact_id,
+        artifact_version: input.artifact_version,
+        expires_at: input.expires_at,
+        created_at: input.occurred_at,
+    };
+    let published = state
+        .db
+        .publish_context_packet(tenant.community(), &packet)
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "context packet conflicts with request, identity, or evidence policy",
+            ),
+            _ => internal_error("context packet persistence failed"),
+        })?;
+    metrics::counter!(
+        "snowman_workforce_context_packets_total",
+        "operation" => "publish",
+        "outcome" => if published.inserted { "published" } else { "replayed" }
+    )
+    .increment(1);
+    Ok((
+        if published.inserted {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(json!({
+            "schema_version": "snowman.workforce.context.published.v1",
+            "request_id": published.request_id,
+            "context_packet_id": published.context_packet_id,
+            "inserted": published.inserted,
+        })),
+    ))
+}
+
+/// List non-expired handoff manifests for the caller's active assignment.
+pub async fn list_context_packets(
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/requests/{request_id}/context-packets");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "GET",
+        &path,
+        None,
+        "workforce.context.read",
+        "service",
+    )
+    .await?;
+    let packets = state
+        .db
+        .list_context_packets(tenant.community(), request_id, principal.identity_id)
+        .await
+        .map_err(|_| internal_error("context packet read failed"))?;
+    metrics::counter!(
+        "snowman_workforce_context_packets_total",
+        "operation" => "list",
+        "outcome" => "success"
+    )
+    .increment(1);
+    Ok(Json(json!({
+        "schema_version": "snowman.workforce.context.list.v1",
+        "request_id": request_id,
+        "packets": packets.iter().map(context_packet_json).collect::<Vec<_>>(),
     })))
 }
 
@@ -1342,6 +1536,56 @@ fn parse_sha256(value: &str, field: &str) -> Result<[u8; 32], (StatusCode, Json<
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid SHA-256 digest"))
 }
 
+fn context_packet_json(packet: &StoredContextPacket) -> Value {
+    let manifest = &packet.manifest;
+    json!({
+        "context_packet_id": manifest.context_packet_id,
+        "request_id": manifest.request_id,
+        "classification": classification_name(manifest.classification),
+        "authority": context_authority_name(manifest.authority),
+        "objective_sha256": hex::encode(manifest.objective_sha256),
+        "content_reference": manifest.content_reference,
+        "content_sha256": hex::encode(manifest.content_sha256),
+        "source_event_sha256": hex::encode(manifest.source_event_sha256),
+        "manifest_sha256": hex::encode(packet.manifest_sha256),
+        "size_bytes": manifest.size_bytes,
+        "artifact_id": packet.artifact_id,
+        "artifact_version": packet.artifact_version,
+        "artifact_references": manifest.artifact_references,
+        "evidence_references": manifest.evidence_references,
+        "decision_digests": manifest.decision_digests,
+        "open_question_digests": manifest.open_question_digests,
+        "next_actions": manifest.next_actions.iter().map(|action| json!({
+            "action_id": action.action_id,
+            "capability": action.capability,
+            "risk_tier": risk_tier_name(action.risk_tier),
+            "reversible": action.reversible,
+            "approval_required": action.approval_required,
+            "expected_cost_microusd": action.expected_cost_microusd,
+            "confidence_basis_points": action.confidence_basis_points,
+            "usefulness_sha256": hex::encode(action.usefulness_sha256),
+        })).collect::<Vec<_>>(),
+        "created_by_identity_id": packet.created_by_identity_id,
+        "expires_at": packet.expires_at,
+        "created_at": packet.created_at,
+    })
+}
+
+const fn classification_name(value: Classification) -> &'static str {
+    match value {
+        Classification::Internal => "internal",
+        Classification::Confidential => "confidential",
+        Classification::Restricted => "restricted",
+    }
+}
+
+const fn context_authority_name(value: ContextAuthority) -> &'static str {
+    match value {
+        ContextAuthority::Analyst360 => "analyst360",
+        ContextAuthority::SnowmanCommandCenter => "snowman-command-center",
+    }
+}
+
 fn is_recent_worker_time(value: DateTime<Utc>) -> bool {
     let now = Utc::now();
     value >= now - Duration::days(30) && value <= now + Duration::minutes(5)
@@ -1560,6 +1804,55 @@ mod tests {
     fn evidence_digests_are_canonical_lowercase() {
         assert!(parse_sha256(&"a".repeat(64), "digest").is_ok());
         assert!(parse_sha256(&"A".repeat(64), "digest").is_err());
+    }
+
+    #[test]
+    fn context_response_is_metadata_only_and_hex_encoded() {
+        let digest = [0xab; 32];
+        let packet = StoredContextPacket {
+            manifest: ContextPacketManifest {
+                context_packet_id: Uuid::new_v4(),
+                request_id: Uuid::new_v4(),
+                community_id: Uuid::new_v4(),
+                classification: Classification::Restricted,
+                authority: ContextAuthority::Analyst360,
+                objective_sha256: digest,
+                content_reference: format!("analyst360:sha256:{}", "a".repeat(64)),
+                content_sha256: digest,
+                source_event_sha256: digest,
+                size_bytes: 128,
+                artifact_references: BTreeSet::new(),
+                evidence_references: BTreeSet::new(),
+                decision_digests: BTreeSet::new(),
+                open_question_digests: BTreeSet::new(),
+                next_actions: vec![ContextNextAction {
+                    action_id: Uuid::new_v4(),
+                    capability: "analyst.jobs.read".into(),
+                    risk_tier: RiskTier::Low,
+                    reversible: true,
+                    approval_required: false,
+                    expected_cost_microusd: 1_000,
+                    confidence_basis_points: 9_000,
+                    usefulness_sha256: digest,
+                }],
+            },
+            artifact_id: "artifact-1".into(),
+            artifact_version: "v1".into(),
+            expires_at: None,
+            created_by_identity_id: Uuid::new_v4(),
+            manifest_sha256: digest,
+            created_at: Utc::now(),
+        };
+        let value = context_packet_json(&packet);
+        assert_eq!(value["classification"], "restricted");
+        assert_eq!(value["authority"], "analyst360");
+        assert_eq!(value["content_sha256"], "ab".repeat(32));
+        assert_eq!(
+            value["next_actions"][0]["usefulness_sha256"],
+            "ab".repeat(32)
+        );
+        assert!(value.get("content").is_none());
+        assert!(value.get("artifact_body").is_none());
     }
 
     #[test]
