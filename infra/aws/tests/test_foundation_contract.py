@@ -156,6 +156,10 @@ class AwsFoundationContractTests(unittest.TestCase):
             'entryPoint             = ["/usr/local/bin/snowman-workforce-scheduler"]',
             'SNOWMAN_WORKFORCE_SCHEDULER_NOSTR_PRIVATE_KEY", valueFrom =',
             'security_groups  = [aws_security_group.scheduler.id]',
+            'for_each = var.trigger_profiles',
+            'entryPoint             = ["/usr/local/bin/snowman-workforce-trigger"]',
+            'SNOWMAN_WORKFORCE_TRIGGER_NOSTR_PRIVATE_KEY", valueFrom =',
+            'security_groups  = [aws_security_group.trigger.id]',
             'resource "aws_lb" "workforce_private"',
             'internal                   = true',
             'resource "aws_route53_zone" "workforce_private"',
@@ -164,6 +168,16 @@ class AwsFoundationContractTests(unittest.TestCase):
         self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
         self.assertNotIn('"kms:*"', source)
         self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
+
+    def test_runtime_image_contains_every_workforce_entrypoint(self) -> None:
+        source = (ROOT.parent.parent / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("-p snowman-workforce-worker --bins", source)
+        for binary in (
+            "snowman-workforce-worker",
+            "snowman-workforce-scheduler",
+            "snowman-workforce-trigger",
+        ):
+            self.assertIn(f"/usr/local/bin/{binary}", source)
 
     def test_public_edge_blocks_private_internal_api_paths(self) -> None:
         source = (ROOT / "edge.tf").read_text(encoding="utf-8")

@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 const CLAIM_PATH: &str = "/internal/snowman/v1/workforce/tasks/claim";
 const MAINTENANCE_PATH: &str = "/internal/snowman/v1/workforce/maintenance/tick";
+const SCHEDULE_CLAIM_PATH: &str = "/internal/snowman/v1/workforce/schedules/claim";
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 
 /// Bounded worker failures contain no objective, artifact body, key, or remote
@@ -160,6 +161,165 @@ impl SchedulerConfig {
             )?),
             once: env::var("SNOWMAN_WORKFORCE_SCHEDULER_ONCE").is_ok_and(|value| value == "true"),
         })
+    }
+}
+
+/// Runtime configuration for the separately scoped recurring-work trigger.
+/// It has no Analyst endpoint, model credential, AWS signing key, or task claim
+/// capability.
+pub struct TriggerConfig {
+    relay_url: Url,
+    private_key: Keys,
+    identity_id: Uuid,
+    interval: Duration,
+    once: bool,
+}
+
+impl TriggerConfig {
+    /// Load the exact trigger boundary from environment variables.
+    pub fn from_env() -> Result<Self, Error> {
+        Ok(Self {
+            relay_url: parse_snowman_origin(&required("SNOWMAN_WORKFORCE_RELAY_URL")?)?,
+            private_key: Keys::parse(&required("SNOWMAN_WORKFORCE_TRIGGER_NOSTR_PRIVATE_KEY")?)
+                .map_err(|_| Error::Configuration("trigger Nostr private key is invalid"))?,
+            identity_id: parse_uuid("SNOWMAN_WORKFORCE_TRIGGER_IDENTITY_ID")?,
+            interval: Duration::from_secs(parse_seconds(
+                "SNOWMAN_WORKFORCE_TRIGGER_INTERVAL_SECONDS",
+                30,
+                300,
+            )?),
+            once: env::var("SNOWMAN_WORKFORCE_TRIGGER_ONCE").is_ok_and(|value| value == "true"),
+        })
+    }
+}
+
+/// Always-on recurring-work trigger. It can claim a bounded proposal and send
+/// it through proactive policy; it cannot claim or execute specialist tasks.
+pub struct Trigger {
+    relay: RelayClient,
+    identity_id: Uuid,
+    interval: Duration,
+    once: bool,
+}
+
+impl Trigger {
+    /// Construct the private, Snowman-origin-only relay client.
+    pub fn new(config: TriggerConfig) -> Result<Self, Error> {
+        Ok(Self {
+            relay: RelayClient::new(config.relay_url, config.private_key)?,
+            identity_id: config.identity_id,
+            interval: config.interval,
+            once: config.once,
+        })
+    }
+
+    /// Claim and submit due occurrences until shutdown.
+    pub async fn run(&self) -> Result<(), Error> {
+        loop {
+            match self.run_once().await {
+                Ok(true) => {}
+                Ok(false) if !self.once => tokio::time::sleep(self.interval).await,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::error!(%error, identity_id=%self.identity_id, "scheduled occurrence cycle failed");
+                    if self.once {
+                        return Err(error);
+                    }
+                    tokio::time::sleep(self.interval).await;
+                }
+            }
+            if self.once {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn run_once(&self) -> Result<bool, Error> {
+        let claim_id = Uuid::new_v4();
+        let requested_at = Utc::now();
+        let response: ScheduleClaimResponse = self
+            .relay
+            .post_json(
+                SCHEDULE_CLAIM_PATH,
+                &json!({
+                    "schema_version": "snowman.work.schedule.claim.v1",
+                    "claim_id": claim_id,
+                    "requested_at": requested_at,
+                }),
+            )
+            .await?;
+        if response.schema_version != "snowman.work.schedule.claimed.v1" {
+            return Err(Error::RelayContract(
+                "schedule claim schema version is invalid",
+            ));
+        }
+        let Some(occurrence) = response.occurrence else {
+            if response
+                .retry_after_seconds
+                .is_none_or(|seconds| seconds == 0 || seconds > 300)
+            {
+                return Err(Error::RelayContract(
+                    "empty schedule claim response is inconsistent",
+                ));
+            }
+            return Ok(false);
+        };
+        validate_schedule_occurrence(&occurrence, requested_at)?;
+        let path = format!(
+            "/internal/snowman/v1/workforce/requests/{}/proactive-actions",
+            occurrence.request_id
+        );
+        let decision: ProactiveDecisionResponse = self
+            .relay
+            .post_json(
+                &path,
+                &json!({
+                    "schema_version": "snowman.proactive.proposal.v2",
+                    "action_id": occurrence.action_id,
+                    "trigger": occurrence.trigger,
+                    "capability": occurrence.capability,
+                    "executor_identity_id": occurrence.executor_identity_id,
+                    "specialist_role": occurrence.specialist_role,
+                    "instruction_reference": occurrence.instruction_reference,
+                    "context_references": occurrence.context_references,
+                    "requested_model_id": occurrence.requested_model_id,
+                    "expected_input_tokens": occurrence.expected_input_tokens,
+                    "max_output_tokens": occurrence.max_output_tokens,
+                    "expected_artifact_type": occurrence.expected_artifact_type,
+                    "max_attempts": occurrence.max_attempts,
+                    "risk_tier": occurrence.risk_tier,
+                    "reversible": occurrence.reversible,
+                    "expected_cost_microusd": occurrence.expected_cost_microusd,
+                    "confidence_basis_points": occurrence.confidence_basis_points,
+                    "usefulness_sha256": occurrence.usefulness_sha256,
+                    "source_event_sha256": occurrence.source_event_sha256,
+                    "scheduled_for": occurrence.scheduled_for,
+                    "expires_at": occurrence.expires_at,
+                    "occurred_at": occurrence.occurred_at,
+                }),
+            )
+            .await?;
+        if decision.schema_version != "snowman.proactive.decision.v2"
+            || decision.action_id != occurrence.action_id
+            || decision.request_id != occurrence.request_id
+            || !matches!(
+                decision.decision.as_str(),
+                "execute_automatically" | "await_human_approval" | "reject"
+            )
+        {
+            return Err(Error::RelayContract(
+                "proactive decision does not match the claimed occurrence",
+            ));
+        }
+        tracing::info!(
+            schedule_id=%occurrence.schedule_id,
+            occurrence_id=%occurrence.occurrence_id,
+            action_id=%occurrence.action_id,
+            decision=%decision.decision,
+            inserted=decision.inserted,
+            "scheduled occurrence passed through proactive policy"
+        );
+        Ok(true)
     }
 }
 
@@ -721,6 +881,57 @@ struct MaintenanceResponse {
     dead_lettered_tasks: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScheduleClaimResponse {
+    schema_version: String,
+    occurrence: Option<ScheduledOccurrence>,
+    #[serde(default)]
+    retry_after_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScheduledOccurrence {
+    schedule_id: Uuid,
+    occurrence_id: Uuid,
+    request_id: Uuid,
+    action_id: Uuid,
+    claim_generation: i64,
+    trigger: String,
+    executor_identity_id: Uuid,
+    specialist_role: String,
+    capability: String,
+    instruction_reference: String,
+    context_references: Vec<String>,
+    requested_model_id: Option<String>,
+    expected_input_tokens: i64,
+    max_output_tokens: i64,
+    expected_cost_microusd: i64,
+    expected_artifact_type: String,
+    risk_tier: String,
+    reversible: bool,
+    confidence_basis_points: i32,
+    usefulness_sha256: String,
+    source_event_sha256: String,
+    scheduled_for: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    max_attempts: i32,
+    occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProactiveDecisionResponse {
+    schema_version: String,
+    action_id: Uuid,
+    request_id: Uuid,
+    decision: String,
+    inserted: bool,
+    #[allow(dead_code)]
+    execution: Option<Value>,
+}
+
 struct Lease {
     lease_token: String,
     lease_generation: i64,
@@ -1210,6 +1421,72 @@ fn validate_team(team: &TeamIdentities) -> Result<(), Error> {
     Ok(())
 }
 
+fn validate_schedule_occurrence(
+    occurrence: &ScheduledOccurrence,
+    requested_at: DateTime<Utc>,
+) -> Result<(), Error> {
+    let valid_role_capability = matches!(
+        (
+            occurrence.specialist_role.as_str(),
+            occurrence.capability.as_str()
+        ),
+        ("governed_analyst", "analytics.query")
+            | ("client_delivery", "artifact.build")
+            | ("quality_risk_reviewer", "artifact.build")
+            | ("research_evidence", "evidence.manifest.read")
+    );
+    if occurrence.schedule_id.is_nil()
+        || occurrence.occurrence_id.is_nil()
+        || occurrence.request_id.is_nil()
+        || occurrence.action_id.is_nil()
+        || occurrence.executor_identity_id.is_nil()
+        || occurrence.claim_generation <= 0
+        || occurrence.trigger != "authorized_schedule"
+        || !valid_role_capability
+        || !is_context_coordinate(&occurrence.instruction_reference)
+        || occurrence.context_references.is_empty()
+        || occurrence.context_references.len() > 64
+        || !occurrence
+            .context_references
+            .iter()
+            .all(|reference| is_context_coordinate(reference))
+        || !occurrence
+            .context_references
+            .contains(&occurrence.instruction_reference)
+        || occurrence.expected_input_tokens <= 0
+        || occurrence.max_output_tokens <= 0
+        || occurrence.expected_cost_microusd < 0
+        || occurrence.expected_artifact_type.is_empty()
+        || occurrence.expected_artifact_type.len() > 128
+        || !matches!(occurrence.risk_tier.as_str(), "low" | "moderate" | "high")
+        || !(0..=10_000).contains(&occurrence.confidence_basis_points)
+        || !is_sha256(&occurrence.usefulness_sha256)
+        || !is_sha256(&occurrence.source_event_sha256)
+        || occurrence.occurred_at < requested_at - chrono::Duration::minutes(1)
+        || occurrence.occurred_at > Utc::now() + chrono::Duration::minutes(5)
+        || occurrence.scheduled_for < occurrence.occurred_at
+        || occurrence.expires_at <= occurrence.scheduled_for
+        || occurrence.expires_at > occurrence.scheduled_for + chrono::Duration::minutes(30)
+        || !(1..=20).contains(&occurrence.max_attempts)
+        || occurrence
+            .requested_model_id
+            .as_ref()
+            .is_some_and(|model| model.is_empty() || model.len() > 128 || model.contains("://"))
+    {
+        return Err(Error::RelayContract(
+            "scheduled occurrence violates trigger policy",
+        ));
+    }
+    Ok(())
+}
+
+fn is_context_coordinate(reference: &str) -> bool {
+    reference
+        .strip_prefix("analyst360:sha256:")
+        .or_else(|| reference.strip_prefix("snowman:sha256:"))
+        .is_some_and(is_sha256)
+}
+
 fn required(name: &'static str) -> Result<String, Error> {
     let value = env::var(name).map_err(|_| Error::Configuration(name))?;
     let value = value.trim().to_string();
@@ -1413,6 +1690,42 @@ mod tests {
         let instruction = specialist_instruction(&value);
         assert!(instruction.contains(&reference));
         assert!(!instruction.contains("https://"));
+    }
+
+    #[test]
+    fn scheduled_occurrence_is_bounded_to_supported_snowman_work() {
+        let now = Utc::now();
+        let reference = format!("snowman:sha256:{}", "d".repeat(64));
+        let mut occurrence = ScheduledOccurrence {
+            schedule_id: Uuid::new_v4(),
+            occurrence_id: Uuid::new_v4(),
+            request_id: Uuid::new_v4(),
+            action_id: Uuid::new_v4(),
+            claim_generation: 1,
+            trigger: "authorized_schedule".into(),
+            executor_identity_id: Uuid::new_v4(),
+            specialist_role: "governed_analyst".into(),
+            capability: "analytics.query".into(),
+            instruction_reference: reference.clone(),
+            context_references: vec![reference],
+            requested_model_id: None,
+            expected_input_tokens: 1_000,
+            max_output_tokens: 500,
+            expected_cost_microusd: 50_000,
+            expected_artifact_type: "scheduled_analysis".into(),
+            risk_tier: "low".into(),
+            reversible: true,
+            confidence_basis_points: 9_500,
+            usefulness_sha256: "a".repeat(64),
+            source_event_sha256: "b".repeat(64),
+            scheduled_for: now,
+            expires_at: now + chrono::Duration::minutes(30),
+            max_attempts: 3,
+            occurred_at: now,
+        };
+        assert!(validate_schedule_occurrence(&occurrence, now).is_ok());
+        occurrence.capability = "calendar.write".into();
+        assert!(validate_schedule_occurrence(&occurrence, now).is_err());
     }
 
     #[test]

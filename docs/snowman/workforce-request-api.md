@@ -78,6 +78,7 @@ Source support now exists for a separately addressed private worker service:
 | Route | Behavior |
 | --- | --- |
 | `POST /internal/snowman/v1/workforce/tasks/claim` | Idempotently leases the next task assigned to the authenticated service identity. |
+| `POST /internal/snowman/v1/workforce/schedules/claim` | Claims one due occurrence for the exact trigger identity with deterministic action IDs and a retryable two-minute claim fence. |
 | `POST /internal/snowman/v1/workforce/tasks/{lead_task_id}/plan` | Rehydrates server-owned request constraints, evaluates a proposed specialist DAG, selects approved models, and atomically replaces the leased lead task. |
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/heartbeat` | Renews only the matching live fencing generation and bearer lease. |
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/spend` | Records an actor-, task-, request-, model-, and provider-receipt-bound ledger entry under hard caps. |
@@ -164,9 +165,11 @@ fixed cadence (15 minutes through 30 days), a one-year end bound, and at most
 366 occurrences. The trigger identity must hold only
 `workforce.schedules.trigger` and `workforce.proactive.propose`; the executor
 must already hold the exact execution capabilities. Authorization and
-cancellation append hash-chain evidence. Source support does not yet claim
-occurrences: the separately deployed trigger runtime and staged retry proof
-remain required.
+cancellation append hash-chain evidence. The separately scoped trigger runtime
+now claims due occurrences and submits them through the v2 proactive endpoint;
+an occurrence becomes `submitted` atomically with its durable proactive
+decision. Staged lost-response, restart, revocation, and cadence proof remains
+required before activation.
 The identity-isolated worker and maintenance scheduler now implement claim,
 planning, heartbeat, governed Analyst dispatch/status, context publication,
 terminal completion, deadline enforcement, lease recovery, and dead-lettering

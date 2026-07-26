@@ -3176,6 +3176,24 @@ impl Db {
         .await
     }
 
+    /// Claim one retryable due occurrence for its exact trigger identity.
+    pub async fn claim_due_work_schedule(
+        &self,
+        community: CommunityId,
+        trigger_identity_id: Uuid,
+        claim_id: Uuid,
+        requested_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<workforce::ClaimedWorkScheduleOccurrence>> {
+        workforce::claim_due_work_schedule(
+            &self.pool,
+            community,
+            trigger_identity_id,
+            claim_id,
+            requested_at,
+        )
+        .await
+    }
+
     /// Enforce workforce deadlines and recover abandoned leases under one
     /// idempotent, evidence-preserving scheduler tick.
     pub async fn maintain_workforce(

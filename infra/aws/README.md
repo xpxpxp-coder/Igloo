@@ -60,7 +60,7 @@ root is deployable:
 2. governed database-role/key bootstrap that populates the relay runtime secret,
    AWS Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
    delivery, and tested recovery;
-3. proactive trigger poller/executor and agent sandbox; pinned specialist model
+3. staged recurring-trigger lost-response/restart proof and agent sandbox; pinned specialist model
    images/weights and staged activation of the separate `aws-inference`
    endpoint/component root; private ingress for the now-defined model-gateway
    service; plus staged activation of relay, workforce, and scheduler services;

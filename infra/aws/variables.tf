@@ -102,6 +102,36 @@ variable "scheduler_profiles" {
   }
 }
 
+variable "trigger_desired_count" {
+  type        = number
+  description = "Desired dedicated recurring-work trigger tasks."
+  default     = 0
+  validation {
+    condition     = var.trigger_desired_count >= 0 && var.trigger_desired_count <= 20
+    error_message = "trigger_desired_count must be between 0 and 20."
+  }
+}
+
+variable "trigger_profiles" {
+  description = "Per-tenant recurring-work trigger identities. Secret values are populated out of band after creation."
+  type = map(object({
+    desired_count = number
+    identity_id   = string
+    relay_url     = string
+  }))
+  default = {}
+  validation {
+    condition = alltrue([
+      for name, profile in var.trigger_profiles :
+      can(regex("^[a-z][a-z0-9-]{2,19}$", name)) &&
+      profile.desired_count >= 0 && profile.desired_count <= 1 &&
+      can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", profile.identity_id)) &&
+      can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org$", profile.relay_url))
+    ])
+    error_message = "Every trigger profile must be a singleton, bounded Snowman HTTPS service identity."
+  }
+}
+
 variable "workforce_private_ingress_enabled" {
   type        = bool
   description = "Provision the internal Snowman TLS origin used only by workforce workers and schedulers."

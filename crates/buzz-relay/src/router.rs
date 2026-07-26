@@ -100,6 +100,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(api::workforce::claim_work_task),
         )
         .route(
+            "/internal/snowman/v1/workforce/schedules/claim",
+            post(api::workforce::claim_work_schedule),
+        )
+        .route(
             "/internal/snowman/v1/workforce/maintenance/tick",
             post(api::workforce::tick_workforce_maintenance),
         )

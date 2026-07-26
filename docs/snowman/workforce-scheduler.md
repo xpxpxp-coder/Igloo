@@ -40,5 +40,31 @@ leases, spend, context, cancellation, completion, and recovery are reused rather
 than duplicated. Recurring authorization records are now human-created,
 cancellable, tenant/request bound, and hard-limited by cadence/end/occurrence
 ceilings, but this maintenance scheduler intentionally cannot claim them. The
-separately scoped trigger runtime, calendar/reminder delivery capabilities, and
-staged failure proof remain open.
+separately scoped trigger runtime now claims only schedules bound to its exact
+tenant-local identity and submits each occurrence through proactive policy. It
+has no task-claim, Analyst, model, AWS signing, or arbitrary tool authority.
+Calendar/reminder delivery capabilities and staged lost-response/restart proof
+remain open.
+
+## Recurring-work trigger
+
+`snowman-workforce-trigger` signs only private Snowman relay requests. A claim
+has a deterministic occurrence/action ID, stable retry by claim ID, and a
+two-minute recovery fence. If the process dies before proposal commit, a later
+claim reuses the same action ID with a fresh bounded proposal window. If commit
+succeeds but the response is lost, the database marks the occurrence submitted
+in the proactive insert transaction, preventing a duplicate claim. The AWS
+service is separately identified, has an empty task role, a read-only
+filesystem, dropped Linux capabilities, no public IP/NAT, and can reach only the
+private workforce ingress and required ECR/log/secret endpoints. Desired count
+is hard-zero until staged failure tests pass.
+
+After downtime, the trigger materializes at most one overdue occurrence per
+schedule and resumes cadence from the observed claim time. It never performs an
+unbounded catch-up burst of missed intervals.
+
+A rejected, failed, expired, or dead-lettered occurrence pauses its parent
+schedule in the same database trigger chain before request status is refreshed. Cancelling
+the request cancels every active or paused schedule and expires unsubmitted
+occurrences. There is intentionally no automatic resume after a failed run; a
+human must review and authorize a replacement schedule.

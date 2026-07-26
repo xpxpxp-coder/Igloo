@@ -104,9 +104,10 @@ record, not a client-side API key or direct vendor CLI.
   approvals, spend, cancellation, context, recovery, and evidence; the
   maintenance scheduler expires stale actions. Human-authorized, cancellable,
   tenant-bound recurring schedule contracts now persist only immutable
-  references and bounded execution policy. A separately scoped trigger poller,
-  calendar/reminder delivery capabilities, notifications, and staged 24/7 proof
-  remain.
+  references and bounded execution policy. A separately scoped, private-only
+  trigger runtime now converts due occurrences into the same proactive policy
+  path using deterministic IDs and reclaim fencing. Calendar/reminder delivery
+  capabilities, notifications, and staged 24/7/restart proof remain.
 - A deterministic context-manifest policy now gives replacement specialists a
   bounded, classified, content-addressed handoff contract with objective,
   provenance, evidence/artifact references, decision/open-question digests, and

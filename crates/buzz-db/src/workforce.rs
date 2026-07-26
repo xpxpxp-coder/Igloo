@@ -464,6 +464,60 @@ pub struct NewWorkSchedule {
     pub created_at: DateTime<Utc>,
 }
 
+/// Retryable, identity-bound schedule occurrence. It is only a proposal input;
+/// the proactive policy and ordinary task machinery remain execution authority.
+#[derive(Debug, Clone)]
+pub struct ClaimedWorkScheduleOccurrence {
+    /// Stable schedule identifier.
+    pub schedule_id: Uuid,
+    /// Stable occurrence identifier.
+    pub occurrence_id: Uuid,
+    /// Existing long-running request/objective.
+    pub request_id: Uuid,
+    /// Deterministic proactive action/task identifier.
+    pub action_id: Uuid,
+    /// Trigger claim fencing generation.
+    pub claim_generation: i64,
+    /// Bound executor identity.
+    pub executor_identity_id: Uuid,
+    /// Specialist role.
+    pub specialist_role: String,
+    /// Exact execution capability.
+    pub capability: String,
+    /// Immutable instruction reference.
+    pub instruction_reference: String,
+    /// Immutable context references.
+    pub context_references: Vec<String>,
+    /// Optional model preference.
+    pub requested_model_id: Option<String>,
+    /// Per-occurrence input reservation.
+    pub expected_input_tokens: i64,
+    /// Per-occurrence output ceiling.
+    pub max_output_tokens: i64,
+    /// Per-occurrence cost ceiling.
+    pub max_cost_microusd: i64,
+    /// Expected artifact type.
+    pub expected_artifact_type: String,
+    /// Risk tier.
+    pub risk_tier: String,
+    /// Whether the action is reversible.
+    pub reversible: bool,
+    /// Confidence in the usefulness basis.
+    pub confidence_basis_points: i32,
+    /// Human-reviewed usefulness digest.
+    pub usefulness_sha256: [u8; 32],
+    /// Digest of the exact authorized occurrence.
+    pub source_event_sha256: [u8; 32],
+    /// Stable proposal time for this claim generation.
+    pub proposed_at: DateTime<Utc>,
+    /// Earliest task availability.
+    pub scheduled_for: DateTime<Utc>,
+    /// Hard occurrence expiry.
+    pub expires_at: DateTime<Utc>,
+    /// Per-task retry cap.
+    pub max_attempts: i32,
+}
+
 /// Server-authoritative request envelope used to govern a planner proposal.
 #[derive(Debug, Clone)]
 pub struct WorkPlanEnvelope {
@@ -1572,6 +1626,237 @@ pub async fn cancel_work_schedule(
     Ok(changed)
 }
 
+/// Claim one due occurrence for the exact tenant-local trigger identity. Lost
+/// responses replay by `claim_id`; abandoned claims are re-fenced after expiry.
+pub async fn claim_due_work_schedule(
+    pool: &PgPool,
+    community_id: CommunityId,
+    trigger_identity_id: Uuid,
+    claim_id: Uuid,
+    requested_at: DateTime<Utc>,
+) -> Result<Option<ClaimedWorkScheduleOccurrence>> {
+    if trigger_identity_id.is_nil()
+        || claim_id.is_nil()
+        || requested_at < Utc::now() - Duration::minutes(5)
+        || requested_at > Utc::now() + Duration::minutes(5)
+    {
+        return Err(DbError::InvalidData(
+            "schedule claim identity or time is invalid".into(),
+        ));
+    }
+    let community_uuid = *community_id.as_uuid();
+    let mut tx = pool.begin().await?;
+    let authorized: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+          SELECT 1 FROM snowman_workforce_identities i
+          JOIN snowman_workforce_capability_grants g
+            ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+          WHERE i.community_id=$1 AND i.identity_id=$2 AND i.identity_type='service'
+            AND i.role='agent' AND i.status='active' AND i.revoked_at IS NULL
+            AND (i.expires_at IS NULL OR i.expires_at > NOW())
+            AND g.capability='workforce.schedules.trigger' AND g.revoked_at IS NULL
+            AND (g.expires_at IS NULL OR g.expires_at > NOW())
+        )
+        "#,
+    )
+    .bind(community_uuid)
+    .bind(trigger_identity_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !authorized {
+        return Err(DbError::AccessDenied(
+            "schedule trigger identity is not authorized".into(),
+        ));
+    }
+    sqlx::query(
+        "UPDATE snowman_work_schedule_occurrences SET status='expired', updated_at=$3 \
+         WHERE community_id=$1 AND trigger_identity_id=$2 AND status='claimed' \
+           AND expires_at <= $3",
+    )
+    .bind(community_uuid)
+    .bind(trigger_identity_id)
+    .bind(requested_at)
+    .execute(&mut *tx)
+    .await?;
+
+    let existing = sqlx::query(
+        r#"
+        SELECT o.schedule_id, o.occurrence_id, o.request_id, o.action_id,
+               o.claim_generation, o.claim_id, o.claim_expires_at,
+               o.source_event_sha256, o.proposed_at, o.scheduled_for, o.expires_at,
+               s.executor_identity_id, s.specialist_role, s.capability,
+               s.instruction_reference, s.context_references, s.requested_model_id,
+               s.expected_input_tokens, s.max_output_tokens, s.max_cost_microusd,
+               s.expected_artifact_type, s.risk_tier, s.reversible,
+               s.confidence_basis_points, s.usefulness_sha256, s.max_attempts,
+               s.ends_at
+        FROM snowman_work_schedule_occurrences o
+        JOIN snowman_work_schedules s
+          ON s.community_id=o.community_id AND s.schedule_id=o.schedule_id
+        WHERE o.community_id=$1 AND o.trigger_identity_id=$2 AND o.status='claimed'
+          AND s.ends_at > $4
+          AND (o.claim_id=$3 OR o.claim_expires_at <= $4)
+        ORDER BY (o.claim_id=$3) DESC, o.due_at, o.occurrence_id
+        LIMIT 1 FOR UPDATE OF o SKIP LOCKED
+        "#,
+    )
+    .bind(community_uuid)
+    .bind(trigger_identity_id)
+    .bind(claim_id)
+    .bind(requested_at)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(row) = existing {
+        let replay = row.try_get::<Option<Uuid>, _>("claim_id")? == Some(claim_id);
+        let row = if replay {
+            row
+        } else {
+            let reclaimed_expires_at = (requested_at + Duration::minutes(30))
+                .min(row.try_get::<DateTime<Utc>, _>("ends_at")?);
+            sqlx::query(
+                r#"
+                UPDATE snowman_work_schedule_occurrences
+                SET claim_id=$4, claim_generation=claim_generation+1,
+                    proposed_at=$5, scheduled_for=$5, expires_at=$6,
+                    claim_expires_at=$7, updated_at=$5
+                WHERE community_id=$1 AND occurrence_id=$2 AND trigger_identity_id=$3
+                RETURNING schedule_id, occurrence_id, request_id, action_id,
+                          claim_generation, claim_id, claim_expires_at,
+                          source_event_sha256, proposed_at, scheduled_for, expires_at
+                "#,
+            )
+            .bind(community_uuid)
+            .bind(row.try_get::<Uuid, _>("occurrence_id")?)
+            .bind(trigger_identity_id)
+            .bind(claim_id)
+            .bind(requested_at)
+            .bind(reclaimed_expires_at)
+            .bind(requested_at + Duration::minutes(2))
+            .fetch_one(&mut *tx)
+            .await?
+        };
+        let schedule_id: Uuid = row.try_get("schedule_id")?;
+        let schedule = sqlx::query(
+            r#"
+            SELECT executor_identity_id, specialist_role, capability,
+                   instruction_reference, context_references, requested_model_id,
+                   expected_input_tokens, max_output_tokens, max_cost_microusd,
+                   expected_artifact_type, risk_tier, reversible,
+                   confidence_basis_points, usefulness_sha256, max_attempts
+            FROM snowman_work_schedules
+            WHERE community_id=$1 AND schedule_id=$2 AND trigger_identity_id=$3
+            "#,
+        )
+        .bind(community_uuid)
+        .bind(schedule_id)
+        .bind(trigger_identity_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let claimed = schedule_occurrence_from_rows(&row, &schedule)?;
+        tx.commit().await?;
+        return Ok(Some(claimed));
+    }
+
+    let schedule = sqlx::query(
+        r#"
+        SELECT s.* FROM snowman_work_schedules s
+        JOIN snowman_work_requests r
+          ON r.community_id=s.community_id AND r.request_id=s.request_id
+        WHERE s.community_id=$1 AND s.trigger_identity_id=$2 AND s.status='active'
+          AND s.next_run_at <= $3 AND s.next_run_at <= s.ends_at
+          AND s.ends_at > $3
+          AND s.occurrence_count < s.max_occurrences
+          AND r.status IN ('requested','planned','running','awaiting_approval','reviewing')
+        ORDER BY s.next_run_at, s.schedule_id
+        LIMIT 1 FOR UPDATE OF s SKIP LOCKED
+        "#,
+    )
+    .bind(community_uuid)
+    .bind(trigger_identity_id)
+    .bind(requested_at)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(schedule) = schedule else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let schedule_id: Uuid = schedule.try_get("schedule_id")?;
+    let request_id: Uuid = schedule.try_get("request_id")?;
+    let due_at: DateTime<Utc> = schedule.try_get("next_run_at")?;
+    let occurrence_number = schedule.try_get::<i32, _>("occurrence_count")? + 1;
+    let occurrence_id = schedule_occurrence_uuid(
+        b"snowman.schedule-occurrence.v1\0",
+        schedule_id,
+        occurrence_number,
+        due_at,
+    );
+    let action_id = schedule_occurrence_uuid(
+        b"snowman.schedule-action.v1\0",
+        schedule_id,
+        occurrence_number,
+        due_at,
+    );
+    let schedule_sha256: Vec<u8> = schedule.try_get("schedule_sha256")?;
+    let mut source_hasher = Sha256::new();
+    source_hasher.update(b"snowman.schedule-source-event.v1\0");
+    update_digest_field(&mut source_hasher, &schedule_sha256);
+    update_digest_field(&mut source_hasher, occurrence_id.as_bytes());
+    update_digest_field(&mut source_hasher, &due_at.timestamp_micros().to_be_bytes());
+    let source_event_sha256: [u8; 32] = source_hasher.finalize().into();
+    let ends_at: DateTime<Utc> = schedule.try_get("ends_at")?;
+    let expires_at = (requested_at + Duration::minutes(30)).min(ends_at);
+    let claim_expires_at = requested_at + Duration::minutes(2);
+    let occurrence = sqlx::query(
+        r#"
+        INSERT INTO snowman_work_schedule_occurrences
+          (community_id, occurrence_id, schedule_id, request_id, action_id,
+           trigger_identity_id, claim_id, due_at, proposed_at, scheduled_for,
+           expires_at, source_event_sha256, claim_expires_at, created_at, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$9,$9)
+        RETURNING schedule_id, occurrence_id, request_id, action_id,
+                  claim_generation, claim_id, claim_expires_at,
+                  source_event_sha256, proposed_at, scheduled_for, expires_at
+        "#,
+    )
+    .bind(community_uuid)
+    .bind(occurrence_id)
+    .bind(schedule_id)
+    .bind(request_id)
+    .bind(action_id)
+    .bind(trigger_identity_id)
+    .bind(claim_id)
+    .bind(due_at)
+    .bind(requested_at)
+    .bind(expires_at)
+    .bind(source_event_sha256.as_slice())
+    .bind(claim_expires_at)
+    .fetch_one(&mut *tx)
+    .await?;
+    let cadence = Duration::seconds(i64::from(schedule.try_get::<i32, _>("cadence_seconds")?));
+    // Do not replay every missed interval after downtime. One overdue run is
+    // materialized, then cadence resumes from the observed claim time.
+    let next_run_at = (due_at + cadence).max(requested_at + cadence);
+    let completed = occurrence_number >= schedule.try_get::<i32, _>("max_occurrences")?
+        || next_run_at > ends_at;
+    sqlx::query(
+        "UPDATE snowman_work_schedules SET occurrence_count=$3, next_run_at=$4, \
+         status=CASE WHEN $5 THEN 'completed' ELSE status END, updated_at=$6 \
+         WHERE community_id=$1 AND schedule_id=$2",
+    )
+    .bind(community_uuid)
+    .bind(schedule_id)
+    .bind(occurrence_number)
+    .bind(next_run_at)
+    .bind(completed)
+    .bind(requested_at)
+    .execute(&mut *tx)
+    .await?;
+    let claimed = schedule_occurrence_from_rows(&occurrence, &schedule)?;
+    tx.commit().await?;
+    Ok(Some(claimed))
+}
+
 /// Evaluate and durably record one proactive next-useful action exactly once.
 ///
 /// Automatic execution is only a queue decision. A later worker still needs
@@ -2607,6 +2892,25 @@ pub async fn cancel_work_request(
     .bind(cancellation.request_id)
     .execute(&mut *tx)
     .await?;
+    let cancelled_schedules = sqlx::query(
+        "UPDATE snowman_work_schedules SET status='cancelled', updated_at=$3 \
+         WHERE community_id=$1 AND request_id=$2 AND status IN ('active','paused') \
+         RETURNING schedule_id",
+    )
+    .bind(community_id)
+    .bind(cancellation.request_id)
+    .bind(cancellation.occurred_at)
+    .fetch_all(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE snowman_work_schedule_occurrences SET status='expired', updated_at=$3 \
+         WHERE community_id=$1 AND request_id=$2 AND status='claimed'",
+    )
+    .bind(community_id)
+    .bind(cancellation.request_id)
+    .bind(cancellation.occurred_at)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         "UPDATE snowman_work_requests SET status='cancelled', updated_at=NOW() \
          WHERE community_id=$1 AND request_id=$2",
@@ -2626,6 +2930,7 @@ pub async fn cancel_work_request(
             "schema_version": "snowman.work.event.v1",
             "reason_code": cancellation.reason_code,
             "cancelled_task_count": cancelled_task_count,
+            "cancelled_schedule_count": cancelled_schedules.len(),
             "leases_invalidated": true,
         }),
         occurred_at: cancellation.occurred_at,
@@ -4529,6 +4834,57 @@ fn sha256(value: &[u8]) -> [u8; 32] {
     Sha256::digest(value).into()
 }
 
+fn schedule_occurrence_uuid(
+    domain: &[u8],
+    schedule_id: Uuid,
+    occurrence_number: i32,
+    due_at: DateTime<Utc>,
+) -> Uuid {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    update_digest_field(&mut hasher, schedule_id.as_bytes());
+    update_digest_field(&mut hasher, &occurrence_number.to_be_bytes());
+    update_digest_field(&mut hasher, &due_at.timestamp_micros().to_be_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+fn schedule_occurrence_from_rows(
+    occurrence: &sqlx::postgres::PgRow,
+    schedule: &sqlx::postgres::PgRow,
+) -> Result<ClaimedWorkScheduleOccurrence> {
+    Ok(ClaimedWorkScheduleOccurrence {
+        schedule_id: occurrence.try_get("schedule_id")?,
+        occurrence_id: occurrence.try_get("occurrence_id")?,
+        request_id: occurrence.try_get("request_id")?,
+        action_id: occurrence.try_get("action_id")?,
+        claim_generation: occurrence.try_get("claim_generation")?,
+        executor_identity_id: schedule.try_get("executor_identity_id")?,
+        specialist_role: schedule.try_get("specialist_role")?,
+        capability: schedule.try_get("capability")?,
+        instruction_reference: schedule.try_get("instruction_reference")?,
+        context_references: schedule.try_get("context_references")?,
+        requested_model_id: schedule.try_get("requested_model_id")?,
+        expected_input_tokens: schedule.try_get("expected_input_tokens")?,
+        max_output_tokens: schedule.try_get("max_output_tokens")?,
+        max_cost_microusd: schedule.try_get("max_cost_microusd")?,
+        expected_artifact_type: schedule.try_get("expected_artifact_type")?,
+        risk_tier: schedule.try_get("risk_tier")?,
+        reversible: schedule.try_get("reversible")?,
+        confidence_basis_points: schedule.try_get("confidence_basis_points")?,
+        usefulness_sha256: vec_to_sha256(schedule.try_get("usefulness_sha256")?)?,
+        source_event_sha256: vec_to_sha256(occurrence.try_get("source_event_sha256")?)?,
+        proposed_at: occurrence.try_get("proposed_at")?,
+        scheduled_for: occurrence.try_get("scheduled_for")?,
+        expires_at: occurrence.try_get("expires_at")?,
+        max_attempts: schedule.try_get("max_attempts")?,
+    })
+}
+
 fn maintenance_event_id(tick_id: Uuid, event_type: &str, target_id: Uuid, payload: &Value) -> Uuid {
     let mut hasher = Sha256::new();
     hasher.update(b"snowman.workforce.maintenance-event.v1\0");
@@ -4712,6 +5068,26 @@ mod tests {
             )
         );
         assert_eq!(event_id.get_version_num(), 5);
+    }
+
+    #[test]
+    fn schedule_occurrence_ids_are_deterministic_and_domain_bound() {
+        let schedule = Uuid::from_u128(42);
+        let due_at = "2026-07-27T00:00:00Z".parse().unwrap();
+        let occurrence =
+            schedule_occurrence_uuid(b"snowman.schedule-occurrence.v1\0", schedule, 3, due_at);
+        assert_eq!(
+            occurrence,
+            schedule_occurrence_uuid(b"snowman.schedule-occurrence.v1\0", schedule, 3, due_at)
+        );
+        assert_ne!(
+            occurrence,
+            schedule_occurrence_uuid(b"snowman.schedule-action.v1\0", schedule, 3, due_at)
+        );
+        assert_ne!(
+            occurrence,
+            schedule_occurrence_uuid(b"snowman.schedule-occurrence.v1\0", schedule, 4, due_at)
+        );
     }
 
     #[test]

@@ -5,6 +5,9 @@ locals {
   configured_scheduler_desired_count = sum(concat(
     [0], [for profile in values(var.scheduler_profiles) : profile.desired_count]
   ))
+  configured_trigger_desired_count = sum(concat(
+    [0], [for profile in values(var.trigger_profiles) : profile.desired_count]
+  ))
 }
 
 check "workforce_profile_boundary" {
@@ -17,6 +20,10 @@ check "workforce_profile_boundary" {
     error_message = "scheduler_desired_count must exactly equal the sum of per-identity scheduler profile counts."
   }
   assert {
+    condition     = local.configured_trigger_desired_count == var.trigger_desired_count
+    error_message = "trigger_desired_count must exactly equal the sum of per-identity trigger profile counts."
+  }
+  assert {
     condition = alltrue([
       for profile in values(var.workforce_profiles) :
       split(":", profile.analyst_signing_key_arn)[3] == var.aws_region &&
@@ -27,9 +34,10 @@ check "workforce_profile_boundary" {
   assert {
     condition = length(distinct(concat(
       [for profile in values(var.workforce_profiles) : profile.identity_id],
-      [for profile in values(var.scheduler_profiles) : profile.identity_id]
-    ))) == length(var.workforce_profiles) + length(var.scheduler_profiles)
-    error_message = "Worker and scheduler profiles must use distinct service identities."
+      [for profile in values(var.scheduler_profiles) : profile.identity_id],
+      [for profile in values(var.trigger_profiles) : profile.identity_id]
+    ))) == length(var.workforce_profiles) + length(var.scheduler_profiles) + length(var.trigger_profiles)
+    error_message = "Worker, scheduler, and trigger profiles must use distinct service identities."
   }
   assert {
     condition = length(distinct([
@@ -56,13 +64,14 @@ check "workforce_profile_boundary" {
   assert {
     condition = alltrue(concat(
       [for profile in values(var.workforce_profiles) : contains(var.workforce_private_hostnames, trimprefix(profile.relay_url, "https://"))],
-      [for profile in values(var.scheduler_profiles) : contains(var.workforce_private_hostnames, trimprefix(profile.relay_url, "https://"))]
+      [for profile in values(var.scheduler_profiles) : contains(var.workforce_private_hostnames, trimprefix(profile.relay_url, "https://"))],
+      [for profile in values(var.trigger_profiles) : contains(var.workforce_private_hostnames, trimprefix(profile.relay_url, "https://"))]
     ))
     error_message = "Every private workforce caller must use an exact allowlisted Snowman hostname protected by internal TLS and split-horizon DNS."
   }
   assert {
     condition = (
-      (var.worker_desired_count == 0 && var.scheduler_desired_count == 0) ||
+      (var.worker_desired_count == 0 && var.scheduler_desired_count == 0 && var.trigger_desired_count == 0) ||
       (
         var.workforce_private_ingress_enabled &&
         length(var.workforce_private_hostnames) > 0 &&
@@ -71,7 +80,7 @@ check "workforce_profile_boundary" {
         var.relay_desired_count > 0
       )
     )
-    error_message = "Active workers or schedulers require the governed workforce APIs, private TLS relay origin, and at least one relay task."
+    error_message = "Active workers, schedulers, or triggers require the governed workforce APIs, private TLS relay origin, and at least one relay task."
   }
 }
 
@@ -488,6 +497,159 @@ resource "aws_ecs_service" "workforce_scheduler" {
   network_configuration {
     subnets          = [for key in sort(keys(aws_subnet.private)) : aws_subnet.private[key].id]
     security_groups  = [aws_security_group.scheduler.id]
+    assign_public_ip = false
+  }
+}
+
+resource "aws_secretsmanager_secret" "workforce_trigger_identity" {
+  for_each = var.trigger_profiles
+
+  name                    = "/snowman/command-center/${var.environment}/workforce-trigger/${each.key}"
+  description             = "Nostr private key for one proposal-only Snowman recurring-work trigger"
+  kms_key_id              = aws_kms_key.data.arn
+  recovery_window_in_days = 30
+}
+
+resource "aws_iam_role" "workforce_trigger_execution" {
+  for_each = var.trigger_profiles
+
+  name               = "${local.workload_name}-trigger-${each.key}-execution"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_trust.json
+}
+
+data "aws_iam_policy_document" "workforce_trigger_execution" {
+  for_each = var.trigger_profiles
+
+  statement {
+    sid       = "EcrAuthorization"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    sid    = "ExactImageRepository"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = ["arn:${data.aws_partition.current.partition}:ecr:${var.aws_region}:${var.expected_workload_account_id}:repository/snowman-command-center"]
+  }
+  statement {
+    sid       = "ExactTriggerSecret"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.workforce_trigger_identity[each.key].arn]
+  }
+  statement {
+    sid       = "TriggerSecretKey"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.data.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${var.aws_region}.amazonaws.com"]
+    }
+  }
+  statement {
+    sid       = "TriggerLogs"
+    effect    = "Allow"
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.runtime["workforce-trigger"].arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "workforce_trigger_execution" {
+  for_each = var.trigger_profiles
+
+  name   = "exact-image-secret-and-logs"
+  role   = aws_iam_role.workforce_trigger_execution[each.key].id
+  policy = data.aws_iam_policy_document.workforce_trigger_execution[each.key].json
+}
+
+resource "aws_iam_role" "workforce_trigger_task" {
+  for_each = var.trigger_profiles
+
+  name               = "${local.workload_name}-trigger-${each.key}-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_trust.json
+}
+
+resource "aws_ecs_task_definition" "workforce_trigger" {
+  for_each = var.trigger_profiles
+
+  family                   = "${local.workload_name}-trigger-${each.key}"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.workforce_trigger_execution[each.key].arn
+  task_role_arn            = aws_iam_role.workforce_trigger_task[each.key].arn
+
+  runtime_platform {
+    cpu_architecture        = "ARM64"
+    operating_system_family = "LINUX"
+  }
+
+  container_definitions = jsonencode([{
+    name                   = "trigger-${each.key}"
+    image                  = var.container_image
+    essential              = true
+    readonlyRootFilesystem = true
+    user                   = "10001"
+    entryPoint             = ["/usr/local/bin/snowman-workforce-trigger"]
+    stopTimeout            = 30
+    linuxParameters = {
+      initProcessEnabled = true
+      capabilities       = { drop = ["ALL"] }
+    }
+    environment = [
+      { name = "RUST_LOG", value = "snowman_workforce_trigger=info" },
+      { name = "SNOWMAN_WORKFORCE_RELAY_URL", value = each.value.relay_url },
+      { name = "SNOWMAN_WORKFORCE_TRIGGER_IDENTITY_ID", value = each.value.identity_id },
+      { name = "SNOWMAN_WORKFORCE_TRIGGER_INTERVAL_SECONDS", value = "30" },
+    ]
+    secrets = [
+      { name = "SNOWMAN_WORKFORCE_TRIGGER_NOSTR_PRIVATE_KEY", valueFrom = "${aws_secretsmanager_secret.workforce_trigger_identity[each.key].arn}:SNOWMAN_WORKFORCE_TRIGGER_NOSTR_PRIVATE_KEY::" },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.runtime["workforce-trigger"].name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = each.key
+        mode                  = "non-blocking"
+        max-buffer-size       = "1m"
+      }
+    }
+  }])
+
+  lifecycle {
+    precondition {
+      condition     = each.value.desired_count == 0
+      error_message = "Trigger profiles remain hard-zero until private relay and staged lost-response tests pass."
+    }
+  }
+}
+
+resource "aws_ecs_service" "workforce_trigger" {
+  for_each = var.trigger_profiles
+
+  name            = "${local.workload_name}-trigger-${each.key}"
+  cluster         = aws_ecs_cluster.command_center.id
+  task_definition = aws_ecs_task_definition.workforce_trigger[each.key].arn
+  desired_count   = each.value.desired_count
+  launch_type     = "FARGATE"
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    subnets          = [for key in sort(keys(aws_subnet.private)) : aws_subnet.private[key].id]
+    security_groups  = [aws_security_group.trigger.id]
     assign_public_ip = false
   }
 }

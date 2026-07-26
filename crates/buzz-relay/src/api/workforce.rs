@@ -87,6 +87,14 @@ struct MaintenanceTickRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ClaimWorkScheduleRequest {
+    schema_version: String,
+    claim_id: Uuid,
+    requested_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LeaseProof {
     generation: i64,
     lease_token: String,
@@ -997,6 +1005,93 @@ pub async fn claim_work_task(
             "risk_tier": task.risk_tier,
             "reversible": task.reversible,
             "approval_required": task.approval_required,
+        }
+    })))
+}
+
+/// Claim one due recurring occurrence for the exact trigger identity. The
+/// response is a bounded proactive proposal and never direct task authority.
+pub async fn claim_work_schedule(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/schedules/claim");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.schedules.trigger",
+        "service",
+    )
+    .await?;
+    let input: ClaimWorkScheduleRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid schedule claim JSON"))?;
+    if input.schema_version != "snowman.work.schedule.claim.v1"
+        || input.claim_id.is_nil()
+        || !is_recent_maintenance_time(input.requested_at)
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "schedule claim has an invalid schema, identity, or time",
+        ));
+    }
+    let occurrence = state
+        .db
+        .claim_due_work_schedule(
+            tenant.community(),
+            principal.identity_id,
+            input.claim_id,
+            input.requested_at,
+        )
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "schedule claim conflicts with trigger identity or schedule lifecycle",
+            ),
+            _ => internal_error("work schedule claim failed"),
+        })?;
+    let Some(occurrence) = occurrence else {
+        return Ok(Json(json!({
+            "schema_version": "snowman.work.schedule.claimed.v1",
+            "occurrence": null,
+            "retry_after_seconds": 30,
+        })));
+    };
+    metrics::counter!("snowman_workforce_schedule_claims_total", "outcome" => "claimed")
+        .increment(1);
+    Ok(Json(json!({
+        "schema_version": "snowman.work.schedule.claimed.v1",
+        "occurrence": {
+            "schedule_id": occurrence.schedule_id,
+            "occurrence_id": occurrence.occurrence_id,
+            "request_id": occurrence.request_id,
+            "action_id": occurrence.action_id,
+            "claim_generation": occurrence.claim_generation,
+            "trigger": "authorized_schedule",
+            "executor_identity_id": occurrence.executor_identity_id,
+            "specialist_role": occurrence.specialist_role,
+            "capability": occurrence.capability,
+            "instruction_reference": occurrence.instruction_reference,
+            "context_references": occurrence.context_references,
+            "requested_model_id": occurrence.requested_model_id,
+            "expected_input_tokens": occurrence.expected_input_tokens,
+            "max_output_tokens": occurrence.max_output_tokens,
+            "expected_cost_microusd": occurrence.max_cost_microusd,
+            "expected_artifact_type": occurrence.expected_artifact_type,
+            "risk_tier": occurrence.risk_tier,
+            "reversible": occurrence.reversible,
+            "confidence_basis_points": occurrence.confidence_basis_points,
+            "usefulness_sha256": hex::encode(occurrence.usefulness_sha256),
+            "source_event_sha256": hex::encode(occurrence.source_event_sha256),
+            "scheduled_for": occurrence.scheduled_for,
+            "expires_at": occurrence.expires_at,
+            "max_attempts": occurrence.max_attempts,
+            "occurred_at": occurrence.proposed_at,
         }
     })))
 }

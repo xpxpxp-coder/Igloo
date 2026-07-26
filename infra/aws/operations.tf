@@ -3,6 +3,7 @@ locals {
     "relay",
     "workforce-worker",
     "workforce-scheduler",
+    "workforce-trigger",
     "model-gateway",
     "inference",
     "migration",
