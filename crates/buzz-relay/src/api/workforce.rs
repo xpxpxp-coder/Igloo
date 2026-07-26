@@ -15,12 +15,14 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, KeyInit, Mac};
+use nostr::{EventBuilder, Kind, Tag, Timestamp};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use buzz_auth::LimitType;
+use buzz_core::kind::KIND_STREAM_REMINDER;
 use buzz_db::workforce::{
     NewContextPacket, NewPlannedTask, NewProactiveAction, NewWorkPlan, NewWorkRequest,
     NewWorkSchedule, NewWorkTask, SpendEntry, StoredContextPacket, StoredModelRoute, WorkApproval,
@@ -32,7 +34,7 @@ use snowman_workforce::{
     ProactiveDecision, ProactiveTrigger, RiskTier, SpecialistRole,
 };
 
-use crate::{authorization, state::AppState};
+use crate::{authorization, handlers::event::dispatch_persistent_event, state::AppState};
 
 use super::{api_error, bridge, internal_error, relay_members};
 
@@ -147,6 +149,15 @@ struct FinishWorkTaskRequest {
     #[serde(default)]
     failure_code: Option<String>,
     occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeliverWorkReminderRequest {
+    schema_version: String,
+    delivery_id: Uuid,
+    generation: i64,
+    lease_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -973,6 +984,13 @@ pub async fn claim_work_task(
         })));
     };
     metrics::counter!("snowman_workforce_task_claims_total", "outcome" => "leased").increment(1);
+    let objective = if task.specialist_role == "deadline_operations" {
+        // The reminder runtime needs no user objective. Keep raw request text
+        // outside this separately scoped local-delivery process.
+        "Deliver the governed Snowman work reminder.".to_string()
+    } else {
+        task.objective.clone()
+    };
     Ok(Json(json!({
         "schema_version": "snowman.work.lease.v1",
         "lease_token": URL_SAFE_NO_PAD.encode(lease_token),
@@ -982,7 +1000,7 @@ pub async fn claim_work_task(
             "request_id": task.request_id,
             "task_id": task.task_id,
             "claim_id": task.claim_id,
-            "objective": task.objective,
+            "objective": objective,
             "request_contract_sha256": hex::encode(task.request_contract_sha256),
             "classification": task.classification,
             "request_created_at": task.request_created_at,
@@ -1423,10 +1441,10 @@ pub async fn propose_proactive_action(
         }
         let mut context_references = input.context_references.clone();
         context_references.insert(input.instruction_reference.clone());
-        let mut required_capabilities = BTreeSet::from([
-            input.capability.clone(),
-            "workforce.context.write".to_string(),
-        ]);
+        let mut required_capabilities = BTreeSet::from([input.capability.clone()]);
+        if input.specialist_role != SpecialistRole::DeadlineOperations {
+            required_capabilities.insert("workforce.context.write".to_string());
+        }
         if input.specialist_role == SpecialistRole::QualityRiskReviewer {
             required_capabilities.insert("artifact.review".to_string());
         }
@@ -2010,6 +2028,199 @@ pub async fn finish_work_task(
     })))
 }
 
+/// Deliver one fixed, metadata-only Snowman reminder to the human who created
+/// the request, then complete the exact fenced `deadline_operations` task.
+/// The worker supplies neither text nor recipients; the relay derives both.
+pub async fn deliver_work_reminder(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/tasks/{task_id}/reminder");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.tasks.execute",
+        "service",
+    )
+    .await?;
+    let input: DeliverWorkReminderRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid reminder delivery JSON"))?;
+    if input.schema_version != "snowman.work.reminder.deliver.v1"
+        || task_id.is_nil()
+        || input.delivery_id.is_nil()
+        || input.generation <= 0
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "reminder delivery has an invalid schema, identity, or generation",
+        ));
+    }
+    let lease_token_sha256 = decode_lease_token(&input.lease_token)?;
+    let prepared = state
+        .db
+        .prepare_work_reminder(
+            tenant.community(),
+            input.delivery_id,
+            task_id,
+            principal.identity_id,
+            input.generation,
+            lease_token_sha256,
+        )
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "reminder task has no live authorized lease or active Snowman recipient device",
+            ),
+            _ => internal_error("work reminder preparation failed"),
+        })?;
+
+    let mut tags = Vec::with_capacity(prepared.target_pubkeys.len() + 4);
+    for target in &prepared.target_pubkeys {
+        let target_hex = hex::encode(target);
+        tags.push(
+            Tag::parse(["p", target_hex.as_str()])
+                .map_err(|_| internal_error("work reminder recipient tag is invalid"))?,
+        );
+    }
+    let request_id = prepared.request_id.to_string();
+    let task_id_text = task_id.to_string();
+    let delivery_id = input.delivery_id.to_string();
+    tags.push(
+        Tag::parse(["snowman:work-request", request_id.as_str()])
+            .map_err(|_| internal_error("work reminder request tag is invalid"))?,
+    );
+    tags.push(
+        Tag::parse(["snowman:work-task", task_id_text.as_str()])
+            .map_err(|_| internal_error("work reminder task tag is invalid"))?,
+    );
+    tags.push(
+        Tag::parse(["snowman:delivery", delivery_id.as_str()])
+            .map_err(|_| internal_error("work reminder delivery tag is invalid"))?,
+    );
+    tags.push(
+        Tag::parse(["alt", "Snowman work reminder"])
+            .map_err(|_| internal_error("work reminder accessibility tag is invalid"))?,
+    );
+    let event_seconds = u64::try_from(prepared.event_created_at.timestamp())
+        .map_err(|_| internal_error("work reminder time is invalid"))?;
+    let event = EventBuilder::new(
+        Kind::Custom(KIND_STREAM_REMINDER as u16),
+        "Snowman work is ready for your review.",
+    )
+    .tags(tags)
+    .custom_created_at(Timestamp::from(event_seconds))
+    .sign_with_keys(&state.relay_keypair)
+    .map_err(|_| internal_error("work reminder signing failed"))?;
+    let event_id: [u8; 32] = event.id.to_bytes();
+    if prepared
+        .nostr_event_id
+        .is_some_and(|recorded| recorded != event_id)
+    {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "prepared reminder does not match its recorded event",
+        ));
+    }
+    let (stored, _) = state
+        .db
+        .insert_event(tenant.community(), &event, None)
+        .await
+        .map_err(|_| internal_error("work reminder persistence failed"))?;
+    let recorded = state
+        .db
+        .record_work_reminder_event(
+            tenant.community(),
+            input.delivery_id,
+            principal.identity_id,
+            event_id,
+            Utc::now(),
+        )
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "work reminder receipt conflicts with its prepared delivery",
+            ),
+            _ => internal_error("work reminder receipt persistence failed"),
+        })?;
+    if recorded {
+        let _ = dispatch_persistent_event(
+            &tenant,
+            &state,
+            &stored,
+            KIND_STREAM_REMINDER,
+            &state.relay_keypair.public_key().to_hex(),
+            None,
+        )
+        .await;
+    }
+
+    let completion_id = uuid_from_digest(domain_digest(
+        b"snowman.work-reminder-completion.v1\0",
+        &[
+            tenant.community().as_uuid().as_bytes(),
+            task_id.as_bytes(),
+            input.delivery_id.as_bytes(),
+            event_id.as_slice(),
+        ],
+    ));
+    let event_id_hex = hex::encode(event_id);
+    let completion = WorkTaskCompletion {
+        completion_id,
+        task_id,
+        worker_identity_id: principal.identity_id,
+        generation: input.generation,
+        lease_token_sha256,
+        succeeded: true,
+        result_payload: json!({
+            "result_sha256": event_id_hex,
+            "artifact_references": [format!("snowman:sha256:{event_id_hex}")],
+            "failure_code": null,
+            "delivery_id": input.delivery_id,
+            "recipient_count": prepared.target_pubkeys.len(),
+        }),
+        occurred_at: prepared.event_created_at,
+    };
+    let finished = state
+        .db
+        .finish_work_task(tenant.community(), &completion)
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "reminder completion violates its task lease or evidence policy",
+            ),
+            _ => internal_error("work reminder task completion failed"),
+        })?;
+    if !finished {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "reminder task lease is stale, expired, or owned by another worker",
+        ));
+    }
+    metrics::counter!(
+        "snowman_workforce_reminders_total",
+        "outcome" => if recorded { "delivered" } else { "idempotent_replay" }
+    )
+    .increment(1);
+    Ok(Json(json!({
+        "schema_version": "snowman.work.reminder.delivered.v1",
+        "delivery_id": input.delivery_id,
+        "request_id": prepared.request_id,
+        "task_id": task_id,
+        "event_id": event_id_hex,
+        "recipient_count": prepared.target_pubkeys.len(),
+        "status": "succeeded",
+    })))
+}
+
 fn parse_classification(value: &str) -> Option<Classification> {
     match value {
         "internal" => Some(Classification::Internal),
@@ -2048,6 +2259,7 @@ fn valid_proactive_executor(role: SpecialistRole, capability: &str) -> bool {
             | (SpecialistRole::ClientDelivery, "artifact.build")
             | (SpecialistRole::QualityRiskReviewer, "artifact.build")
             | (SpecialistRole::ResearchEvidence, "evidence.manifest.read")
+            | (SpecialistRole::DeadlineOperations, "deadline.remind")
     )
 }
 
@@ -2166,6 +2378,14 @@ fn domain_digest(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
         hasher.update(field);
     }
     hasher.finalize().into()
+}
+
+fn uuid_from_digest(mut digest: [u8; 32]) -> Uuid {
+    digest[6] = (digest[6] & 0x0f) | 0x50;
+    digest[8] = (digest[8] & 0x3f) | 0x80;
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    Uuid::from_bytes(bytes)
 }
 
 fn require_worker_api(state: &AppState) -> Result<(), (StatusCode, Json<Value>)> {
@@ -2575,6 +2795,10 @@ mod tests {
             SpecialistRole::ClientDelivery,
             "artifact.build"
         ));
+        assert!(valid_proactive_executor(
+            SpecialistRole::DeadlineOperations,
+            "deadline.remind"
+        ));
         assert!(!valid_proactive_executor(
             SpecialistRole::GovernedAnalyst,
             "artifact.build"
@@ -2583,5 +2807,14 @@ mod tests {
             SpecialistRole::DeadlineOperations,
             "calendar.write"
         ));
+        let first = uuid_from_digest(domain_digest(b"test\0", &[b"same"]));
+        assert_eq!(
+            first,
+            uuid_from_digest(domain_digest(b"test\0", &[b"same"]))
+        );
+        assert_ne!(
+            first,
+            uuid_from_digest(domain_digest(b"test\0", &[b"other"]))
+        );
     }
 }

@@ -153,6 +153,12 @@ resource "aws_security_group" "trigger" {
   vpc_id      = aws_vpc.command_center.id
 }
 
+resource "aws_security_group" "reminder" {
+  name        = "${local.workload_name}-reminder"
+  description = "Fixed Snowman-local reminder delivery only; no Analyst or model route"
+  vpc_id      = aws_vpc.command_center.id
+}
+
 resource "aws_security_group" "workforce_ingress" {
   name        = "${local.workload_name}-workforce-ingress"
   description = "Private TLS ingress for Snowman workforce service identities"
@@ -228,6 +234,7 @@ resource "aws_vpc_security_group_ingress_rule" "workforce_ingress_from_services"
     worker    = aws_security_group.worker.id
     scheduler = aws_security_group.scheduler.id
     trigger   = aws_security_group.trigger.id
+    reminder  = aws_security_group.reminder.id
   }
 
   security_group_id            = aws_security_group.workforce_ingress.id
@@ -242,6 +249,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_workforce_ingress" {
     worker    = aws_security_group.worker.id
     scheduler = aws_security_group.scheduler.id
     trigger   = aws_security_group.trigger.id
+    reminder  = aws_security_group.reminder.id
   }
 
   security_group_id            = each.value
@@ -369,6 +377,7 @@ resource "aws_vpc_security_group_ingress_rule" "endpoints_from_services" {
     worker        = aws_security_group.worker.id
     scheduler     = aws_security_group.scheduler.id
     trigger       = aws_security_group.trigger.id
+    reminder      = aws_security_group.reminder.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -386,6 +395,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_endpoints" {
     worker        = aws_security_group.worker.id
     scheduler     = aws_security_group.scheduler.id
     trigger       = aws_security_group.trigger.id
+    reminder      = aws_security_group.reminder.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -403,6 +413,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_udp" {
     worker        = aws_security_group.worker.id
     scheduler     = aws_security_group.scheduler.id
     trigger       = aws_security_group.trigger.id
+    reminder      = aws_security_group.reminder.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -420,6 +431,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_tcp" {
     worker        = aws_security_group.worker.id
     scheduler     = aws_security_group.scheduler.id
     trigger       = aws_security_group.trigger.id
+    reminder      = aws_security_group.reminder.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }

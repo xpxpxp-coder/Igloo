@@ -212,6 +212,23 @@ pub struct WorkTaskCompletion {
     pub occurred_at: DateTime<Utc>,
 }
 
+/// Stable server-derived recipient snapshot for one governed reminder task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedWorkReminder {
+    /// Idempotent delivery coordinate supplied by the assigned reminder worker.
+    pub delivery_id: Uuid,
+    /// Parent request whose owner receives the reminder.
+    pub request_id: Uuid,
+    /// Exact leased deadline task.
+    pub task_id: Uuid,
+    /// Active Snowman human device keys captured on the first authorized attempt.
+    pub target_pubkeys: Vec<Vec<u8>>,
+    /// Stable event time, derived from the task's governed availability time.
+    pub event_created_at: DateTime<Utc>,
+    /// Previously recorded Nostr event ID on an exact replay.
+    pub nostr_event_id: Option<[u8; 32]>,
+}
+
 /// Idempotent human cancellation of an entire governed request.
 #[derive(Debug, Clone)]
 pub struct WorkRequestCancellation {
@@ -3339,6 +3356,268 @@ pub async fn heartbeat_work_task(
     Ok(result.rows_affected() == 1)
 }
 
+/// Reserve one reminder delivery under the exact live lease of a
+/// `deadline_operations` task. The recipient list is resolved from the
+/// requester's current Snowman human sessions and persisted on first use, so a
+/// lost response or lease retry produces the same signed event and never lets
+/// the worker choose a recipient.
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_work_reminder(
+    pool: &PgPool,
+    community_id: CommunityId,
+    delivery_id: Uuid,
+    task_id: Uuid,
+    worker_identity_id: Uuid,
+    generation: i64,
+    lease_token_sha256: [u8; 32],
+) -> Result<PreparedWorkReminder> {
+    if delivery_id.is_nil() || task_id.is_nil() || worker_identity_id.is_nil() || generation <= 0 {
+        return Err(DbError::InvalidData(
+            "reminder delivery requires non-nil identities and a positive lease generation".into(),
+        ));
+    }
+    let community_id = *community_id.as_uuid();
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || ':' || $2::text || ':work-reminder', 0))")
+        .bind(community_id)
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+
+    if let Some(existing) = sqlx::query(
+        r#"
+        SELECT delivery_id, request_id, task_id, worker_identity_id,
+               target_pubkeys, event_created_at, nostr_event_id
+        FROM snowman_work_reminder_receipts
+        WHERE community_id=$1 AND task_id=$2
+        "#,
+    )
+    .bind(community_id)
+    .bind(task_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    {
+        if existing.try_get::<Uuid, _>("delivery_id")? != delivery_id
+            || existing.try_get::<Uuid, _>("worker_identity_id")? != worker_identity_id
+        {
+            return Err(DbError::AccessDenied(
+                "reminder delivery coordinate was reused by another worker or task".into(),
+            ));
+        }
+        let targets = existing.try_get::<Vec<Vec<u8>>, _>("target_pubkeys")?;
+        validate_reminder_targets(&targets)?;
+        let event_id = existing
+            .try_get::<Option<Vec<u8>>, _>("nostr_event_id")?
+            .map(vec_to_sha256)
+            .transpose()?;
+        let prepared = PreparedWorkReminder {
+            delivery_id,
+            request_id: existing.try_get("request_id")?,
+            task_id,
+            target_pubkeys: targets,
+            event_created_at: existing.try_get("event_created_at")?,
+            nostr_event_id: event_id,
+        };
+        tx.commit().await?;
+        return Ok(prepared);
+    }
+
+    let task = sqlx::query(
+        r#"
+        SELECT t.request_id, t.available_at, r.requester_identity
+        FROM snowman_work_tasks t
+        JOIN snowman_work_requests r
+          ON r.community_id=t.community_id AND r.request_id=t.request_id
+        JOIN snowman_task_leases l
+          ON l.community_id=t.community_id AND l.task_id=t.task_id
+         AND l.worker_identity_id=$3 AND l.generation=$4
+         AND l.lease_token_sha256=$5 AND l.expires_at > NOW()
+        WHERE t.community_id=$1 AND t.task_id=$2
+          AND t.service_identity_id=$3
+          AND t.status IN ('leased','running','reviewing')
+          AND t.specialist_role='deadline_operations'
+          AND t.required_capabilities @> ARRAY['deadline.remind']::TEXT[]
+          AND r.status NOT IN ('completed','failed','cancelled','expired')
+          AND EXISTS (
+            SELECT 1 FROM snowman_workforce_identities i
+            WHERE i.community_id=t.community_id AND i.identity_id=t.service_identity_id
+              AND i.identity_type='service' AND i.role='agent' AND i.status='active'
+              AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > NOW())
+          )
+          AND EXISTS (
+            SELECT 1 FROM snowman_workforce_capability_grants g
+            WHERE g.community_id=t.community_id AND g.identity_id=t.service_identity_id
+              AND g.capability='deadline.remind' AND g.revoked_at IS NULL
+              AND (g.expires_at IS NULL OR g.expires_at > NOW())
+          )
+          AND EXISTS (
+            SELECT 1 FROM snowman_model_routes m
+            WHERE m.community_id=t.community_id AND m.model_id=t.model_id
+              AND m.gateway_url=t.model_gateway_route AND m.status='active'
+              AND m.evaluated_at <= NOW()
+              AND 'deadline_operations'=ANY(m.suited_roles)
+              AND r.classification=ANY(m.allowed_classifications)
+          )
+          AND (
+            NOT t.approval_required OR (
+              SELECT a.decision='approved'
+                     AND a.task_snapshot_sha256=t.execution_snapshot_sha256
+                     AND a.expires_at > NOW()
+              FROM snowman_work_approvals a
+              WHERE a.community_id=t.community_id AND a.request_id=t.request_id
+                AND a.task_id=t.task_id
+              ORDER BY a.decided_at DESC, a.approval_id DESC LIMIT 1
+            ) IS TRUE
+          )
+        FOR UPDATE OF t, r
+        "#,
+    )
+    .bind(community_id)
+    .bind(task_id)
+    .bind(worker_identity_id)
+    .bind(generation)
+    .bind(lease_token_sha256.as_slice())
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| {
+        DbError::AccessDenied(
+            "reminder task lease, capability, approval, or model route is no longer valid".into(),
+        )
+    })?;
+    let requester_identity = task.try_get::<String, _>("requester_identity")?;
+    let target_rows = sqlx::query(
+        r#"
+        SELECT DISTINCT b.pubkey
+        FROM snowman_workforce_identities i
+        JOIN snowman_workforce_key_bindings b
+          ON b.community_id=i.community_id AND b.identity_id=i.identity_id
+        JOIN snowman_workforce_sessions s
+          ON s.community_id=b.community_id AND s.identity_id=b.identity_id
+         AND s.session_id=b.session_id AND s.device_pubkey=b.pubkey
+        WHERE i.community_id=$1
+          AND $2='snowman:' || i.identity_id::TEXT
+          AND i.identity_type='human' AND i.status='active'
+          AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > NOW())
+          AND b.binding_type='human_device' AND b.revoked_at IS NULL
+          AND (b.expires_at IS NULL OR b.expires_at > NOW())
+          AND s.revoked_at IS NULL AND s.expires_at > NOW()
+        ORDER BY b.pubkey
+        LIMIT 17
+        "#,
+    )
+    .bind(community_id)
+    .bind(&requester_identity)
+    .fetch_all(&mut *tx)
+    .await?;
+    let targets = target_rows
+        .into_iter()
+        .map(|row| row.try_get::<Vec<u8>, _>("pubkey"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    validate_reminder_targets(&targets)?;
+    let request_id = task.try_get::<Uuid, _>("request_id")?;
+    let event_created_at = task.try_get::<DateTime<Utc>, _>("available_at")?;
+    sqlx::query(
+        r#"
+        INSERT INTO snowman_work_reminder_receipts
+          (community_id, delivery_id, request_id, task_id, worker_identity_id,
+           target_pubkeys, event_created_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        "#,
+    )
+    .bind(community_id)
+    .bind(delivery_id)
+    .bind(request_id)
+    .bind(task_id)
+    .bind(worker_identity_id)
+    .bind(&targets)
+    .bind(event_created_at)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(PreparedWorkReminder {
+        delivery_id,
+        request_id,
+        task_id,
+        target_pubkeys: targets,
+        event_created_at,
+        nostr_event_id: None,
+    })
+}
+
+fn validate_reminder_targets(targets: &[Vec<u8>]) -> Result<()> {
+    if targets.is_empty() || targets.len() > 16 || targets.iter().any(|key| key.len() != 32) {
+        return Err(DbError::AccessDenied(
+            "reminder recipient has no bounded active Snowman device set".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Record the exact relay-signed reminder event for a prepared delivery.
+pub async fn record_work_reminder_event(
+    pool: &PgPool,
+    community_id: CommunityId,
+    delivery_id: Uuid,
+    worker_identity_id: Uuid,
+    nostr_event_id: [u8; 32],
+    delivered_at: DateTime<Utc>,
+) -> Result<bool> {
+    if delivery_id.is_nil()
+        || worker_identity_id.is_nil()
+        || nostr_event_id == [0; 32]
+        || delivered_at > Utc::now() + Duration::minutes(5)
+    {
+        return Err(DbError::InvalidData(
+            "reminder receipt identity, event digest, or time is invalid".into(),
+        ));
+    }
+    let row = sqlx::query(
+        r#"
+        UPDATE snowman_work_reminder_receipts
+        SET nostr_event_id=$4, delivered_at=$5
+        WHERE community_id=$1 AND delivery_id=$2 AND worker_identity_id=$3
+          AND nostr_event_id IS NULL AND delivered_at IS NULL
+          AND EXISTS (
+            SELECT 1 FROM events e
+            WHERE e.community_id=$1 AND e.id=$4 AND e.kind=40007
+              AND e.channel_id IS NULL AND e.deleted_at IS NULL
+          )
+        RETURNING task_id
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(delivery_id)
+    .bind(worker_identity_id)
+    .bind(nostr_event_id.as_slice())
+    .bind(delivered_at)
+    .fetch_optional(pool)
+    .await?;
+    if row.is_some() {
+        return Ok(true);
+    }
+    let exact: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+          SELECT 1 FROM snowman_work_reminder_receipts
+          WHERE community_id=$1 AND delivery_id=$2 AND worker_identity_id=$3
+            AND nostr_event_id=$4 AND delivered_at IS NOT NULL
+        )
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(delivery_id)
+    .bind(worker_identity_id)
+    .bind(nostr_event_id.as_slice())
+    .fetch_one(pool)
+    .await?;
+    if !exact {
+        return Err(DbError::AccessDenied(
+            "reminder receipt conflicts with the prepared delivery".into(),
+        ));
+    }
+    Ok(false)
+}
+
 /// Finish a task only under its current live fenced lease.
 pub async fn finish_work_task(
     pool: &PgPool,
@@ -4675,6 +4954,7 @@ fn valid_proactive_execution(role: &str, capability: &str) -> bool {
             | ("client_delivery", "artifact.build")
             | ("quality_risk_reviewer", "artifact.build")
             | ("research_evidence", "evidence.manifest.read")
+            | ("deadline_operations", "deadline.remind")
     )
 }
 
@@ -5118,6 +5398,10 @@ mod tests {
         assert!(valid_proactive_execution(
             "quality_risk_reviewer",
             "artifact.build"
+        ));
+        assert!(valid_proactive_execution(
+            "deadline_operations",
+            "deadline.remind"
         ));
         assert!(!valid_proactive_execution(
             "deadline_operations",

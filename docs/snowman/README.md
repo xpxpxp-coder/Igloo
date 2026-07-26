@@ -19,6 +19,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Analyst 360 event and receipt boundary](analyst-event-boundary.md)
 - [Durable workforce worker](workforce-worker.md)
 - [Workforce maintenance scheduler](workforce-scheduler.md)
+- [Workforce reminder delivery](workforce-reminder.md)
 - [Private model gateway](model-gateway.md)
 - [Private inference fleet](../../infra/aws-inference/README.md)
 

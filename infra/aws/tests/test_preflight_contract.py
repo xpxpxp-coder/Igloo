@@ -21,6 +21,7 @@ class AwsPreflightContractTests(unittest.TestCase):
             "snowman-command-center@sha256:",
             "var.relay_desired_count == 0",
             "var.worker_desired_count == 0",
+            "var.reminder_desired_count == 0",
             "var.model_gateway_desired_count == 0",
             "Runtime desired counts remain hard-zero",
             "!var.external_model_processors_enabled",

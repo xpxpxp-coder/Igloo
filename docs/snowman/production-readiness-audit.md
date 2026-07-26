@@ -80,9 +80,10 @@ the highest risks without changing the production-readiness verdict:
 - a hard-zero, digest-pinned dormant relay task and ECS service with non-root,
   read-only execution, dropped capabilities, exact task/execution roles, an
   empty governed runtime-secret shell, and layered zero-count preconditions;
-- hard-dormant per-identity workers plus a maintenance-only scheduler with an
-  empty AWS task role, private TLS/split-horizon relay route, deadline and lease
-  recovery, dead-lettering, idempotent tick receipts, and hash-chain evidence;
+- hard-dormant per-identity workers plus maintenance-only, recurring-trigger,
+  and fixed-content reminder services with empty AWS task roles, private
+  TLS/split-horizon relay routes, deadline and lease recovery, dead-lettering,
+  idempotent receipts, and hash-chain evidence;
 - a one-shot, no-service database/key bootstrap task that reads only the
   RDS-managed master secret, runs migrations, provisions and verifies a
   DML-only serving identity, generates relay/HMAC keys outside Terraform, and

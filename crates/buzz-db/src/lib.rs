@@ -3083,6 +3083,49 @@ impl Db {
         workforce::finish_work_task(&self.pool, community, completion).await
     }
 
+    /// Reserve a server-derived reminder recipient snapshot under a live task lease.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepare_work_reminder(
+        &self,
+        community: CommunityId,
+        delivery_id: Uuid,
+        task_id: Uuid,
+        worker_identity_id: Uuid,
+        generation: i64,
+        lease_token_sha256: [u8; 32],
+    ) -> Result<workforce::PreparedWorkReminder> {
+        workforce::prepare_work_reminder(
+            &self.pool,
+            community,
+            delivery_id,
+            task_id,
+            worker_identity_id,
+            generation,
+            lease_token_sha256,
+        )
+        .await
+    }
+
+    /// Persist the exact relay-signed event ID for a prepared reminder.
+    pub async fn record_work_reminder_event(
+        &self,
+        community: CommunityId,
+        delivery_id: Uuid,
+        worker_identity_id: Uuid,
+        nostr_event_id: [u8; 32],
+        delivered_at: DateTime<Utc>,
+    ) -> Result<bool> {
+        workforce::record_work_reminder_event(
+            &self.pool,
+            community,
+            delivery_id,
+            worker_identity_id,
+            nostr_event_id,
+            delivered_at,
+        )
+        .await
+    }
+
     /// Record one provider/model operation against hard request budgets.
     pub async fn record_work_spend(
         &self,

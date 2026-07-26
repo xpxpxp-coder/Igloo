@@ -8,6 +8,9 @@ locals {
   configured_trigger_desired_count = sum(concat(
     [0], [for profile in values(var.trigger_profiles) : profile.desired_count]
   ))
+  configured_reminder_desired_count = sum(concat(
+    [0], [for profile in values(var.reminder_profiles) : profile.desired_count]
+  ))
 }
 
 check "workforce_profile_boundary" {
@@ -24,6 +27,10 @@ check "workforce_profile_boundary" {
     error_message = "trigger_desired_count must exactly equal the sum of per-identity trigger profile counts."
   }
   assert {
+    condition     = local.configured_reminder_desired_count == var.reminder_desired_count
+    error_message = "reminder_desired_count must exactly equal the sum of per-identity reminder profile counts."
+  }
+  assert {
     condition = alltrue([
       for profile in values(var.workforce_profiles) :
       split(":", profile.analyst_signing_key_arn)[3] == var.aws_region &&
@@ -35,9 +42,10 @@ check "workforce_profile_boundary" {
     condition = length(distinct(concat(
       [for profile in values(var.workforce_profiles) : profile.identity_id],
       [for profile in values(var.scheduler_profiles) : profile.identity_id],
-      [for profile in values(var.trigger_profiles) : profile.identity_id]
-    ))) == length(var.workforce_profiles) + length(var.scheduler_profiles) + length(var.trigger_profiles)
-    error_message = "Worker, scheduler, and trigger profiles must use distinct service identities."
+      [for profile in values(var.trigger_profiles) : profile.identity_id],
+      [for profile in values(var.reminder_profiles) : profile.identity_id]
+    ))) == length(var.workforce_profiles) + length(var.scheduler_profiles) + length(var.trigger_profiles) + length(var.reminder_profiles)
+    error_message = "Worker, scheduler, trigger, and reminder profiles must use distinct service identities."
   }
   assert {
     condition = length(distinct([
@@ -62,16 +70,30 @@ check "workforce_profile_boundary" {
     error_message = "Active workforce tasks require the exact private Analyst 360 prefix list."
   }
   assert {
+    condition = !var.workforce_api_enabled || (
+      var.workforce_lead_identity_id != "" &&
+      contains([for profile in values(var.workforce_profiles) : profile.identity_id], var.workforce_lead_identity_id) &&
+      var.workforce_model_gateway_url != "" &&
+      var.workforce_planning_model_id != ""
+    )
+    error_message = "An active workforce API requires an exact configured lead profile and evaluated Snowman planning route."
+  }
+  assert {
+    condition     = length(var.proactive_automatic_capabilities) == 0 || var.proactive_max_automatic_cost_microusd > 0
+    error_message = "Automatic capabilities require a positive hard per-action cost ceiling."
+  }
+  assert {
     condition = alltrue(concat(
       [for profile in values(var.workforce_profiles) : contains(var.workforce_private_hostnames, trimprefix(profile.relay_url, "https://"))],
       [for profile in values(var.scheduler_profiles) : contains(var.workforce_private_hostnames, trimprefix(profile.relay_url, "https://"))],
-      [for profile in values(var.trigger_profiles) : contains(var.workforce_private_hostnames, trimprefix(profile.relay_url, "https://"))]
+      [for profile in values(var.trigger_profiles) : contains(var.workforce_private_hostnames, trimprefix(profile.relay_url, "https://"))],
+      [for profile in values(var.reminder_profiles) : contains(var.workforce_private_hostnames, trimprefix(profile.relay_url, "https://"))]
     ))
     error_message = "Every private workforce caller must use an exact allowlisted Snowman hostname protected by internal TLS and split-horizon DNS."
   }
   assert {
     condition = (
-      (var.worker_desired_count == 0 && var.scheduler_desired_count == 0 && var.trigger_desired_count == 0) ||
+      (var.worker_desired_count == 0 && var.scheduler_desired_count == 0 && var.trigger_desired_count == 0 && var.reminder_desired_count == 0) ||
       (
         var.workforce_private_ingress_enabled &&
         length(var.workforce_private_hostnames) > 0 &&
@@ -80,7 +102,7 @@ check "workforce_profile_boundary" {
         var.relay_desired_count > 0
       )
     )
-    error_message = "Active workers, schedulers, or triggers require the governed workforce APIs, private TLS relay origin, and at least one relay task."
+    error_message = "Active workers, schedulers, triggers, or reminders require the governed workforce APIs, private TLS relay origin, and at least one relay task."
   }
 }
 
@@ -650,6 +672,159 @@ resource "aws_ecs_service" "workforce_trigger" {
   network_configuration {
     subnets          = [for key in sort(keys(aws_subnet.private)) : aws_subnet.private[key].id]
     security_groups  = [aws_security_group.trigger.id]
+    assign_public_ip = false
+  }
+}
+
+resource "aws_secretsmanager_secret" "workforce_reminder_identity" {
+  for_each = var.reminder_profiles
+
+  name                    = "/snowman/command-center/${var.environment}/workforce-reminder/${each.key}"
+  description             = "Nostr private key for one fixed-content Snowman reminder identity"
+  kms_key_id              = aws_kms_key.data.arn
+  recovery_window_in_days = 30
+}
+
+resource "aws_iam_role" "workforce_reminder_execution" {
+  for_each = var.reminder_profiles
+
+  name               = "${local.workload_name}-reminder-${each.key}-execution"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_trust.json
+}
+
+data "aws_iam_policy_document" "workforce_reminder_execution" {
+  for_each = var.reminder_profiles
+
+  statement {
+    sid       = "EcrAuthorization"
+    effect    = "Allow"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    sid    = "ExactImageRepository"
+    effect = "Allow"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = ["arn:${data.aws_partition.current.partition}:ecr:${var.aws_region}:${var.expected_workload_account_id}:repository/snowman-command-center"]
+  }
+  statement {
+    sid       = "ExactReminderSecret"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.workforce_reminder_identity[each.key].arn]
+  }
+  statement {
+    sid       = "ReminderSecretKey"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.data.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${var.aws_region}.amazonaws.com"]
+    }
+  }
+  statement {
+    sid       = "ReminderLogs"
+    effect    = "Allow"
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["${aws_cloudwatch_log_group.runtime["workforce-reminder"].arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "workforce_reminder_execution" {
+  for_each = var.reminder_profiles
+
+  name   = "exact-image-secret-and-logs"
+  role   = aws_iam_role.workforce_reminder_execution[each.key].id
+  policy = data.aws_iam_policy_document.workforce_reminder_execution[each.key].json
+}
+
+resource "aws_iam_role" "workforce_reminder_task" {
+  for_each = var.reminder_profiles
+
+  name               = "${local.workload_name}-reminder-${each.key}-task"
+  assume_role_policy = data.aws_iam_policy_document.ecs_task_trust.json
+}
+
+resource "aws_ecs_task_definition" "workforce_reminder" {
+  for_each = var.reminder_profiles
+
+  family                   = "${local.workload_name}-reminder-${each.key}"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.workforce_reminder_execution[each.key].arn
+  task_role_arn            = aws_iam_role.workforce_reminder_task[each.key].arn
+
+  runtime_platform {
+    cpu_architecture        = "ARM64"
+    operating_system_family = "LINUX"
+  }
+
+  container_definitions = jsonencode([{
+    name                   = "reminder-${each.key}"
+    image                  = var.container_image
+    essential              = true
+    readonlyRootFilesystem = true
+    user                   = "10001"
+    entryPoint             = ["/usr/local/bin/snowman-workforce-reminder"]
+    stopTimeout            = 30
+    linuxParameters = {
+      initProcessEnabled = true
+      capabilities       = { drop = ["ALL"] }
+    }
+    environment = [
+      { name = "RUST_LOG", value = "snowman_workforce_reminder=info" },
+      { name = "SNOWMAN_WORKFORCE_RELAY_URL", value = each.value.relay_url },
+      { name = "SNOWMAN_WORKFORCE_REMINDER_IDENTITY_ID", value = each.value.identity_id },
+      { name = "SNOWMAN_WORKFORCE_REMINDER_INTERVAL_SECONDS", value = "15" },
+    ]
+    secrets = [
+      { name = "SNOWMAN_WORKFORCE_REMINDER_NOSTR_PRIVATE_KEY", valueFrom = "${aws_secretsmanager_secret.workforce_reminder_identity[each.key].arn}:SNOWMAN_WORKFORCE_REMINDER_NOSTR_PRIVATE_KEY::" },
+    ]
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.runtime["workforce-reminder"].name
+        awslogs-region        = var.aws_region
+        awslogs-stream-prefix = each.key
+        mode                  = "non-blocking"
+        max-buffer-size       = "1m"
+      }
+    }
+  }])
+
+  lifecycle {
+    precondition {
+      condition     = each.value.desired_count == 0
+      error_message = "Reminder profiles remain hard-zero until private relay, identity, and staged lost-response tests pass."
+    }
+  }
+}
+
+resource "aws_ecs_service" "workforce_reminder" {
+  for_each = var.reminder_profiles
+
+  name            = "${local.workload_name}-reminder-${each.key}"
+  cluster         = aws_ecs_cluster.command_center.id
+  task_definition = aws_ecs_task_definition.workforce_reminder[each.key].arn
+  desired_count   = each.value.desired_count
+  launch_type     = "FARGATE"
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
+
+  network_configuration {
+    subnets          = [for key in sort(keys(aws_subnet.private)) : aws_subnet.private[key].id]
+    security_groups  = [aws_security_group.reminder.id]
     assign_public_ip = false
   }
 }

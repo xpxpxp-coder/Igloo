@@ -4,6 +4,7 @@ locals {
     "workforce-worker",
     "workforce-scheduler",
     "workforce-trigger",
+    "workforce-reminder",
     "model-gateway",
     "inference",
     "migration",

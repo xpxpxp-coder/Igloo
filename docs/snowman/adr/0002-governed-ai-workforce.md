@@ -118,6 +118,15 @@ end time, and occurrence ceiling. Authorization and cancellation are hash-chain
 events. A maintenance identity cannot claim schedules, and no occurrence may
 bypass the proactive decision and ordinary task controls.
 
+Snowman-local reminder delivery follows that same path through the exact
+`deadline_operations` / `deadline.remind` pair. Its separate runtime has no
+Analyst, model-provider, AWS signing, arbitrary-recipient, or arbitrary-message
+authority. The relay derives active device recipients from the request owner,
+uses fixed metadata-only copy, snapshots an idempotent delivery receipt, and
+signs the needs-action event with the Snowman relay identity. This does not
+authorize Google Calendar/email access and does not impersonate the human-owned
+encrypted reminder protocol.
+
 The private proposal endpoint does not accept a policy from an agent. It uses
 the server-owned allowlist, automatic cost ceiling, and confidence threshold;
 all default to no automatic action until explicitly configured on the private

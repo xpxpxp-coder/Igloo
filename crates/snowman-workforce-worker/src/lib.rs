@@ -175,6 +175,35 @@ pub struct TriggerConfig {
     once: bool,
 }
 
+/// Runtime configuration for the identity-isolated local reminder worker.
+/// It has no Analyst endpoint, model credential, AWS signing key, arbitrary
+/// message body, or recipient input.
+pub struct ReminderConfig {
+    relay_url: Url,
+    private_key: Keys,
+    identity_id: Uuid,
+    interval: Duration,
+    once: bool,
+}
+
+impl ReminderConfig {
+    /// Load the reminder-only Snowman relay boundary from environment variables.
+    pub fn from_env() -> Result<Self, Error> {
+        Ok(Self {
+            relay_url: parse_snowman_origin(&required("SNOWMAN_WORKFORCE_RELAY_URL")?)?,
+            private_key: Keys::parse(&required("SNOWMAN_WORKFORCE_REMINDER_NOSTR_PRIVATE_KEY")?)
+                .map_err(|_| Error::Configuration("reminder Nostr private key is invalid"))?,
+            identity_id: parse_uuid("SNOWMAN_WORKFORCE_REMINDER_IDENTITY_ID")?,
+            interval: Duration::from_secs(parse_seconds(
+                "SNOWMAN_WORKFORCE_REMINDER_INTERVAL_SECONDS",
+                15,
+                300,
+            )?),
+            once: env::var("SNOWMAN_WORKFORCE_REMINDER_ONCE").is_ok_and(|value| value == "true"),
+        })
+    }
+}
+
 impl TriggerConfig {
     /// Load the exact trigger boundary from environment variables.
     pub fn from_env() -> Result<Self, Error> {
@@ -318,6 +347,102 @@ impl Trigger {
             decision=%decision.decision,
             inserted=decision.inserted,
             "scheduled occurrence passed through proactive policy"
+        );
+        Ok(true)
+    }
+}
+
+/// Deliver server-authored, metadata-only reminders for one exact service
+/// identity. The relay derives the human recipient and fixed message; this
+/// process only presents its fenced task lease and stable delivery ID.
+pub struct ReminderWorker {
+    relay: RelayClient,
+    identity_id: Uuid,
+    interval: Duration,
+    once: bool,
+}
+
+impl ReminderWorker {
+    /// Construct a reminder worker with no Analyst or provider client.
+    pub fn new(config: ReminderConfig) -> Result<Self, Error> {
+        Ok(Self {
+            relay: RelayClient::new(config.relay_url, config.private_key)?,
+            identity_id: config.identity_id,
+            interval: config.interval,
+            once: config.once,
+        })
+    }
+
+    /// Claim and deliver reminders until shutdown.
+    pub async fn run(&self) -> Result<(), Error> {
+        loop {
+            match self.run_once().await {
+                Ok(true) => {}
+                Ok(false) if !self.once => tokio::time::sleep(self.interval).await,
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::error!(%error, identity_id=%self.identity_id, "governed reminder cycle failed");
+                    if self.once {
+                        return Err(error);
+                    }
+                    tokio::time::sleep(self.interval).await;
+                }
+            }
+            if self.once {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn run_once(&self) -> Result<bool, Error> {
+        let lease = self.relay.claim(Uuid::new_v4()).await?;
+        let Some(lease) = lease else {
+            return Ok(false);
+        };
+        if lease.task.service_identity_id != self.identity_id
+            || lease.task.specialist_role != "deadline_operations"
+            || lease.task.required_capabilities != vec!["deadline.remind".to_string()]
+        {
+            return Err(Error::RelayContract(
+                "reminder lease exceeds the local delivery capability",
+            ));
+        }
+        let delivery_id = deterministic_uuid("reminder-delivery", &lease.task.task_id.to_string());
+        let path = format!(
+            "/internal/snowman/v1/workforce/tasks/{}/reminder",
+            lease.task.task_id
+        );
+        let response: ReminderDeliveryResponse = self
+            .relay
+            .post_json(
+                &path,
+                &json!({
+                    "schema_version": "snowman.work.reminder.deliver.v1",
+                    "delivery_id": delivery_id,
+                    "generation": lease.lease_generation,
+                    "lease_token": lease.lease_token,
+                }),
+            )
+            .await?;
+        if response.schema_version != "snowman.work.reminder.delivered.v1"
+            || response.delivery_id != delivery_id
+            || response.request_id != lease.task.request_id
+            || response.task_id != lease.task.task_id
+            || !is_sha256(&response.event_id)
+            || response.recipient_count == 0
+            || response.recipient_count > 16
+            || response.status != "succeeded"
+        {
+            return Err(Error::RelayContract(
+                "reminder delivery response is not bound to the leased task",
+            ));
+        }
+        tracing::info!(
+            request_id=%response.request_id,
+            task_id=%response.task_id,
+            delivery_id=%response.delivery_id,
+            recipient_count=response.recipient_count,
+            "governed Snowman reminder delivered"
         );
         Ok(true)
     }
@@ -932,6 +1057,18 @@ struct ProactiveDecisionResponse {
     execution: Option<Value>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReminderDeliveryResponse {
+    schema_version: String,
+    delivery_id: Uuid,
+    request_id: Uuid,
+    task_id: Uuid,
+    event_id: String,
+    recipient_count: usize,
+    status: String,
+}
+
 struct Lease {
     lease_token: String,
     lease_generation: i64,
@@ -1434,6 +1571,7 @@ fn validate_schedule_occurrence(
             | ("client_delivery", "artifact.build")
             | ("quality_risk_reviewer", "artifact.build")
             | ("research_evidence", "evidence.manifest.read")
+            | ("deadline_operations", "deadline.remind")
     );
     if occurrence.schedule_id.is_nil()
         || occurrence.occurrence_id.is_nil()
@@ -1723,6 +1861,10 @@ mod tests {
             max_attempts: 3,
             occurred_at: now,
         };
+        assert!(validate_schedule_occurrence(&occurrence, now).is_ok());
+        occurrence.specialist_role = "deadline_operations".into();
+        occurrence.capability = "deadline.remind".into();
+        occurrence.expected_artifact_type = "snowman_work_reminder".into();
         assert!(validate_schedule_occurrence(&occurrence, now).is_ok());
         occurrence.capability = "calendar.write".into();
         assert!(validate_schedule_occurrence(&occurrence, now).is_err());

@@ -77,7 +77,8 @@ RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
     && strip target/release/snowman-model-gateway \
     && strip target/release/snowman-workforce-worker \
     && strip target/release/snowman-workforce-scheduler \
-    && strip target/release/snowman-workforce-trigger
+    && strip target/release/snowman-workforce-trigger \
+    && strip target/release/snowman-workforce-reminder
 
 # ─── Stage 4: web bundle (pnpm + vite) ──────────────────────────────────────
 # Independent of the Rust layers so a CSS change doesn't bust Rust cache and
@@ -150,6 +151,7 @@ COPY --from=builder    /build/target/release/snowman-model-gateway /usr/local/bi
 COPY --from=builder    /build/target/release/snowman-workforce-worker /usr/local/bin/snowman-workforce-worker
 COPY --from=builder    /build/target/release/snowman-workforce-scheduler /usr/local/bin/snowman-workforce-scheduler
 COPY --from=builder    /build/target/release/snowman-workforce-trigger /usr/local/bin/snowman-workforce-trigger
+COPY --from=builder    /build/target/release/snowman-workforce-reminder /usr/local/bin/snowman-workforce-reminder
 COPY --from=web-builder /build/web/dist                 /srv/buzz/web
 COPY --from=web-builder /build/admin-web/dist           /srv/buzz/admin-web
 

@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 38);
+        assert_eq!(migrations.len(), 39);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1025,6 +1025,14 @@ mod tests {
         assert!(team_plans.contains("snowman_work_task_dependencies"));
         assert!(team_plans.contains("snowman_work_task_context_refs"));
         assert!(!team_plans.contains("raw_client_data"));
+
+        assert_eq!(migrations[38].version, 39);
+        let reminders = migrations[38].sql.as_str();
+        assert!(reminders.contains("snowman_work_reminder_receipts"));
+        assert!(reminders.contains("target_pubkeys"));
+        assert!(reminders.contains("nostr_event_id"));
+        assert!(!reminders.contains("message_body"));
+        assert!(!reminders.contains("raw_client_data"));
     }
 
     #[test]

@@ -92,8 +92,9 @@ record, not a client-side API key or direct vendor CLI.
   context references, hard spend/token ledgers, aggregate request-state
   reconciliation, and a serialized secret-rejecting lifecycle-event hash chain
   now exist in source. AWS
-  per-identity worker services, a maintenance-only scheduler service, private
-  TLS ingress, and split-horizon DNS are now hard-dormant in AWS source. Sandbox
+  per-identity worker services, maintenance-only scheduler, recurring trigger,
+  fixed-content reminder service, private TLS ingress, and split-horizon DNS are
+  now hard-dormant in AWS source. Sandbox
   isolation and staged failure/recovery proof still must pass before the product
   can honestly provide 24/7 service.
 - Proactive next-useful actions now have a tenant-scoped durable decision store:
@@ -106,8 +107,11 @@ record, not a client-side API key or direct vendor CLI.
   tenant-bound recurring schedule contracts now persist only immutable
   references and bounded execution policy. A separately scoped, private-only
   trigger runtime now converts due occurrences into the same proactive policy
-  path using deterministic IDs and reclaim fencing. Calendar/reminder delivery
-  capabilities, notifications, and staged 24/7/restart proof remain.
+  path using deterministic IDs and reclaim fencing. A separate local-only
+  reminder worker now delivers fixed, metadata-only needs-action events to the
+  server-derived request owner with idempotent receipts and no external
+  provider. Its AWS isolation, optional calendar delivery, and staged
+  24/7/restart proof remain.
 - A deterministic context-manifest policy now gives replacement specialists a
   bounded, classified, content-addressed handoff contract with objective,
   provenance, evidence/artifact references, decision/open-question digests, and

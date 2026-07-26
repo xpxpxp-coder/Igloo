@@ -132,6 +132,36 @@ variable "trigger_profiles" {
   }
 }
 
+variable "reminder_desired_count" {
+  type        = number
+  description = "Desired dedicated Snowman-local reminder delivery tasks."
+  default     = 0
+  validation {
+    condition     = var.reminder_desired_count >= 0 && var.reminder_desired_count <= 20
+    error_message = "reminder_desired_count must be between 0 and 20."
+  }
+}
+
+variable "reminder_profiles" {
+  description = "Per-tenant reminder-only identities. Secret values are populated out of band after creation."
+  type = map(object({
+    desired_count = number
+    identity_id   = string
+    relay_url     = string
+  }))
+  default = {}
+  validation {
+    condition = alltrue([
+      for name, profile in var.reminder_profiles :
+      can(regex("^[a-z][a-z0-9-]{2,19}$", name)) &&
+      profile.desired_count >= 0 && profile.desired_count <= 1 &&
+      can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", profile.identity_id)) &&
+      can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org$", profile.relay_url))
+    ])
+    error_message = "Every reminder profile must be a singleton, bounded Snowman HTTPS service identity."
+  }
+}
+
 variable "workforce_private_ingress_enabled" {
   type        = bool
   description = "Provision the internal Snowman TLS origin used only by workforce workers and schedulers."
@@ -161,6 +191,70 @@ variable "workforce_worker_api_enabled" {
   type        = bool
   description = "Enable private worker, scheduler, context, spend, and completion routes after runtime gates pass."
   default     = false
+}
+
+variable "workforce_lead_identity_id" {
+  type        = string
+  description = "Exact tenant-local lead service identity used when the workforce API is active."
+  default     = ""
+  validation {
+    condition     = var.workforce_lead_identity_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", var.workforce_lead_identity_id))
+    error_message = "workforce_lead_identity_id must be empty or a lowercase non-nil UUID."
+  }
+}
+
+variable "workforce_model_gateway_url" {
+  type        = string
+  description = "Snowman-only model gateway used for governed workforce model selection."
+  default     = ""
+  validation {
+    condition     = var.workforce_model_gateway_url == "" || can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?(/[^?#]*)?$", var.workforce_model_gateway_url))
+    error_message = "workforce_model_gateway_url must be empty or an exact Snowman HTTPS URL."
+  }
+}
+
+variable "workforce_planning_model_id" {
+  type        = string
+  description = "Evaluated tenant model-catalog ID used by the lead planner."
+  default     = ""
+  validation {
+    condition     = var.workforce_planning_model_id == "" || (length(var.workforce_planning_model_id) <= 256 && !strcontains(var.workforce_planning_model_id, "://"))
+    error_message = "workforce_planning_model_id must be empty or a bounded catalog ID."
+  }
+}
+
+variable "proactive_automatic_capabilities" {
+  type        = set(string)
+  description = "Explicit reversible capabilities eligible for server-side automatic execution. Empty is fail-closed."
+  default     = []
+  validation {
+    condition = alltrue([
+      for capability in var.proactive_automatic_capabilities :
+      can(regex("^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", capability)) &&
+      !contains(["admin.all", "aws.all", "filesystem.all", "network.all", "tool.all"], capability)
+    ])
+    error_message = "Automatic capabilities must be bounded namespaced grants and cannot be ambient authority."
+  }
+}
+
+variable "proactive_max_automatic_cost_microusd" {
+  type        = number
+  description = "Hard per-action automatic execution ceiling in millionths of a US dollar."
+  default     = 0
+  validation {
+    condition     = var.proactive_max_automatic_cost_microusd >= 0 && var.proactive_max_automatic_cost_microusd <= 500000000
+    error_message = "proactive_max_automatic_cost_microusd must be between 0 and 500000000."
+  }
+}
+
+variable "proactive_minimum_confidence_basis_points" {
+  type        = number
+  description = "Minimum usefulness confidence required for automatic execution."
+  default     = 10000
+  validation {
+    condition     = var.proactive_minimum_confidence_basis_points >= 0 && var.proactive_minimum_confidence_basis_points <= 10000
+    error_message = "proactive_minimum_confidence_basis_points must be between 0 and 10000."
+  }
 }
 
 variable "analyst_event_api_enabled" {

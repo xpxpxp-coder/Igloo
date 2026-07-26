@@ -7,7 +7,8 @@ stores; integration uses the private versioned API/event contracts only.
 
 The current checked-in phase includes the account/image/activation preflight,
 managed substrate, a hard-dormant relay service, per-identity workforce
-task/service contracts, and a separate maintenance scheduler service. It
+task/service contracts, a separate maintenance scheduler, recurring trigger,
+and fixed-content in-product reminder service. It
 fails before resource creation when the caller is in the wrong account, the
 management account is targeted, production shares the Analyst 360 workload
 account, the image is mutable or outside the exact Snowman ECR repository,
@@ -29,13 +30,21 @@ Secrets Manager container, Nostr identity, Analyst service principal, and
 cross-account asymmetric KMS signing key. Its task has no public IP, shell,
 filesystem grant, shared agent secret, provider endpoint, or general internet
 route; the only optional non-AWS egress is an exact private Analyst 360 prefix
-list. The maintenance scheduler has a distinct identity, empty AWS task role,
-and no Analyst/model network path. Workers and schedulers reach the exact
-Snowman hostname through split-horizon Route 53 and an internal TLS ALB; the
+list. The maintenance scheduler, recurring trigger, and reminder worker each
+have a distinct identity, empty AWS task role, and no Analyst/model network
+path. The reminder worker accepts no recipient or message body. Private
+workforce services reach the exact Snowman hostname through split-horizon Route
+53 and an internal TLS ALB; the
 public WAF blocks `/internal/`. Runtime secrets intentionally have no
 Terraform-managed values.
 Staging uses one interface-endpoint ENI, one RDS instance, and one Valkey node;
 production expands endpoints and managed state across availability zones.
+
+When the workforce APIs are deliberately activated, Terraform requires the
+lead identity to match a configured worker profile plus an exact Snowman model
+gateway URL and planning-model catalog ID. Automatic capabilities remain an
+explicit empty-by-default set with separate cost and confidence ceilings;
+adding `deadline.remind` is required for ungated reminder execution.
 
 The model gateway has a default-off cross-account PrivateLink provider contract:
 an internal TLS Network Load Balancer, exact Snowman ACM certificate, endpoint

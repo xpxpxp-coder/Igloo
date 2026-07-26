@@ -83,6 +83,7 @@ Source support now exists for a separately addressed private worker service:
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/heartbeat` | Renews only the matching live fencing generation and bearer lease. |
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/spend` | Records an actor-, task-, request-, model-, and provider-receipt-bound ledger entry under hard caps. |
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/finish` | Atomically records a terminal result and hash-chain evidence event under the current lease. |
+| `POST /internal/snowman/v1/workforce/tasks/{task_id}/reminder` | For an exact `deadline_operations` lease, derives the original human requester and fixed Snowman-local message server-side, persists an idempotent kind `40007` receipt, and completes the task. It accepts no recipient or message body. |
 | `POST /internal/snowman/v1/workforce/requests/{request_id}/context-packets` | Publishes a bounded metadata-only handoff under the writer's current fenced task lease. |
 | `GET /internal/snowman/v1/workforce/requests/{request_id}/context-packets` | Lists only non-expired manifests for an actively assigned reader; artifact bodies remain in their authority. |
 | `POST /internal/snowman/v1/workforce/requests/{request_id}/proactive-actions` | Evaluates an authorized trigger and, for a non-rejected v2 contract, atomically creates a model-routed ordinary work task under the existing approval/lease/spend/evidence controls. |
@@ -170,12 +171,14 @@ now claims due occurrences and submits them through the v2 proactive endpoint;
 an occurrence becomes `submitted` atomically with its durable proactive
 decision. Staged lost-response, restart, revocation, and cadence proof remains
 required before activation.
-The identity-isolated worker and maintenance scheduler now implement claim,
-planning, heartbeat, governed Analyst dispatch/status, context publication,
-terminal completion, deadline enforcement, lease recovery, and dead-lettering
-in source. Capability-specific Analyst job executors, proactive action
-execution, sandbox boundaries, AWS activation, and staged execution/recovery
-proof remain open.
+The identity-isolated workers, recurring trigger, and maintenance scheduler now
+implement claim, planning, heartbeat, governed Analyst dispatch/status, context
+publication, materialized proactive execution, fixed in-product reminder
+delivery, terminal completion, deadline enforcement, lease recovery, and
+dead-lettering in source. The reminder worker accepts neither a recipient nor a
+message body and has no Analyst/provider credential. Broader sandbox boundaries,
+reminder AWS isolation, activation, and staged execution/recovery proof remain
+open.
 
 ## Analyst lifecycle events
 

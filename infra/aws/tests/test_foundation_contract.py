@@ -160,6 +160,10 @@ class AwsFoundationContractTests(unittest.TestCase):
             'entryPoint             = ["/usr/local/bin/snowman-workforce-trigger"]',
             'SNOWMAN_WORKFORCE_TRIGGER_NOSTR_PRIVATE_KEY", valueFrom =',
             'security_groups  = [aws_security_group.trigger.id]',
+            'for_each = var.reminder_profiles',
+            'entryPoint             = ["/usr/local/bin/snowman-workforce-reminder"]',
+            'SNOWMAN_WORKFORCE_REMINDER_NOSTR_PRIVATE_KEY", valueFrom =',
+            'security_groups  = [aws_security_group.reminder.id]',
             'resource "aws_lb" "workforce_private"',
             'internal                   = true',
             'resource "aws_route53_zone" "workforce_private"',
@@ -176,6 +180,7 @@ class AwsFoundationContractTests(unittest.TestCase):
             "snowman-workforce-worker",
             "snowman-workforce-scheduler",
             "snowman-workforce-trigger",
+            "snowman-workforce-reminder",
         ):
             self.assertIn(f"/usr/local/bin/{binary}", source)
 

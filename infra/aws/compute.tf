@@ -348,6 +348,12 @@ resource "aws_ecs_task_definition" "relay" {
         { name = "SNOWMAN_WORKFORCE_API_ENABLED", value = tostring(var.workforce_api_enabled) },
         { name = "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", value = "true" },
         { name = "SNOWMAN_WORKFORCE_WORKER_API_ENABLED", value = tostring(var.workforce_worker_api_enabled) },
+        { name = "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID", value = var.workforce_lead_identity_id },
+        { name = "SNOWMAN_MODEL_GATEWAY_URL", value = var.workforce_model_gateway_url },
+        { name = "SNOWMAN_PLANNING_MODEL_ID", value = var.workforce_planning_model_id },
+        { name = "SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES", value = join(",", sort(tolist(var.proactive_automatic_capabilities))) },
+        { name = "SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD", value = tostring(var.proactive_max_automatic_cost_microusd) },
+        { name = "SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS", value = tostring(var.proactive_minimum_confidence_basis_points) },
       ]
       secrets = [
         { name = "BUZZ_GIT_HOOK_HMAC_SECRET", valueFrom = "${aws_secretsmanager_secret.relay_runtime.arn}:BUZZ_GIT_HOOK_HMAC_SECRET::" },

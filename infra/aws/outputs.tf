@@ -13,6 +13,8 @@ output "production_boundary" {
     scheduler_profile_count               = length(var.scheduler_profiles)
     trigger_desired_count                 = var.trigger_desired_count
     trigger_profile_count                 = length(var.trigger_profiles)
+    reminder_desired_count                = var.reminder_desired_count
+    reminder_profile_count                = length(var.reminder_profiles)
     workforce_private_ingress_enabled     = var.workforce_private_ingress_enabled
     workforce_private_hostnames           = sort(tolist(var.workforce_private_hostnames))
     workforce_api_enabled                 = var.workforce_api_enabled
@@ -48,6 +50,7 @@ output "network_posture" {
     worker_security_group            = aws_security_group.worker.id
     scheduler_security_group         = aws_security_group.scheduler.id
     trigger_security_group           = aws_security_group.trigger.id
+    reminder_security_group          = aws_security_group.reminder.id
     workforce_ingress_security_group = aws_security_group.workforce_ingress.id
     model_gateway_security_group     = aws_security_group.model_gateway.id
     inference_security_group         = aws_security_group.inference.id

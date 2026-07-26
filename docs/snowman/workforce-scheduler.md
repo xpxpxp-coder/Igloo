@@ -43,8 +43,10 @@ ceilings, but this maintenance scheduler intentionally cannot claim them. The
 separately scoped trigger runtime now claims only schedules bound to its exact
 tenant-local identity and submits each occurrence through proactive policy. It
 has no task-claim, Analyst, model, AWS signing, or arbitrary tool authority.
-Calendar/reminder delivery capabilities and staged lost-response/restart proof
-remain open.
+The separately scoped `deadline.remind` worker and idempotent in-product
+delivery receipt now exist in source. Its isolated AWS service plus staged
+lost-response/restart proof remain open. Google Workspace calendar delivery is
+a separate optional connector, not a prerequisite for Snowman-local reminders.
 
 ## Recurring-work trigger
 

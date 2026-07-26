@@ -132,6 +132,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(api::workforce::finish_work_task),
         )
         .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/reminder",
+            post(api::workforce::deliver_work_reminder),
+        )
+        .route(
             "/internal/snowman/v1/analyst-events",
             post(api::analyst_integration::receive_analyst_event),
         )
