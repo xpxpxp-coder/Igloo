@@ -318,6 +318,8 @@ pub struct NewContextPacket {
     pub artifact_id: String,
     /// Immutable artifact version or generation.
     pub artifact_version: String,
+    /// Authority-local machine-readable artifact contract.
+    pub artifact_type: String,
     /// Optional hard expiry for the handoff.
     pub expires_at: Option<DateTime<Utc>>,
     /// Server-observed publication time.
@@ -344,6 +346,8 @@ pub struct StoredContextPacket {
     pub artifact_id: String,
     /// Immutable artifact version or generation.
     pub artifact_version: String,
+    /// Authority-local machine-readable artifact contract.
+    pub artifact_type: String,
     /// Optional hard expiry for the handoff.
     pub expires_at: Option<DateTime<Utc>>,
     /// Tenant-local service identity that published the packet.
@@ -811,6 +815,9 @@ pub async fn publish_context_packet(
         || packet.artifact_version.trim() != packet.artifact_version
         || packet.artifact_version.is_empty()
         || packet.artifact_version.len() > 256
+        || packet.artifact_type.trim() != packet.artifact_type
+        || packet.artifact_type.is_empty()
+        || packet.artifact_type.len() > 128
         || packet
             .expires_at
             .is_some_and(|expires_at| expires_at <= packet.created_at)
@@ -871,7 +878,7 @@ pub async fn publish_context_packet(
     }
     let existing = sqlx::query(
         r#"
-        SELECT p.request_id, p.authority, p.artifact_id, p.artifact_version,
+        SELECT p.request_id, p.authority, p.artifact_id, p.artifact_version, p.artifact_type,
                p.content_sha256, p.size_bytes, p.expires_at,
                m.created_by_identity_id, m.manifest_sha256, m.created_at
         FROM snowman_context_packets p
@@ -889,6 +896,7 @@ pub async fn publish_context_packet(
             && existing.try_get::<String, _>("authority")? == authority
             && existing.try_get::<String, _>("artifact_id")? == packet.artifact_id
             && existing.try_get::<String, _>("artifact_version")? == packet.artifact_version
+            && existing.try_get::<String, _>("artifact_type")? == packet.artifact_type
             && existing.try_get::<Vec<u8>, _>("content_sha256")?.as_slice()
                 == packet.manifest.content_sha256.as_slice()
             && existing.try_get::<i64, _>("size_bytes")?
@@ -965,9 +973,9 @@ pub async fn publish_context_packet(
         r#"
         INSERT INTO snowman_context_packets
           (community_id, context_packet_id, request_id, schema_version,
-           classification, authority, artifact_id, artifact_version,
+           classification, authority, artifact_id, artifact_version, artifact_type,
            content_sha256, size_bytes, expires_at, created_at)
-        VALUES ($1,$2,$3,'snowman.workforce.context.v1',$4,$5,$6,$7,$8,$9,$10,$11)
+        VALUES ($1,$2,$3,'snowman.workforce.context.v1',$4,$5,$6,$7,$8,$9,$10,$11,$12)
         "#,
     )
     .bind(community_id)
@@ -977,6 +985,7 @@ pub async fn publish_context_packet(
     .bind(authority)
     .bind(&packet.artifact_id)
     .bind(&packet.artifact_version)
+    .bind(&packet.artifact_type)
     .bind(packet.manifest.content_sha256.as_slice())
     .bind(
         i64::try_from(packet.manifest.size_bytes).map_err(|_| {
@@ -1088,7 +1097,7 @@ pub async fn list_context_packets(
     let rows = sqlx::query(
         r#"
         SELECT p.context_packet_id, p.classification, p.authority,
-               p.artifact_id, p.artifact_version, p.content_sha256,
+               p.artifact_id, p.artifact_version, p.artifact_type, p.content_sha256,
                p.size_bytes, p.expires_at, p.created_at,
                m.created_by_identity_id, m.objective_sha256,
                m.content_reference, m.source_event_sha256, m.manifest_sha256,
@@ -1178,6 +1187,7 @@ pub async fn list_context_packets(
                 manifest,
                 artifact_id: row.try_get("artifact_id")?,
                 artifact_version: row.try_get("artifact_version")?,
+                artifact_type: row.try_get("artifact_type")?,
                 expires_at: row.try_get("expires_at")?,
                 created_by_identity_id: row.try_get("created_by_identity_id")?,
                 manifest_sha256: vec_to_sha256(row.try_get("manifest_sha256")?)?,

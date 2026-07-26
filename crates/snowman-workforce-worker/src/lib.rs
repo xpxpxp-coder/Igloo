@@ -17,7 +17,9 @@ use reqwest::{header, redirect::Policy, Client};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use snowman_analyst_client::{AnalystClient, Capability, Classification, Command, JobStatusEvent};
+use snowman_analyst_client::{
+    AnalystClient, ArtifactReference, Capability, Classification, Command, JobStatusEvent,
+};
 use url::Url;
 use uuid::Uuid;
 
@@ -230,6 +232,7 @@ impl Worker {
                 .await?;
             return Ok(());
         }
+        let input_refs = self.resolve_input_refs(lease).await?;
         let command = Command {
             command_id: command_id.clone(),
             correlation_id: correlation_id.clone(),
@@ -252,7 +255,7 @@ impl Worker {
             approval_required: lease.task.approval_required,
             context_refs: lease.task.context_references.clone(),
             instruction: specialist_instruction(&lease.task),
-            input_refs: Vec::new(),
+            input_refs,
             delegated_agent_id: Some(lease.task.service_identity_id.to_string()),
             classification: analyst_classification(&lease.task.classification)?,
             submitted_at: lease.task.request_created_at,
@@ -302,6 +305,59 @@ impl Worker {
         Ok(())
     }
 
+    async fn resolve_input_refs(&self, lease: &Lease) -> Result<Vec<ArtifactReference>, Error> {
+        if lease.task.context_references.is_empty() {
+            return Ok(Vec::new());
+        }
+        let path = format!(
+            "/internal/snowman/v1/workforce/requests/{}/context-packets",
+            lease.task.request_id
+        );
+        let response: ContextListResponse = self.relay.get_json(&path).await?;
+        if response.schema_version != "snowman.workforce.context.list.v1"
+            || response.request_id != lease.task.request_id
+        {
+            return Err(Error::RelayContract("context list binding is invalid"));
+        }
+        let expected: BTreeSet<_> = lease.task.context_references.iter().cloned().collect();
+        let mut matched = BTreeSet::new();
+        let mut resolved = Vec::new();
+        for packet in response.packets {
+            validate_context_packet(&packet, lease)?;
+            if !expected.contains(&packet.content_reference)
+                || packet.authority != "analyst360"
+                || packet.classification != lease.task.classification
+                || packet.content_reference
+                    != format!("analyst360:sha256:{}", packet.content_sha256)
+            {
+                continue;
+            }
+            matched.insert(packet.content_reference.clone());
+            resolved.push(ArtifactReference {
+                artifact_id: packet.artifact_id,
+                artifact_type: packet.artifact_type,
+                authority: "analyst360".into(),
+                classification: analyst_classification(&packet.classification)?,
+                created_at: packet.created_at.to_rfc3339(),
+                sha256: packet.content_sha256,
+                version_id: packet.artifact_version,
+            });
+        }
+        resolved.sort_by(|left, right| left.sha256.cmp(&right.sha256));
+        resolved.dedup_by(|left, right| left.sha256 == right.sha256);
+        if resolved.len() > 50 {
+            return Err(Error::RelayContract(
+                "specialist dependency context exceeds the Analyst artifact limit",
+            ));
+        }
+        if matched != expected {
+            return Err(Error::RelayContract(
+                "specialist dependency context did not resolve exactly to Analyst artifacts",
+            ));
+        }
+        Ok(resolved)
+    }
+
     async fn publish_context(&self, lease: &Lease, event: &JobStatusEvent) -> Result<(), Error> {
         let first = &event.output_refs[0];
         let artifact_references: Vec<_> = event
@@ -337,6 +393,7 @@ impl Worker {
             "next_actions": [],
             "artifact_id": first.artifact_id,
             "artifact_version": first.version_id,
+            "artifact_type": first.artifact_type,
             "expires_at": command_expiry(&lease.task),
             "occurred_at": Utc::now(),
         });
@@ -490,6 +547,20 @@ impl RelayClient {
         decode_response(response).await
     }
 
+    async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, Error> {
+        let url = self.url(path)?;
+        let auth = sign_nip98(&self.keys, "GET", url.as_str(), None)?;
+        let response = self
+            .http
+            .get(url)
+            .header(header::ACCEPT, "application/json")
+            .header(header::AUTHORIZATION, auth)
+            .send()
+            .await
+            .map_err(|_| Error::Transport)?;
+        decode_response(response).await
+    }
+
     fn url(&self, path: &str) -> Result<Url, Error> {
         if !path.starts_with('/') || path.contains('?') || path.contains('#') {
             return Err(Error::Configuration("relay path is invalid"));
@@ -550,6 +621,102 @@ struct LeasedTask {
     risk_tier: String,
     reversible: bool,
     approval_required: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextListResponse {
+    schema_version: String,
+    request_id: Uuid,
+    packets: Vec<ContextPacket>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ContextPacket {
+    context_packet_id: Uuid,
+    request_id: Uuid,
+    classification: String,
+    authority: String,
+    objective_sha256: String,
+    content_reference: String,
+    content_sha256: String,
+    source_event_sha256: String,
+    manifest_sha256: String,
+    size_bytes: u64,
+    artifact_id: String,
+    artifact_version: String,
+    artifact_type: String,
+    artifact_references: Vec<String>,
+    evidence_references: Vec<String>,
+    decision_digests: Vec<String>,
+    open_question_digests: Vec<String>,
+    next_actions: Vec<Value>,
+    created_by_identity_id: Uuid,
+    expires_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+}
+
+fn validate_context_packet(packet: &ContextPacket, lease: &Lease) -> Result<(), Error> {
+    let valid_reference = |value: &str| {
+        value
+            .strip_prefix("analyst360:sha256:")
+            .or_else(|| value.strip_prefix("snowman:sha256:"))
+            .is_some_and(is_sha256)
+    };
+    if packet.context_packet_id.is_nil()
+        || packet.request_id != lease.task.request_id
+        || packet.created_by_identity_id.is_nil()
+        || !matches!(
+            packet.classification.as_str(),
+            "internal" | "confidential" | "restricted"
+        )
+        || !matches!(
+            packet.authority.as_str(),
+            "analyst360" | "snowman-command-center"
+        )
+        || !is_sha256(&packet.objective_sha256)
+        || !valid_reference(&packet.content_reference)
+        || !is_sha256(&packet.content_sha256)
+        || !is_sha256(&packet.source_event_sha256)
+        || !is_sha256(&packet.manifest_sha256)
+        || packet.size_bytes > 1_048_576
+        || packet.artifact_id.is_empty()
+        || packet.artifact_id.len() > 512
+        || packet.artifact_version.is_empty()
+        || packet.artifact_version.len() > 256
+        || packet.artifact_type.is_empty()
+        || packet.artifact_type.len() > 128
+        || packet.artifact_references.len() > 128
+        || packet
+            .artifact_references
+            .iter()
+            .any(|value| !valid_reference(value))
+        || packet.evidence_references.len() > 128
+        || packet
+            .evidence_references
+            .iter()
+            .any(|value| !valid_reference(value))
+        || packet.decision_digests.len() > 128
+        || packet
+            .decision_digests
+            .iter()
+            .any(|value| !value.strip_prefix("sha256:").is_some_and(is_sha256))
+        || packet.open_question_digests.len() > 128
+        || packet
+            .open_question_digests
+            .iter()
+            .any(|value| !value.strip_prefix("sha256:").is_some_and(is_sha256))
+        || packet.next_actions.len() > 32
+        || packet.next_actions.iter().any(|value| !value.is_object())
+        || packet.expires_at.is_some_and(|value| value <= Utc::now())
+        || packet.created_at > Utc::now() + chrono::Duration::minutes(5)
+    {
+        return Err(Error::RelayContract(
+            "context packet violates the worker handoff contract",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]

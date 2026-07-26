@@ -171,6 +171,7 @@ struct PublishContextPacketRequest {
     next_actions: Vec<ContextNextActionInput>,
     artifact_id: String,
     artifact_version: String,
+    artifact_type: String,
     #[serde(default)]
     expires_at: Option<DateTime<Utc>>,
     occurred_at: DateTime<Utc>,
@@ -857,6 +858,7 @@ pub async fn publish_context_packet(
         lease_token_sha256: decode_lease_token(&input.lease_token)?,
         artifact_id: input.artifact_id,
         artifact_version: input.artifact_version,
+        artifact_type: input.artifact_type,
         expires_at: input.expires_at,
         created_at: input.occurred_at,
     };
@@ -1667,6 +1669,7 @@ fn context_packet_json(packet: &StoredContextPacket) -> Value {
         "size_bytes": manifest.size_bytes,
         "artifact_id": packet.artifact_id,
         "artifact_version": packet.artifact_version,
+        "artifact_type": packet.artifact_type,
         "artifact_references": manifest.artifact_references,
         "evidence_references": manifest.evidence_references,
         "decision_digests": manifest.decision_digests,
