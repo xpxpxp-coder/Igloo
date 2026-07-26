@@ -163,14 +163,18 @@ class AwsFoundationContractTests(unittest.TestCase):
             'SNOWMAN_MODEL_GATEWAY_PRINCIPALS_JSON',
             'SNOWMAN_MODEL_GATEWAY_ROUTES_JSON',
             'condition     = var.model_gateway_desired_count == 0',
+            'actions = ["sagemaker:InvokeEndpoint"]',
+            'endpoint/${route.sagemaker_endpoint_name}',
         ):
             self.assertIn(fragment, source)
         self.assertRegex(source, r'actions\s*=\s*\["elasticache:Connect"\]')
         self.assertIn('~snowman:model-gateway:nonce:* +set +ping', data_plane)
         self.assertIn('resource "aws_vpc_security_group_egress_rule" "model_gateway_to_inference"', network)
         self.assertIn('resource "aws_vpc_security_group_egress_rule" "model_gateway_to_valkey"', network)
+        self.assertIn('"sagemaker.runtime"', network)
         self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
         self.assertNotIn('"kms:*"', source)
+        self.assertNotIn('"sagemaker:*"', source)
         self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
 
     def test_model_gateway_private_link_has_no_public_or_ambient_ingress(self) -> None:

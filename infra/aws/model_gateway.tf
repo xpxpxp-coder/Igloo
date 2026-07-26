@@ -203,6 +203,22 @@ data "aws_iam_policy_document" "model_gateway_task" {
       resources = sort(distinct([for policy in values(var.model_gateway_principals) : policy.key_id]))
     }
   }
+  dynamic "statement" {
+    for_each = length([
+      for route in values(var.model_gateway_routes) : route
+      if route.backend_kind == "sagemaker"
+    ]) == 0 ? [] : [1]
+    content {
+      sid     = "InvokeExactSnowmanSageMakerEndpoints"
+      effect  = "Allow"
+      actions = ["sagemaker:InvokeEndpoint"]
+      resources = sort([
+        for route in values(var.model_gateway_routes) :
+        "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${var.expected_workload_account_id}:endpoint/${route.sagemaker_endpoint_name}"
+        if route.backend_kind == "sagemaker"
+      ])
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "model_gateway_task" {

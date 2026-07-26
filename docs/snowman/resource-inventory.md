@@ -55,8 +55,9 @@ record, not a client-side API key or direct vendor CLI.
 - A private Snowman model gateway is now implemented and locally tested. It
   accepts only exact KMS-signed Analyst requests, revalidates tenant, role,
   capability, classification, model and budgets, consumes replay nonces in a
-  dedicated least-privilege Valkey namespace, and can route only to private or
-  Snowman-owned inference origins. Its dormant ECS service/task and IAM/network
+  dedicated least-privilege Valkey namespace, and can route only to private
+  Snowman origins or exact same-account SageMaker endpoints through a VPC
+  interface endpoint. Its dormant ECS service/task and exact IAM/network
   boundaries exist in source. Private cross-account ingress, a governed model
   catalog deployment, the pinned Snowman-hosted AWS inference fleet, usage
   reconciliation, and live zero-egress proof remain.

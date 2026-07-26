@@ -40,6 +40,13 @@ security group. Its endpoint service name and private-DNS verification state are
 exported for the separate Analyst root; no VPC peering, public model endpoint,
 or shared data tier is introduced.
 
+The gateway can also invoke exact same-account SageMaker endpoint ARNs through
+the private `sagemaker.runtime` interface endpoint. The task role receives no
+SageMaker wildcard permission, and configured routes cannot name a public model
+provider URL. This is the private execution path for Snowman-hosted specialist
+models; model images, weights, endpoint capacity, evaluations, and autoscaling
+are a separate still-dormant layer and are not implied by this substrate.
+
 The following resource layers still have to be added and proven before this
 root is deployable:
 
@@ -48,8 +55,8 @@ root is deployable:
 2. governed database-role/key bootstrap that populates the relay runtime secret,
    AWS Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
    delivery, and tested recovery;
-3. ECS relay service plus scheduler, sandbox, and internal
-   scheduler, sandbox, and pinned Snowman-hosted inference task
+3. ECS relay service plus internal scheduler, sandbox, and pinned
+   Snowman-hosted inference task
    definitions/services with distinct least-privilege roles; private ingress
    for the now-defined model-gateway service; plus staged activation of the
    now-defined workforce services;

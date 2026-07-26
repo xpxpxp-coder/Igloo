@@ -16,6 +16,7 @@ locals {
     "sts",
     "ssm",
     "ssmmessages",
+    "sagemaker.runtime",
   ])
 }
 

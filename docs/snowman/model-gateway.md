@@ -1,7 +1,8 @@
 # Snowman private model gateway
 
-Status: service, client contract, dormant AWS task boundary, and local tests are
-implemented; private ingress, inference deployment, and staged proof remain.
+Status: service, client contract, dormant AWS task boundary, private ingress
+substrate, and local tests are implemented; inference deployment and staged
+proof remain.
 
 `snowman-model-gateway` is the only generative model boundary used by governed
 Analyst 360 execution. Command Center clients and workforce workers never receive
@@ -16,10 +17,11 @@ a provider endpoint or credential and cannot call a model runtime directly.
    one-time Valkey nonce, then re-evaluates tenant, client, project, specialist
    role, capability, classification, model, token and cost policy.
 4. The route comes only from operations configuration. It must be a private
-   `.internal`/`.local` HTTP origin or a Snowman-owned HTTPS origin; request data
-   can never select or override it.
-5. The gateway invokes the pinned OpenAI-compatible Snowman inference runtime
-   with proxies and redirects disabled. It accepts only JSON, streams into a
+   `.internal`/`.local` HTTP origin, a Snowman-owned HTTPS origin, or an exact
+   same-account SageMaker endpoint; request data can never select or override it.
+5. The gateway invokes either a pinned OpenAI-compatible Snowman runtime with
+   proxies and redirects disabled or SageMaker Runtime through the VPC interface
+   endpoint and task-role SigV4 authentication. It accepts only JSON, enforces a
    hard response-size ceiling, rejects partial model output, validates exact
    usage/cost ceilings, and returns content and request digests.
 6. Analyst revalidates every response coordinate and digest, packages the
@@ -30,7 +32,9 @@ The gateway stores no prompt or output. Its dedicated Valkey identity can only
 `SET` replay keys under `snowman:model-gateway:nonce:*` and `PING`. The dormant
 ECS task runs without a public IP, as non-root, with a read-only root filesystem
 and all Linux capabilities dropped. Its task role has only exact `kms:Verify`
-and exact ElastiCache connection grants.
+and exact ElastiCache connection grants. SageMaker routes add only
+`sagemaker:InvokeEndpoint` on their exact configured endpoint ARNs; there is no
+wildcard inference permission.
 
 The AWS root now also defines a default-off cross-account PrivateLink provider.
 It uses an internal Network Load Balancer with Snowman TLS, endpoint-service
@@ -42,8 +46,8 @@ shared VPC is introduced.
 
 ## Remaining production gates
 
-- Provision a private Analyst-to-gateway ingress path and TLS/DNS identity with
-  no public or ambient-internet route.
+- Provision and prove the Analyst interface endpoint plus its TLS/DNS identity;
+  the provider-side PrivateLink substrate is now defined but remains dormant.
 - Build, evaluate, pin, scan, sign, and deploy the Snowman-hosted inference
   images and model catalog. Hosted third-party inference remains prohibited.
 - Add response-receipt reconciliation to the Command Center spend ledger and a

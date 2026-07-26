@@ -74,8 +74,12 @@ pub struct PrincipalPolicy {
 pub struct ModelRoute {
     /// Public catalog identifier bound into workforce tasks.
     pub model_id: String,
-    /// Private Snowman inference origin; never accepted from a request.
-    pub backend_origin: String,
+    /// Operations-owned runtime kind: `private_openai` or `sagemaker`.
+    pub backend_kind: String,
+    /// Private Snowman inference origin; required only for `private_openai`.
+    pub backend_origin: Option<String>,
+    /// Exact same-account endpoint; required only for `sagemaker`.
+    pub sagemaker_endpoint_name: Option<String>,
     /// Model identifier understood by the private runtime.
     pub backend_model: String,
     /// Route input-token ceiling.
@@ -195,6 +199,7 @@ impl Config {
 pub struct AppState {
     config: Arc<Config>,
     kms: aws_sdk_kms::Client,
+    sagemaker: aws_sdk_sagemakerruntime::Client,
     redis: buzz_pubsub::RedisPool,
     http: Client,
 }
@@ -222,6 +227,7 @@ impl AppState {
         Ok(Self {
             config: Arc::new(config),
             kms: aws_sdk_kms::Client::new(&sdk),
+            sagemaker: aws_sdk_sagemakerruntime::Client::new(&sdk),
             redis,
             http,
         })
@@ -608,10 +614,6 @@ async fn invoke_backend(
     request: &GenerationRequest,
     route: &ModelRoute,
 ) -> Result<BackendResponse, GatewayError> {
-    let origin = Url::parse(&route.backend_origin).map_err(|_| GatewayError::Inference)?;
-    let url = origin
-        .join("/v1/chat/completions")
-        .map_err(|_| GatewayError::Inference)?;
     let prompt = serde_json::to_string(&json!({
         "instruction": request.instruction,
         "classification": request.classification,
@@ -620,19 +622,44 @@ async fn invoke_backend(
         "citation_rule": "Cite immutable artifact_id and sha256 for every substantive claim.",
     }))
     .map_err(|_| GatewayError::Inference)?;
+    let request_body = serde_json::to_vec(&json!({
+        "model": route.backend_model,
+        "messages": [
+            {"role": "system", "content": "You are a scoped Snowman specialist. Use only supplied governed evidence; never invent facts, credentials, citations, or completed actions."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": request.limits.max_output_tokens,
+        "temperature": 0.2,
+        "stream": false
+    }))
+    .map_err(|_| GatewayError::Inference)?;
+    match route.backend_kind.as_str() {
+        "private_openai" => invoke_private_openai(state, route, request_body).await,
+        "sagemaker" => invoke_sagemaker(state, route, &request.generation_id, request_body).await,
+        _ => Err(GatewayError::Inference),
+    }
+}
+
+async fn invoke_private_openai(
+    state: &AppState,
+    route: &ModelRoute,
+    request_body: Vec<u8>,
+) -> Result<BackendResponse, GatewayError> {
+    let origin = Url::parse(
+        route
+            .backend_origin
+            .as_deref()
+            .ok_or(GatewayError::Inference)?,
+    )
+    .map_err(|_| GatewayError::Inference)?;
+    let url = origin
+        .join("/v1/chat/completions")
+        .map_err(|_| GatewayError::Inference)?;
     let response = state
         .http
         .post(url)
-        .json(&json!({
-            "model": route.backend_model,
-            "messages": [
-                {"role": "system", "content": "You are a scoped Snowman specialist. Use only supplied governed evidence; never invent facts, credentials, citations, or completed actions."},
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": request.limits.max_output_tokens,
-            "temperature": 0.2,
-            "stream": false
-        }))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(request_body)
         .send()
         .await
         .map_err(|_| GatewayError::Inference)?;
@@ -668,6 +695,44 @@ async fn invoke_backend(
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| GatewayError::Inference)
+}
+
+async fn invoke_sagemaker(
+    state: &AppState,
+    route: &ModelRoute,
+    generation_id: &str,
+    request_body: Vec<u8>,
+) -> Result<BackendResponse, GatewayError> {
+    let endpoint_name = route
+        .sagemaker_endpoint_name
+        .as_deref()
+        .ok_or(GatewayError::Inference)?;
+    let output = state
+        .sagemaker
+        .invoke_endpoint()
+        .endpoint_name(endpoint_name)
+        .content_type("application/json")
+        .accept("application/json")
+        .inference_id(format!("snowman-{generation_id}"))
+        .body(aws_sdk_sagemakerruntime::primitives::Blob::new(
+            request_body,
+        ))
+        .send()
+        .await
+        .map_err(|_| GatewayError::Inference)?;
+    if !output.content_type().is_some_and(|value| {
+        value
+            .split(';')
+            .next()
+            .is_some_and(|media_type| media_type.trim() == "application/json")
+    }) {
+        return Err(GatewayError::Inference);
+    }
+    let bytes = output.body().ok_or(GatewayError::Inference)?.as_ref();
+    if bytes.is_empty() || bytes.len() > MAX_RESPONSE_BYTES {
+        return Err(GatewayError::Inference);
+    }
+    serde_json::from_slice(bytes).map_err(|_| GatewayError::Inference)
 }
 
 fn build_response(
@@ -764,22 +829,8 @@ fn validate_principal(policy: &PrincipalPolicy) -> Result<(), ConfigError> {
 }
 
 fn validate_route(route: &ModelRoute) -> Result<(), ConfigError> {
-    let origin = Url::parse(&route.backend_origin)
-        .map_err(|_| ConfigError::Invalid("model route origin is malformed"))?;
-    let host = origin.host_str().unwrap_or_default();
-    let private_http =
-        origin.scheme() == "http" && (host.ends_with(".internal") || host.ends_with(".local"));
-    let snowman_https = origin.scheme() == "https"
-        && (host == "snowmanai.org" || host.ends_with(".snowmanai.org"))
-        && origin.port_or_known_default() == Some(443);
     if !valid_identifier(&route.model_id)
         || !valid_identifier(&route.backend_model)
-        || origin.username() != ""
-        || origin.password().is_some()
-        || !matches!(origin.path(), "" | "/")
-        || origin.query().is_some()
-        || origin.fragment().is_some()
-        || !(private_http || snowman_https)
         || route.max_input_tokens == 0
         || route.max_output_tokens == 0
         || route.max_cost_microusd == 0
@@ -788,7 +839,54 @@ fn validate_route(route: &ModelRoute) -> Result<(), ConfigError> {
             "model route violates the Snowman-only boundary",
         ));
     }
+    match route.backend_kind.as_str() {
+        "private_openai" => {
+            let origin = Url::parse(
+                route
+                    .backend_origin
+                    .as_deref()
+                    .ok_or(ConfigError::Invalid("private model origin is required"))?,
+            )
+            .map_err(|_| ConfigError::Invalid("model route origin is malformed"))?;
+            let host = origin.host_str().unwrap_or_default();
+            let private_http = origin.scheme() == "http"
+                && (host.ends_with(".internal") || host.ends_with(".local"));
+            let snowman_https = origin.scheme() == "https"
+                && (host == "snowmanai.org" || host.ends_with(".snowmanai.org"))
+                && origin.port_or_known_default() == Some(443);
+            if route.sagemaker_endpoint_name.is_some()
+                || origin.username() != ""
+                || origin.password().is_some()
+                || !matches!(origin.path(), "" | "/")
+                || origin.query().is_some()
+                || origin.fragment().is_some()
+                || !(private_http || snowman_https)
+            {
+                return Err(ConfigError::Invalid("private model route is invalid"));
+            }
+        }
+        "sagemaker" => {
+            let endpoint = route
+                .sagemaker_endpoint_name
+                .as_deref()
+                .ok_or(ConfigError::Invalid("SageMaker endpoint is required"))?;
+            if route.backend_origin.is_some() || !valid_sagemaker_endpoint_name(endpoint) {
+                return Err(ConfigError::Invalid("SageMaker model route is invalid"));
+            }
+        }
+        _ => return Err(ConfigError::Invalid("model backend kind is invalid")),
+    }
     Ok(())
+}
+
+fn valid_sagemaker_endpoint_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    (1..=63).contains(&bytes.len())
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[bytes.len() - 1].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|value| value.is_ascii_alphanumeric() || *value == b'-')
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, GatewayError> {
@@ -860,7 +958,9 @@ mod tests {
     fn route(origin: &str) -> ModelRoute {
         ModelRoute {
             model_id: "snowman-delivery-best".into(),
-            backend_origin: origin.into(),
+            backend_kind: "private_openai".into(),
+            backend_origin: Some(origin.into()),
+            sagemaker_endpoint_name: None,
             backend_model: "snowman-llama-70b".into(),
             max_input_tokens: 10_000,
             max_output_tokens: 2_000,
@@ -883,6 +983,13 @@ mod tests {
         ] {
             assert!(validate_route(&route(origin)).is_err(), "accepted {origin}");
         }
+        let mut sagemaker = route("http://vllm.inference.internal:8000");
+        sagemaker.backend_kind = "sagemaker".into();
+        sagemaker.backend_origin = None;
+        sagemaker.sagemaker_endpoint_name = Some("snowman-staging-delivery".into());
+        assert!(validate_route(&sagemaker).is_ok());
+        sagemaker.backend_origin = Some("https://api.openai.com".into());
+        assert!(validate_route(&sagemaker).is_err());
     }
 
     #[test]
