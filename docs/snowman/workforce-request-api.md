@@ -19,6 +19,7 @@ session, an exact tenant-role match, and a fine-grained grant:
 | --- | --- | --- |
 | `POST /api/snowman/v1/work-requests` | `workforce.requests.create` | Idempotently accepts an objective and enqueues a capability-bounded lead planning task. |
 | `GET /api/snowman/v1/work-requests/{request_id}` | `workforce.requests.read` | Returns lifecycle, task, budget, spend, and bounded hash-chain evidence metadata. |
+| `POST /api/snowman/v1/work-requests/{request_id}/cancel` | `workforce.requests.cancel` | Idempotently cancels every non-terminal task, deletes every live lease, and appends human-attributed hash-chain evidence. |
 
 The server derives `community_id` from the normalized request host and derives
 the requester from the signed relay key's live workforce binding. Neither is a
@@ -92,6 +93,15 @@ Claim replay, heartbeat, spend, and completion also revalidate the live
 task-specific grants, service-identity lifecycle, current approval snapshot, and
 catalog route; revocation or route suspension cannot be bypassed by retaining an
 unexpired lease token.
+
+Human cancellation is a separate public control path. The server derives the
+tenant and human actor from the signed request, accepts only a bounded
+machine-readable reason code, locks the request, marks every non-terminal task
+cancelled, deletes all of its leases, and appends `request.cancelled` evidence in
+one transaction. A worker holding a formerly valid lease therefore cannot
+heartbeat, record spend, or finish after cancellation commits. Exact
+`cancellation_id` retries return the original result; conflicting reuse and
+terminal-state cancellation fail closed.
 
 The proposal schema never accepts a gateway URL or selected model. It accepts a
 bounded role, distinct service identity, requested model override (optional),

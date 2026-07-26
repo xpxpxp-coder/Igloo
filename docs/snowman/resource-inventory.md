@@ -57,7 +57,7 @@ claims require live verification before use.
   reconciliation, and a serialized secret-rejecting lifecycle-event hash chain
   now exist in source. AWS
   scheduler/worker services, sandbox isolation, proactive-policy evaluation,
-  cancellation, and staged failure proof still must be built before
+  and staged failure proof still must be built before
   the product can honestly provide 24/7 service.
 - Governed human request intake and metadata-only status reads now exist at
   `/api/snowman/v1/work-requests`. The endpoint deliberately creates only a

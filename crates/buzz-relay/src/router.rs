@@ -80,6 +80,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(api::workforce::get_work_request),
         )
         .route(
+            "/api/snowman/v1/work-requests/{request_id}/cancel",
+            post(api::workforce::cancel_work_request),
+        )
+        .route(
             "/internal/snowman/v1/workforce/tasks/claim",
             post(api::workforce::claim_work_task),
         )

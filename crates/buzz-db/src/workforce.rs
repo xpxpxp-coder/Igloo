@@ -206,6 +206,32 @@ pub struct WorkTaskCompletion {
     pub occurred_at: DateTime<Utc>,
 }
 
+/// Idempotent human cancellation of an entire governed request.
+#[derive(Debug, Clone)]
+pub struct WorkRequestCancellation {
+    /// Stable cancellation/event identifier supplied by the command center.
+    pub cancellation_id: Uuid,
+    /// Request being cancelled.
+    pub request_id: Uuid,
+    /// Authenticated Snowman workforce human identity.
+    pub actor_identity: String,
+    /// Bounded machine-readable reason, never free-form client content.
+    pub reason_code: String,
+    /// Human-observed cancellation time.
+    pub occurred_at: DateTime<Utc>,
+}
+
+/// Result of an idempotent request cancellation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CancelledWorkRequest {
+    /// Stable request ID.
+    pub request_id: Uuid,
+    /// Number of non-terminal tasks fenced and cancelled by the first call.
+    pub cancelled_task_count: u64,
+    /// True only when this call performed the cancellation.
+    pub inserted: bool,
+}
+
 /// A human decision bound to one exact task execution snapshot.
 #[derive(Debug, Clone)]
 pub struct WorkApproval {
@@ -1129,6 +1155,143 @@ pub async fn get_work_request_status(
         event_count,
         created_at: request.try_get("created_at")?,
         updated_at: request.try_get("updated_at")?,
+    }))
+}
+
+/// Cancel every non-terminal task and invalidate every live lease atomically.
+///
+/// Cancellation is tenant-scoped, human-attributed, hash-chained, and
+/// idempotent by `cancellation_id`. A worker holding a previously valid bearer
+/// lease cannot heartbeat, spend, or finish after this transaction commits.
+pub async fn cancel_work_request(
+    pool: &PgPool,
+    community_id: CommunityId,
+    cancellation: &WorkRequestCancellation,
+) -> Result<Option<CancelledWorkRequest>> {
+    if cancellation.cancellation_id.is_nil()
+        || cancellation.request_id.is_nil()
+        || cancellation.actor_identity.trim() != cancellation.actor_identity
+        || cancellation.actor_identity.is_empty()
+        || cancellation.actor_identity.len() > 256
+        || !valid_reason_code(&cancellation.reason_code)
+    {
+        return Err(DbError::InvalidData(
+            "request cancellation identity or reason is invalid".into(),
+        ));
+    }
+    let community_id = *community_id.as_uuid();
+    let mut tx = pool.begin().await?;
+    let request = sqlx::query(
+        "SELECT status FROM snowman_work_requests \
+         WHERE community_id=$1 AND request_id=$2 FOR UPDATE",
+    )
+    .bind(community_id)
+    .bind(cancellation.request_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(request) = request else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let status: String = request.try_get("status")?;
+    if status == "cancelled" {
+        let existing = sqlx::query(
+            "SELECT actor_identity, payload, occurred_at FROM snowman_work_events \
+             WHERE community_id=$1 AND request_id=$2 AND event_id=$3 \
+               AND event_type='request.cancelled'",
+        )
+        .bind(community_id)
+        .bind(cancellation.request_id)
+        .bind(cancellation.cancellation_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(existing) = existing else {
+            return Err(DbError::AccessDenied(
+                "work request was cancelled by a different operation".into(),
+            ));
+        };
+        let payload: Value = existing.try_get("payload")?;
+        let exact = existing.try_get::<String, _>("actor_identity")? == cancellation.actor_identity
+            && existing.try_get::<DateTime<Utc>, _>("occurred_at")? == cancellation.occurred_at
+            && payload.get("reason_code").and_then(Value::as_str)
+                == Some(cancellation.reason_code.as_str());
+        if !exact {
+            return Err(DbError::AccessDenied(
+                "cancellation identifier was reused for different evidence".into(),
+            ));
+        }
+        let cancelled_task_count = payload
+            .get("cancelled_task_count")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                DbError::InvalidData("stored cancellation evidence is invalid".into())
+            })?;
+        tx.commit().await?;
+        return Ok(Some(CancelledWorkRequest {
+            request_id: cancellation.request_id,
+            cancelled_task_count,
+            inserted: false,
+        }));
+    }
+    if matches!(status.as_str(), "completed" | "failed" | "expired") {
+        return Err(DbError::AccessDenied(format!(
+            "a {status} work request cannot be cancelled"
+        )));
+    }
+
+    let cancelled = sqlx::query(
+        r#"
+        UPDATE snowman_work_tasks SET status='cancelled', updated_at=NOW()
+        WHERE community_id=$1 AND request_id=$2
+          AND status NOT IN (
+            'succeeded','failed','cancelled','expired','dead_lettered'
+          )
+        RETURNING task_id
+        "#,
+    )
+    .bind(community_id)
+    .bind(cancellation.request_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM snowman_task_leases l USING snowman_work_tasks t \
+         WHERE l.community_id=$1 AND t.community_id=l.community_id \
+           AND t.task_id=l.task_id AND t.request_id=$2",
+    )
+    .bind(community_id)
+    .bind(cancellation.request_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE snowman_work_requests SET status='cancelled', updated_at=NOW() \
+         WHERE community_id=$1 AND request_id=$2",
+    )
+    .bind(community_id)
+    .bind(cancellation.request_id)
+    .execute(&mut *tx)
+    .await?;
+    let cancelled_task_count = cancelled.len() as u64;
+    let event = NewWorkEvent {
+        event_id: cancellation.cancellation_id,
+        request_id: cancellation.request_id,
+        task_id: None,
+        event_type: "request.cancelled".into(),
+        actor_identity: cancellation.actor_identity.clone(),
+        payload: serde_json::json!({
+            "schema_version": "snowman.work.event.v1",
+            "reason_code": cancellation.reason_code,
+            "cancelled_task_count": cancelled_task_count,
+            "leases_invalidated": true,
+        }),
+        occurred_at: cancellation.occurred_at,
+    };
+    validate_work_event(&event)?;
+    append_work_event_tx(&mut tx, community_id, &event).await?;
+    tx.commit().await?;
+    Ok(Some(CancelledWorkRequest {
+        request_id: cancellation.request_id,
+        cancelled_task_count,
+        inserted: true,
     }))
 }
 
@@ -2360,6 +2523,16 @@ fn is_context_reference(reference: &str) -> bool {
     })
 }
 
+fn valid_reason_code(reason: &str) -> bool {
+    !reason.is_empty()
+        && reason.len() <= 128
+        && reason.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '_' | '-')
+        })
+}
+
 fn validate_work_event(event: &NewWorkEvent) -> Result<()> {
     let event_type = event.event_type.trim();
     if event_type.is_empty()
@@ -2598,5 +2771,15 @@ mod tests {
             validate_work_event(&invalid),
             Err(DbError::AccessDenied(_))
         ));
+    }
+
+    #[test]
+    fn cancellation_reason_codes_are_bounded_and_machine_readable() {
+        assert!(valid_reason_code("user.requested"));
+        assert!(valid_reason_code("objective_superseded-2"));
+        assert!(!valid_reason_code(""));
+        assert!(!valid_reason_code("contains spaces"));
+        assert!(!valid_reason_code("UPPERCASE"));
+        assert!(!valid_reason_code(&"a".repeat(129)));
     }
 }

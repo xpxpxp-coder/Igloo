@@ -2995,6 +2995,15 @@ impl Db {
         workforce::get_work_request_status(&self.pool, community, request_id).await
     }
 
+    /// Atomically cancel a request and invalidate every outstanding task lease.
+    pub async fn cancel_work_request(
+        &self,
+        community: CommunityId,
+        cancellation: &workforce::WorkRequestCancellation,
+    ) -> Result<Option<workforce::CancelledWorkRequest>> {
+        workforce::cancel_work_request(&self.pool, community, cancellation).await
+    }
+
     /// Append one hash-chained Snowman workforce lifecycle event.
     pub async fn append_work_event(
         &self,

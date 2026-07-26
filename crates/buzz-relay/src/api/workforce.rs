@@ -23,7 +23,7 @@ use uuid::Uuid;
 use buzz_auth::LimitType;
 use buzz_db::workforce::{
     NewPlannedTask, NewWorkPlan, NewWorkRequest, NewWorkTask, SpendEntry, StoredModelRoute,
-    WorkTaskCompletion,
+    WorkRequestCancellation, WorkTaskCompletion,
 };
 use snowman_workforce::{
     govern_team_plan, Classification, GovernedTeamPlan, ModelRoute, PlannedTask, RiskTier,
@@ -80,6 +80,14 @@ struct ClaimWorkTask {
 struct LeaseProof {
     generation: i64,
     lease_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelWorkRequest {
+    cancellation_id: Uuid,
+    reason_code: String,
+    occurred_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -469,6 +477,70 @@ pub async fn get_work_request(
     Ok(Json(json!({
         "schema_version": "snowman.work.request.status.v1",
         "request": status,
+    })))
+}
+
+/// Atomically stop a request, cancel non-terminal tasks, and fence live workers.
+pub async fn cancel_work_request(
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let path = format!("{CREATE_PATH}/{request_id}/cancel");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.requests.cancel",
+        "human",
+    )
+    .await?;
+    let input: CancelWorkRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid cancellation JSON"))?;
+    if request_id.is_nil()
+        || input.cancellation_id.is_nil()
+        || !is_reason_code(&input.reason_code)
+        || !is_recent_worker_time(input.occurred_at)
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "cancellation has invalid identity, reason, or time fields",
+        ));
+    }
+    let cancellation = WorkRequestCancellation {
+        cancellation_id: input.cancellation_id,
+        request_id,
+        actor_identity: format!("snowman:{}", principal.identity_id),
+        reason_code: input.reason_code,
+        occurred_at: input.occurred_at,
+    };
+    let cancelled = state
+        .db
+        .cancel_work_request(tenant.community(), &cancellation)
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "work request cannot be cancelled from its current state",
+            ),
+            _ => internal_error("workforce cancellation persistence failed"),
+        })?
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "work request not found"))?;
+    metrics::counter!(
+        "snowman_workforce_cancellations_total",
+        "outcome" => if cancelled.inserted { "cancelled" } else { "idempotent_replay" }
+    )
+    .increment(1);
+    Ok(Json(json!({
+        "schema_version": "snowman.work.request.cancelled.v1",
+        "request_id": cancelled.request_id,
+        "cancellation_id": cancellation.cancellation_id,
+        "cancelled_task_count": cancelled.cancelled_task_count,
+        "inserted": cancelled.inserted,
+        "status": "cancelled",
     })))
 }
 
@@ -994,6 +1066,16 @@ fn parse_classification(value: &str) -> Option<Classification> {
     }
 }
 
+fn is_reason_code(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '.' | '_' | '-')
+        })
+}
+
 fn parse_specialist_role(value: &str) -> Option<SpecialistRole> {
     match value {
         "lead" => Some(SpecialistRole::Lead),
@@ -1395,5 +1477,15 @@ mod tests {
     fn evidence_digests_are_canonical_lowercase() {
         assert!(parse_sha256(&"a".repeat(64), "digest").is_ok());
         assert!(parse_sha256(&"A".repeat(64), "digest").is_err());
+    }
+
+    #[test]
+    fn cancellation_reason_is_bounded_and_not_free_form() {
+        assert!(is_reason_code("user.requested"));
+        assert!(is_reason_code("objective_superseded-2"));
+        assert!(!is_reason_code(""));
+        assert!(!is_reason_code("contains client details"));
+        assert!(!is_reason_code("UPPERCASE"));
+        assert!(!is_reason_code(&"a".repeat(129)));
     }
 }

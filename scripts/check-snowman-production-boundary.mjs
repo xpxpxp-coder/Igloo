@@ -157,6 +157,16 @@ requireFragment(
   "client-ready work must use an independently identified quality/risk reviewer",
 );
 requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  '"workforce.requests.cancel"',
+  "human request cancellation must require an exact workforce capability",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "DELETE FROM snowman_task_leases l USING snowman_work_tasks t",
+  "request cancellation must invalidate every outstanding task lease",
+);
+requireFragment(
   "infra/aws/preflight.tf",
   "var.expected_workload_account_id != var.analyst360_workload_account_id",
   "production Command Center and Analyst 360 AWS authority must remain separate",

@@ -103,3 +103,9 @@ credential-like payload fields. The private plan endpoint rehydrates request
 authority server-side and never accepts a caller-supplied gateway. These are
 source foundations, not a claim that the AWS scheduler, workers, sandbox, model
 gateway, or external KMS checkpoints have passed staging.
+
+The human control path can now cancel a request idempotently under exact
+tenant/capability authority. Cancellation atomically marks every non-terminal
+task, destroys all live leases, and appends bounded human-attributed evidence,
+so an already-running worker loses heartbeat, spend, and completion authority as
+soon as the transaction commits.
