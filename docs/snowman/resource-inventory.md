@@ -31,6 +31,13 @@ claims require live verification before use.
   catalog and a Snowman-hosted AWS inference fleet for strict zero-third-party
   processing. The clients now default to this authority, but the service itself
   is not yet deployed or proven.
+- The Command Center AWS root now defines and validates the isolated managed
+  substrate: three-AZ network layout, no NAT/private internet route, exact AWS
+  endpoints, managed PostgreSQL, IAM-authenticated TLS Valkey, KMS/object-lock
+  storage, encrypted logs, alarms, and budgets. Mock-provider plans cover dormant
+  staging and production-HA invariants. It has not been planned against or
+  applied to a live Snowman account because the current AWS SSO session is
+  expired; ECS workloads, ALB/WAF, backup vault lock, and recovery proof remain.
 - The tenant-scoped Postgres workforce queue, fenced lease/recovery primitives,
   exact-snapshot approvals, capability-bound service identities, immutable
   context references, hard spend/token ledgers, aggregate request-state
@@ -50,8 +57,9 @@ claims require live verification before use.
   consumes replay nonces transactionally, stores only minimized lifecycle
   metadata and Analyst-authoritative artifact references, and returns a receipt
   signed by a separate Command Center KMS key. Analyst's outbox delivery worker,
-  private AWS routing, key provisioning, and staged two-tenant proof remain to be
-  completed.
+  Analyst now also has a dedicated least-privilege delivery worker and ECS role
+  in source. Private AWS routing, key provisioning/bindings, and staged
+  two-tenant proof remain to be completed.
 - Workforce identity/session/device/service schemas and fail-closed relay-key
   resolution now exist in source. The Snowman identity broker must still verify
   Google Workspace or AWS IAM Identity Center OIDC assertions and perform the

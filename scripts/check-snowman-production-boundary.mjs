@@ -62,6 +62,10 @@ const runtimeAuthorityFiles = [
   "infra/aws/versions.tf",
   "infra/aws/variables.tf",
   "infra/aws/preflight.tf",
+  "infra/aws/network.tf",
+  "infra/aws/data_plane.tf",
+  "infra/aws/operations.tf",
+  "infra/aws/outputs.tf",
 ];
 
 const forbidden = [

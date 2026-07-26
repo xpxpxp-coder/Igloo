@@ -44,7 +44,7 @@ evidence, and systematic Snowman branding.
 | Deployment | Evaluation/self-hosting ready, not Snowman AWS production ready | `deploy/compose/compose.yml` defaults to `ghcr.io/block/buzz:main` plus single-node Postgres/Redis/MinIO; Helm offers managed-service hooks | Do not use Compose in production. Build Snowman AWS IaC with managed data services, WAF/ALB, KMS, backups, immutable images, alarms, and cost controls. |
 | Accessibility | Meaningful component-level work, acceptance proof absent | extensive ARIA/reduced-motion usage and UI tests across desktop/web/mobile | Add automated axe/semantic checks plus keyboard, zoom, contrast, screen-reader, and mobile accessibility UAT evidence. |
 | Branding | Not started | Buzz/Sprout names, `xyz.block` identifiers, bee/hive assets, Catppuccin theme and deep links remain pervasive | Create a central product identity/design token layer, then migrate every supported surface while retaining protocol identifiers where compatibility requires them. |
-| Analyst 360 integration | Source foundation implemented; runtime hardening required | `crates/buzz-relay/src/api/analyst_integration.rs`; `crates/buzz-db/src/analyst_integration.rs`; `migrations/0029_snowman_analyst_event_boundary.sql`; Analyst 360 migration 047 and its command/outbox modules | Keep the asymmetric, versioned command/event boundary. Complete the Analyst delivery worker, private AWS routing, KMS/IAM provisioning, and adversarial cross-tenant staging proof; never share databases or copy raw Aptive rows/transcripts here by default. |
+| Analyst 360 integration | Bidirectional source boundary implemented; runtime proof required | `crates/buzz-relay/src/api/analyst_integration.rs`; `crates/buzz-db/src/analyst_integration.rs`; `migrations/0029_snowman_analyst_event_boundary.sql`; Analyst 360 migration 047, command/outbox modules, and dedicated delivery worker | Keep the asymmetric, versioned command/event boundary. Complete private AWS routing, KMS/IAM provisioning/bindings, and adversarial cross-tenant staging proof; never share databases or copy raw Aptive rows/transcripts here by default. |
 
 ## Hardening progress after the audited baseline
 
@@ -60,7 +60,8 @@ the highest risks without changing the production-readiness verdict:
   server-side, requires exact workforce capabilities, creates only a bounded
   planning task, and exposes metadata-only hash-chain evidence;
 - independently disabled private service-identity routes for idempotent claim,
-  fenced heartbeat, lease-bound spend, and atomic terminal evidence; and
+  fenced heartbeat, governed lead-to-specialist DAG/model expansion,
+  lease-bound spend, and atomic terminal evidence; and
 - Snowman-only model, update, release, pairing, push, image, and workflow
   destination enforcement with an automated production-boundary scanner;
 - default-off agent shell/network access, workspace containment, ambient secret
@@ -70,9 +71,13 @@ the highest risks without changing the production-readiness verdict:
 - a default-off Analyst lifecycle-event ingress with host-derived community
   scope, strict minimized schema, exact asymmetric KMS assertions, replay
   prevention, idempotent persistence, and independently KMS-signed receipts.
+- a validated AWS managed-substrate root with no NAT/private internet default
+  route, Cloudflare-source-only edge ingress, exact private AWS endpoints,
+  managed PostgreSQL/IAM-authenticated Valkey, object lock, KMS, encrypted logs,
+  alarms, and budgets. It remains unapplied.
 
 These are implementation foundations, not staged proof. OIDC assertion exchange,
-the Analyst outbox delivery worker, private integration routing, AWS
+private integration routing, AWS
 workers/scheduler/sandbox, KMS audit checkpoints, recovery/load/isolation
 exercises, comprehensive branding, accessibility, UAT, and launch evidence remain
 open gates.

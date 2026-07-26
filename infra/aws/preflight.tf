@@ -60,5 +60,33 @@ resource "terraform_data" "production_boundary_preflight" {
       condition     = !var.external_model_processors_enabled
       error_message = "External model processors are disabled until a provider/data-class approval is implemented."
     }
+
+    precondition {
+      condition     = alltrue([for zone in var.availability_zones : startswith(zone, var.aws_region)])
+      error_message = "Every availability zone must belong to the exact workload region."
+    }
+
+    precondition {
+      condition = startswith(
+        var.acm_certificate_arn,
+        "arn:${data.aws_partition.current.partition}:acm:${var.aws_region}:${var.expected_workload_account_id}:certificate/"
+      )
+      error_message = "The ACM certificate must belong to the exact workload account and region."
+    }
+
+    precondition {
+      condition     = var.deletion_protection
+      error_message = "Managed Snowman state must keep deletion protection enabled."
+    }
+
+    precondition {
+      condition     = var.environment != "production" || var.backup_retention_days == 35
+      error_message = "Production requires the maximum 35-day managed snapshot retention window."
+    }
+
+    precondition {
+      condition     = var.environment != "production" || var.audit_retention_days >= 2555
+      error_message = "Production audit checkpoints require at least seven years of object-lock retention."
+    }
   }
 }
