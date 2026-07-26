@@ -9,7 +9,7 @@ pub enum PubSubError {
 
     /// Failed to acquire a connection from the Redis pool.
     #[error("Redis pool error: {0}")]
-    Pool(#[from] deadpool_redis::PoolError),
+    Pool(#[from] crate::RedisPoolError),
 
     /// JSON serialization or deserialization failed.
     #[error("Serialization error: {0}")]

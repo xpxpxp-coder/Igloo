@@ -25,6 +25,8 @@
 pub mod cache_invalidation;
 /// Cross-pod connection-control commands over Redis pub/sub.
 pub mod conn_control;
+/// Governed Redis/Valkey connections, including streaming IAM credentials.
+pub mod connection;
 /// Error types for pub/sub operations.
 pub mod error;
 /// Redis-backed NIP-98 replay seen-set.
@@ -40,6 +42,9 @@ pub mod rate_limiter;
 pub mod subscriber;
 /// Community-scoped Redis event topics.
 pub mod topic;
+pub use connection::{
+    IntoRedisPool, RedisConnection, RedisConnector, RedisPool, RedisPoolError, RedisPoolStatus,
+};
 /// Typing indicator tracking in Redis.
 pub use error::PubSubError;
 
@@ -98,9 +103,7 @@ impl PubSubConfig {
 
 /// Central pub/sub manager for a Buzz relay instance.
 pub struct PubSubManager {
-    pool: deadpool_redis::Pool,
-    /// Redis URL used by the reconnect loop to re-establish pub/sub connections.
-    redis_url: String,
+    pool: RedisPool,
     /// Delay before unsubscribing after the last local interest is released.
     unsubscribe_debounce: Duration,
     /// Local desired topic refcounts; source of truth across Redis reconnects.
@@ -114,23 +117,23 @@ pub struct PubSubManager {
 
 impl PubSubManager {
     /// Creates a new `PubSubManager` connected to the given Redis URL.
-    pub async fn new(redis_url: &str, pool: deadpool_redis::Pool) -> Result<Self, PubSubError> {
+    pub async fn new(redis_url: &str, pool: impl IntoRedisPool) -> Result<Self, PubSubError> {
         Self::with_config(PubSubConfig::new(redis_url), pool).await
     }
 
     /// Creates a new `PubSubManager` using explicit pub/sub configuration.
     pub async fn with_config(
         config: PubSubConfig,
-        pool: deadpool_redis::Pool,
+        pool: impl IntoRedisPool,
     ) -> Result<Self, PubSubError> {
         let (broadcast_tx, _) = broadcast::channel(4096);
         let (cache_invalidation_tx, _) = broadcast::channel(4096);
         let (conn_control_tx, _) = broadcast::channel(4096);
         let (subscription_tx, subscription_rx) = mpsc::channel(4096);
 
+        let pool = pool.into_redis_pool(&config.redis_url)?;
         Ok(Self {
             pool,
-            redis_url: config.redis_url,
             unsubscribe_debounce: config.unsubscribe_debounce,
             desired_topics: Arc::new(Mutex::new(HashMap::new())),
             subscription_tx,
@@ -152,7 +155,7 @@ impl PubSubManager {
         };
 
         subscriber::run_subscriber(
-            self.redis_url.clone(),
+            self.pool.clone(),
             self.broadcast_tx.clone(),
             self.desired_topics.clone(),
             subscription_rx,
@@ -164,7 +167,7 @@ impl PubSubManager {
     /// reconnection. Runs forever — spawn this in a background task.
     pub async fn run_cache_invalidation_subscriber(self: Arc<Self>) {
         cache_invalidation::run_cache_invalidation_subscriber(
-            self.redis_url.clone(),
+            self.pool.clone(),
             self.cache_invalidation_tx.clone(),
         )
         .await;
@@ -173,11 +176,8 @@ impl PubSubManager {
     /// Starts the connection-control subscriber loop with automatic
     /// reconnection. Runs forever — spawn this in a background task.
     pub async fn run_conn_control_subscriber(self: Arc<Self>) {
-        conn_control::run_conn_control_subscriber(
-            self.redis_url.clone(),
-            self.conn_control_tx.clone(),
-        )
-        .await;
+        conn_control::run_conn_control_subscriber(self.pool.clone(), self.conn_control_tx.clone())
+            .await;
     }
 
     /// Returns a new broadcast receiver for locally-published channel events.
@@ -368,10 +368,14 @@ impl PubSubManager {
 
 #[cfg(test)]
 pub(crate) mod test_util {
-    pub fn make_test_pool() -> deadpool_redis::Pool {
+    use crate::RedisPool;
+
+    pub fn make_test_pool() -> RedisPool {
         let cfg = deadpool_redis::Config::from_url("redis://127.0.0.1:6379");
-        cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .expect("Failed to create Redis pool")
+        let pool = cfg
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .expect("Failed to create Redis pool");
+        RedisPool::from_deadpool("redis://127.0.0.1:6379", pool).expect("Failed to wrap Redis pool")
     }
 }
 

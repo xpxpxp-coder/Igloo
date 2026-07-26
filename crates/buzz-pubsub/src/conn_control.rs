@@ -15,7 +15,6 @@
 //! dropped, the next auth attempt is refused at the auth seam.
 
 use buzz_core::{CommunityId, TenantContext};
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -88,13 +87,13 @@ const BACKOFF_MAX_SECS: u64 = 30;
 /// broadcast. Mirrors [`crate::cache_invalidation::run_cache_invalidation_subscriber`]:
 /// a reconnect loop with exponential backoff. Never returns.
 pub async fn run_conn_control_subscriber(
-    redis_url: String,
+    pool: crate::RedisPool,
     broadcast_tx: broadcast::Sender<ScopedConnControl>,
 ) {
     let mut backoff_secs = BACKOFF_INITIAL_SECS;
 
     loop {
-        match connect_and_subscribe(&redis_url, &broadcast_tx).await {
+        match connect_and_subscribe(&pool, &broadcast_tx).await {
             Ok(()) => {
                 backoff_secs = BACKOFF_INITIAL_SECS;
                 tracing::warn!(
@@ -114,18 +113,24 @@ pub async fn run_conn_control_subscriber(
 }
 
 async fn connect_and_subscribe(
-    redis_url: &str,
+    pool: &crate::RedisPool,
     broadcast_tx: &broadcast::Sender<ScopedConnControl>,
 ) -> Result<(), redis::RedisError> {
-    let client = redis::Client::open(redis_url)?;
-    let mut conn = client.get_async_pubsub().await?;
-
-    conn.psubscribe(CONN_CONTROL_PATTERN).await?;
+    let (mut conn, mut pushes) = pool.subscriber().await?;
+    redis::cmd("PSUBSCRIBE")
+        .arg(CONN_CONTROL_PATTERN)
+        .query_async::<redis::Value>(&mut conn)
+        .await?;
 
     tracing::info!("Redis conn-control subscriber connected — listening on {CONN_CONTROL_PATTERN}");
 
-    let mut stream = conn.on_message();
-    while let Some(msg) = stream.next().await {
+    while let Some(push) = pushes.recv().await {
+        if push.kind == redis::PushKind::Disconnection {
+            return Ok(());
+        }
+        let Some(msg) = redis::Msg::from_push_info(push) else {
+            continue;
+        };
         let channel = msg.get_channel_name();
         let Some(community_id) = parse_conn_control_channel(channel) else {
             tracing::warn!("Received conn-control message on unexpected channel: {channel}");

@@ -75,6 +75,10 @@ pub struct Config {
     /// pod is only 4 — small enough that rate-limit checks, presence, and
     /// pub/sub publishes queue behind each other under load.
     pub redis_pool_size: usize,
+    /// IAM authentication configuration. `None` retains the local/test URL
+    /// path; Snowman AWS environments enable this explicitly and may not place
+    /// a password in `REDIS_URL`.
+    pub snowman_valkey_iam: Option<snowman_aws_auth::ElastiCacheIamConfig>,
     /// Public WebSocket URL of this relay, advertised in NIP-11.
     pub relay_url: String,
     /// Public WebSocket URL of the dedicated device-pairing relay, when configured.
@@ -484,6 +488,80 @@ impl Config {
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|&v| v > 0)
             .unwrap_or(16);
+
+        let snowman_valkey_iam = match std::env::var("SNOWMAN_VALKEY_IAM_ENABLED").ok().as_deref() {
+            Some("true") => {
+                let parsed = url::Url::parse(&redis_url).map_err(|error| {
+                    ConfigError::InvalidValue(format!("REDIS_URL must be valid: {error}"))
+                })?;
+                let host = parsed.host_str().unwrap_or_default();
+                if parsed.scheme() != "rediss"
+                    || !parsed.username().is_empty()
+                    || parsed.password().is_some()
+                    || parsed.path() != "/"
+                    || parsed.query().is_some()
+                    || parsed.fragment().is_some()
+                    || !(host.ends_with(".cache.amazonaws.com")
+                        || host.ends_with(".cache.amazonaws.com.cn"))
+                {
+                    return Err(ConfigError::InvalidValue(
+                        "IAM Valkey REDIS_URL must be a credential-free rediss:// ElastiCache endpoint with no path, query, or fragment"
+                            .to_string(),
+                    ));
+                }
+                let required = |name: &str| {
+                    std::env::var(name)
+                        .ok()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| {
+                            ConfigError::InvalidValue(format!(
+                                "{name} is required when SNOWMAN_VALKEY_IAM_ENABLED=true"
+                            ))
+                        })
+                };
+                let user_id = required("SNOWMAN_VALKEY_IAM_USER_ID")?;
+                let cache_name = required("SNOWMAN_VALKEY_CACHE_NAME")?;
+                let region = std::env::var("AWS_REGION")
+                    .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        ConfigError::InvalidValue(
+                            "AWS_REGION is required when SNOWMAN_VALKEY_IAM_ENABLED=true"
+                                .to_string(),
+                        )
+                    })?;
+                if !user_id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                }) || !cache_name
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+                    || !region.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || character == '-'
+                    })
+                {
+                    return Err(ConfigError::InvalidValue(
+                        "Valkey IAM user, cache name, or AWS region contains unsupported characters"
+                            .to_string(),
+                    ));
+                }
+                Some(snowman_aws_auth::ElastiCacheIamConfig {
+                    user_id,
+                    cache_name,
+                    region,
+                })
+            }
+            Some("false") | None => None,
+            Some(_) => {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_VALKEY_IAM_ENABLED must be exactly true or false".to_string(),
+                ))
+            }
+        };
 
         let relay_url =
             std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string());
@@ -1020,6 +1098,7 @@ impl Config {
             read_database_url,
             redis_url,
             redis_pool_size,
+            snowman_valkey_iam,
             relay_url,
             pairing_relay_url,
             max_connections,

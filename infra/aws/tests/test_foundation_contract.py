@@ -38,6 +38,7 @@ class AwsFoundationContractTests(unittest.TestCase):
             'authentication_mode',
             'type = "iam"',
             'engine        = "valkey"',
+            '~buzz:* &buzz:*',
             'customer_master_key_spec = "RSA_3072"',
         )
         for fragment in required:
@@ -45,6 +46,32 @@ class AwsFoundationContractTests(unittest.TestCase):
                 self.assertIn(fragment, source)
         self.assertNotIn("auth_token", source)
         self.assertNotIn("passwords", source)
+        self.assertNotIn("+@all", source)
+
+    def test_runtime_uses_streaming_iam_credentials(self) -> None:
+        connection = (ROOT.parent.parent / "crates" / "buzz-pubsub" / "src" / "connection.rs").read_text(encoding="utf-8")
+        auth = (ROOT.parent.parent / "crates" / "snowman-aws-auth" / "src" / "lib.rs").read_text(encoding="utf-8")
+        outputs = (ROOT / "outputs.tf").read_text(encoding="utf-8")
+        for fragment in (
+            "set_credentials_provider",
+            "set_automatic_resubscription",
+            "set_push_sender",
+        ):
+            self.assertIn(fragment, connection)
+        for fragment in (
+            'name("elasticache")',
+            "SignatureLocation::QueryParams",
+            "TOKEN_REFRESH",
+            "StreamingCredentialsProvider",
+        ):
+            self.assertIn(fragment, auth)
+        for fragment in (
+            "SNOWMAN_VALKEY_IAM_ENABLED",
+            "SNOWMAN_VALKEY_IAM_USER_ID",
+            "SNOWMAN_VALKEY_CACHE_NAME",
+            "elasticache:Connect",
+        ):
+            self.assertIn(fragment, outputs)
 
     def test_operations_are_encrypted_alerted_and_budgeted(self) -> None:
         source = (ROOT / "operations.tf").read_text(encoding="utf-8")

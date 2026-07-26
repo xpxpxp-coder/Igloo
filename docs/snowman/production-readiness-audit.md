@@ -37,11 +37,11 @@ evidence, and systematic Snowman branding.
 | Outbound workflow calls | Hardening required | `ActionDef::CallWebhook` and executor/sink implement external HTTP behavior | Apply destination allowlists, DNS/IP revalidation, time/size limits, credential references, redaction, approval tiers, and evidence capture. |
 | Rate limiting | Proven implementation, production tuning required | `crates/buzz-auth/src/rate_limit.rs`; relay configuration and Redis-backed limiter wiring | Treat older contrary prose as stale; load/adversarial test tenant fairness and failure behavior. |
 | Audit chain | Proven tamper-evidence, insufficient tamper resistance | `crates/buzz-audit/src/{hash,service}.rs` uses unkeyed SHA-256 and DB-resident chain rows | Add KMS-signed periodic checkpoints and immutable external retention. A DB writer can currently rewrite rows and recompute the chain. |
-| Multi-node fan-out | Proven implementation, operational proof pending | `crates/buzz-pubsub`; relay Redis subscriber/fan-out paths | Test failover, reconnect, duplicate suppression, and degraded Redis behavior in staging. |
+| Multi-node fan-out | Proven implementation plus IAM refresh path; operational proof pending | `crates/buzz-pubsub`; `crates/snowman-aws-auth`; relay Redis subscriber/fan-out paths | Test IAM refresh, failover, reconnect/resubscription, duplicate suppression, and degraded Valkey behavior in staging. |
 | Storage/search/media tenant scoping | Substantially proven, adversarial proof pending | community-aware modules in `crates/buzz-db`, `buzz-search`, `buzz-media`; multitenant conformance tests | Add cross-tenant signed-event, REST, media, search, git, workflow, pub/sub, and cache tests to the launch gate. |
 | Observability | Useful baseline | `crates/buzz-relay/src/{metrics,telemetry}.rs`; chart metrics/health configuration | Standardize Snowman OTLP, structured audit-safe logs, SLOs, dashboards, paging, synthetic probes, and runbooks. |
 | Supply chain | Useful baseline | pinned GitHub Actions; Docker provenance attestation in `.github/workflows/docker.yml`; multi-platform release workflows | Add Snowman-owned registries/signing trust, SBOM and vulnerability policy, dependency review, reproducible release evidence, and digest-only deploys. |
-| Deployment | Evaluation/self-hosting ready, not Snowman AWS production ready | `deploy/compose/compose.yml` defaults to `ghcr.io/block/buzz:main` plus single-node Postgres/Redis/MinIO; Helm offers managed-service hooks | Do not use Compose in production. Build Snowman AWS IaC with managed data services, WAF/ALB, KMS, backups, immutable images, alarms, and cost controls. |
+| Deployment | Validated managed AWS substrate, compute/edge/recovery proof incomplete | `infra/aws`; Compose remains unsuitable for production | Keep Compose out of production. Complete least-privilege ECS tasks, WAF/ALB, image trust, backup vault/recovery, live plan, and staged proof. |
 | Accessibility | Meaningful component-level work, acceptance proof absent | extensive ARIA/reduced-motion usage and UI tests across desktop/web/mobile | Add automated axe/semantic checks plus keyboard, zoom, contrast, screen-reader, and mobile accessibility UAT evidence. |
 | Branding | Not started | Buzz/Sprout names, `xyz.block` identifiers, bee/hive assets, Catppuccin theme and deep links remain pervasive | Create a central product identity/design token layer, then migrate every supported surface while retaining protocol identifiers where compatibility requires them. |
 | Analyst 360 integration | Bidirectional source boundary implemented; runtime proof required | `crates/buzz-relay/src/api/analyst_integration.rs`; `crates/buzz-db/src/analyst_integration.rs`; `migrations/0029_snowman_analyst_event_boundary.sql`; Analyst 360 migration 047, command/outbox modules, and dedicated delivery worker | Keep the asymmetric, versioned command/event boundary. Complete private AWS routing, KMS/IAM provisioning/bindings, and adversarial cross-tenant staging proof; never share databases or copy raw Aptive rows/transcripts here by default. |
@@ -74,7 +74,9 @@ the highest risks without changing the production-readiness verdict:
 - a validated AWS managed-substrate root with no NAT/private internet default
   route, Cloudflare-source-only edge ingress, exact private AWS endpoints,
   managed PostgreSQL/IAM-authenticated Valkey, object lock, KMS, encrypted logs,
-  alarms, and budgets. It remains unapplied.
+  alarms, and budgets; plus a tested streaming SigV4 provider, automatic Valkey
+  reauthentication/resubscription, password-free runtime contract, and a
+  key/channel/command-bounded Valkey IAM user. It remains unapplied.
 
 These are implementation foundations, not staged proof. OIDC assertion exchange,
 private integration routing, AWS

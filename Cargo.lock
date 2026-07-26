@@ -1592,6 +1592,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2 0.11.0",
+ "snowman-aws-auth",
  "snowman-workforce",
  "sqlx",
  "subtle",
@@ -1613,6 +1614,7 @@ dependencies = [
 name = "buzz-relay-mesh"
 version = "0.1.0"
 dependencies = [
+ "buzz-pubsub",
  "bytes",
  "deadpool-redis",
  "futures-util",
@@ -7663,6 +7665,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "itoa",
+ "log",
  "num-bigint",
  "percent-encoding",
  "pin-project-lite",
@@ -8813,6 +8816,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "snowman-aws-auth"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sigv4",
+ "aws-smithy-runtime-api",
+ "futures-util",
+ "redis",
+ "tokio",
+ "url",
 ]
 
 [[package]]

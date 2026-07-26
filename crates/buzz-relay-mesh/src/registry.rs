@@ -158,12 +158,12 @@ pub fn expiry_for(refresh: Duration) -> Duration {
 /// Redis-backed mesh bootstrap registry.
 #[derive(Clone)]
 pub struct ReadyRegistry {
-    pool: deadpool_redis::Pool,
+    pool: buzz_pubsub::RedisPool,
     refresh: Duration,
 }
 
 impl ReadyRegistry {
-    pub fn new(pool: deadpool_redis::Pool, refresh: Duration) -> Self {
+    pub fn new(pool: buzz_pubsub::RedisPool, refresh: Duration) -> Self {
         Self { pool, refresh }
     }
 
@@ -265,7 +265,7 @@ impl ReadyRegistry {
         }
     }
 
-    async fn conn(&self) -> Result<deadpool_redis::Connection, MeshError> {
+    async fn conn(&self) -> Result<buzz_pubsub::RedisConnection, MeshError> {
         self.pool
             .get()
             .await
@@ -346,6 +346,7 @@ mod tests {
         let pool = deadpool_redis::Config::from_url("redis://127.0.0.1:6379")
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .unwrap();
+        let pool = buzz_pubsub::RedisPool::from_deadpool("redis://127.0.0.1:6379", pool).unwrap();
         let registry = ReadyRegistry::new(pool, Duration::from_secs(15));
         let heartbeat = registry.heartbeat(ready_record(1));
         assert!(!heartbeat.published());

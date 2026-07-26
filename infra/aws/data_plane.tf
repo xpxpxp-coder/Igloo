@@ -383,7 +383,7 @@ resource "aws_elasticache_subnet_group" "valkey" {
 resource "aws_elasticache_user" "relay" {
   user_id       = "snowman-${var.environment}-relay"
   user_name     = "snowman-${var.environment}-relay"
-  access_string = "on ~* +@all"
+  access_string = "on ~buzz:* &buzz:* +get +mget +set +del +expire +pexpire +ttl +incr +scan +publish +subscribe +psubscribe +unsubscribe +punsubscribe +ping +eval +evalsha +script|load +script|exists"
   engine        = "valkey"
 
   authentication_mode {

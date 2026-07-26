@@ -35,7 +35,9 @@ claims require live verification before use.
   substrate: three-AZ network layout, no NAT/private internet route, exact AWS
   endpoints, managed PostgreSQL, IAM-authenticated TLS Valkey, KMS/object-lock
   storage, encrypted logs, alarms, and budgets. Mock-provider plans cover dormant
-  staging and production-HA invariants. It has not been planned against or
+  staging and production-HA invariants. The relay now has a tested streaming
+  SigV4 provider with automatic reauthentication/resubscription and the
+  Terraform root emits its password-free runtime contract. It has not been planned against or
   applied to a live Snowman account because the current AWS SSO session is
   expired; ECS workloads, ALB/WAF, backup vault lock, and recovery proof remain.
 - The tenant-scoped Postgres workforce queue, fenced lease/recovery primitives,

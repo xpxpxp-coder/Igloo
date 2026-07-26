@@ -4,8 +4,8 @@
 //! TTL is 3x the 30s heartbeat interval so a single missed heartbeat doesn't
 //! cause presence flap. Clean disconnect deletes immediately.
 
+use crate::RedisPool;
 use buzz_core::TenantContext;
-use deadpool_redis::Pool;
 use nostr::PublicKey;
 use std::collections::HashMap;
 
@@ -26,7 +26,7 @@ pub fn presence_key(ctx: &TenantContext, pubkey: &PublicKey) -> String {
 
 /// Sets presence status for `pubkey` with a [`PRESENCE_TTL_SECS`]-second TTL.
 pub async fn set_presence(
-    pool: &Pool,
+    pool: &RedisPool,
     ctx: &TenantContext,
     pubkey: &PublicKey,
     status: &str,
@@ -45,7 +45,7 @@ pub async fn set_presence(
 
 /// Removes the presence entry for `pubkey`. Call on clean disconnect.
 pub async fn clear_presence(
-    pool: &Pool,
+    pool: &RedisPool,
     ctx: &TenantContext,
     pubkey: &PublicKey,
 ) -> Result<(), PubSubError> {
@@ -60,7 +60,7 @@ pub async fn clear_presence(
 
 /// Returns the current presence status for `pubkey`, or `None` if not set or expired.
 pub async fn get_presence(
-    pool: &Pool,
+    pool: &RedisPool,
     ctx: &TenantContext,
     pubkey: &PublicKey,
 ) -> Result<Option<String>, PubSubError> {
@@ -72,7 +72,7 @@ pub async fn get_presence(
 
 /// Returns `pubkey_hex → status` for all currently-set keys.
 pub async fn get_presence_bulk(
-    pool: &Pool,
+    pool: &RedisPool,
     ctx: &TenantContext,
     pubkeys: &[PublicKey],
 ) -> Result<HashMap<String, String>, PubSubError> {

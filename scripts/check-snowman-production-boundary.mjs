@@ -10,6 +10,7 @@ const identity = JSON.parse(read("product/identity.json"));
 
 const runtimeAuthorityFiles = [
   "crates/buzz-relay/src/config.rs",
+  "crates/buzz-relay/src/main.rs",
   "crates/buzz-relay/src/authorization.rs",
   "crates/buzz-relay/src/api/workforce.rs",
   "crates/buzz-relay/src/api/analyst_integration.rs",
@@ -27,6 +28,8 @@ const runtimeAuthorityFiles = [
   "crates/buzz-db/src/workforce_identity.rs",
   "crates/buzz-db/src/analyst_integration.rs",
   "crates/snowman-workforce/src/lib.rs",
+  "crates/snowman-aws-auth/src/lib.rs",
+  "crates/buzz-pubsub/src/connection.rs",
   "migrations/0025_snowman_workforce.sql",
   "migrations/0026_snowman_workforce_identity.sql",
   "migrations/0027_snowman_workforce_request_contract.sql",
@@ -211,6 +214,31 @@ requireFragment(
   "crates/buzz-relay/src/config.rs",
   "Err(_) => None,",
   "push delivery must default off",
+);
+requireFragment(
+  "crates/buzz-relay/src/config.rs",
+  "SNOWMAN_VALKEY_IAM_ENABLED",
+  "Snowman AWS Valkey must require explicit streaming IAM mode",
+);
+requireFragment(
+  "crates/buzz-relay/src/main.rs",
+  "ElastiCacheIamCredentials::load(iam)",
+  "relay startup must bind Valkey to the AWS workload identity provider",
+);
+requireFragment(
+  "crates/snowman-aws-auth/src/lib.rs",
+  "SignatureLocation::QueryParams",
+  "Valkey credentials must be short-lived SigV4 query tokens",
+);
+requireFragment(
+  "crates/buzz-pubsub/src/connection.rs",
+  "set_credentials_provider(provider)",
+  "Redis connections must consume refreshed credentials without URL secrets",
+);
+requireFragment(
+  "crates/buzz-pubsub/src/connection.rs",
+  "set_automatic_resubscription()",
+  "Redis pub/sub must restore governed subscriptions after IAM reconnects",
 );
 requireFragment(
   "crates/buzz-relay/src/authorization.rs",

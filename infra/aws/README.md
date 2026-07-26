@@ -43,7 +43,10 @@ read-only identity check, so no AWS mutations have been attempted from this
 branch.
 
 The Valkey substrate deliberately uses IAM authentication rather than a static
-password. The relay runtime must gain a short-lived SigV4 Valkey credential
-provider and automatic reauthentication before its ECS service can be enabled;
-the current Redis client path does not yet provide that production proof. This
-is an engineering dependency, not a user approval.
+password. `snowman-aws-auth` generates 15-minute SigV4 tokens from the ECS task
+role; the shared Redis boundary refreshes them every ten minutes,
+reauthenticates live connections, reconnects, and restores RESP3 subscriptions.
+`valkey_runtime_contract` emits the exact non-secret environment and the two
+resources an ECS task role must receive under `elasticache:Connect`. The IAM
+user is restricted to `buzz:*` keys/channels and the commands the relay and mesh
+actually use; it does not receive `+@all`.

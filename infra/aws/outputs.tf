@@ -43,6 +43,20 @@ output "managed_state" {
   }
 }
 
+output "valkey_runtime_contract" {
+  description = "Non-secret relay settings and IAM resources required for short-lived Valkey authentication."
+  value = {
+    REDIS_URL                      = "rediss://${aws_elasticache_replication_group.valkey.primary_endpoint_address}:${aws_elasticache_replication_group.valkey.port}"
+    SNOWMAN_VALKEY_IAM_ENABLED     = "true"
+    SNOWMAN_VALKEY_IAM_USER_ID     = aws_elasticache_user.relay.user_id
+    SNOWMAN_VALKEY_CACHE_NAME      = aws_elasticache_replication_group.valkey.replication_group_id
+    AWS_REGION                     = data.aws_region.current.name
+    required_iam_action            = "elasticache:Connect"
+    required_replication_group_arn = aws_elasticache_replication_group.valkey.arn
+    required_user_arn              = aws_elasticache_user.relay.arn
+  }
+}
+
 output "operations_posture" {
   description = "Alert, budget, and logging coordinates requiring launch evidence."
   value = {

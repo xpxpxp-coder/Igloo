@@ -334,10 +334,23 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let redis_pool = {
-        let mut cfg = deadpool_redis::Config::from_url(&config.redis_url);
-        cfg.pool = Some(deadpool_redis::PoolConfig::new(config.redis_pool_size));
-        cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .map_err(|e| anyhow::anyhow!("Redis pool creation failed: {e}"))?
+        if let Some(iam) = config.snowman_valkey_iam.clone() {
+            let provider = snowman_aws_auth::ElastiCacheIamCredentials::load(iam)
+                .await
+                .map_err(|error| anyhow::anyhow!("Valkey IAM initialization failed: {error}"))?;
+            buzz_pubsub::RedisPool::managed(&config.redis_url, config.redis_pool_size, provider)
+                .await
+                .map_err(|error| anyhow::anyhow!("Valkey IAM connection failed: {error}"))?
+        } else {
+            let mut cfg = deadpool_redis::Config::from_url(&config.redis_url);
+            cfg.pool = Some(deadpool_redis::PoolConfig::new(config.redis_pool_size));
+            let pool = cfg
+                .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+                .map_err(|error| anyhow::anyhow!("Redis pool creation failed: {error}"))?;
+            buzz_pubsub::RedisPool::from_deadpool(&config.redis_url, pool).map_err(|error| {
+                anyhow::anyhow!("Redis connection configuration failed: {error}")
+            })?
+        }
     };
     let redis_health_pool = redis_pool.clone(); // cheap Arc clone — shared with readiness handler
     let pubsub = Arc::new(
