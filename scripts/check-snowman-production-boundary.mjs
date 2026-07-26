@@ -35,6 +35,7 @@ const runtimeAuthorityFiles = [
   "crates/buzz-db/src/analyst_integration.rs",
   "crates/snowman-workforce/src/lib.rs",
   "crates/snowman-aws-auth/src/lib.rs",
+  "crates/snowman-analyst-client/src/lib.rs",
   "crates/snowman-bootstrap/src/main.rs",
   "crates/buzz-db/src/runtime_security.rs",
   "crates/buzz-pubsub/src/connection.rs",
@@ -167,6 +168,26 @@ requireFragment(
   "mobile/lib/features/pairing/pairing_provider.dart",
   "Relay URL is outside the Snowman-controlled boundary",
   "mobile pairing must enforce the Snowman transport boundary",
+);
+requireFragment(
+  "crates/snowman-analyst-client/src/lib.rs",
+  ".no_proxy()",
+  "Analyst commands must not inherit ambient proxy routes",
+);
+requireFragment(
+  "crates/snowman-analyst-client/src/lib.rs",
+  ".redirect(Policy::none())",
+  "Analyst commands must reject redirects",
+);
+requireFragment(
+  "crates/snowman-analyst-client/src/lib.rs",
+  "SigningAlgorithmSpec::RsassaPssSha256",
+  "Analyst commands must use the approved asymmetric KMS assertion algorithm",
+);
+requireFragment(
+  "crates/snowman-analyst-client/src/lib.rs",
+  'reference.authority == "analyst360"',
+  "Analyst artifact references must preserve Analyst authority",
 );
 requireFragment(
   "crates/snowman-workforce/src/lib.rs",

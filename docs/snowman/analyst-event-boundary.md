@@ -86,5 +86,13 @@ Production requires all of the following evidence:
 5. Analyst outbox retry/dead-letter delivery, receiver recovery, KMS degradation,
    backup/restore, metrics/alerts, and full command-to-event correlation proof.
 
-Until those pass, this is a compiled application boundary rather than a
-production-ready integration.
+The outbound half is implemented in `crates/snowman-analyst-client`. Workers can
+submit only the six allowlisted v1 Analyst capabilities, with
+tenant/client/project and delegated-agent binding, one-time exact-body AWS KMS
+assertions, no ambient proxy or redirect handling, bounded responses, and local
+validation of Analyst's receipt and initial lifecycle-event digests. It receives
+no Analyst database, cache, object-store, or client-data credential.
+
+Until private routing, principal/key provisioning, capability-specific workers,
+and adversarial staged proof pass, this is a compiled application boundary
+rather than a production-ready integration.

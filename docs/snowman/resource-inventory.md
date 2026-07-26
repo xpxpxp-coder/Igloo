@@ -109,10 +109,12 @@ record, not a client-side API key or direct vendor CLI.
   asymmetric KMS service assertions, rejects unknown or scope-mismatched fields,
   consumes replay nonces transactionally, stores only minimized lifecycle
   metadata and Analyst-authoritative artifact references, and returns a receipt
-  signed by a separate Command Center KMS key. Analyst's outbox delivery worker,
-  Analyst now also has a dedicated least-privilege delivery worker and ECS role
-  in source. Private AWS routing, key provisioning/bindings, and staged
-  two-tenant proof remain to be completed.
+  signed by a separate Command Center KMS key. The outbound Command Center client
+  now submits only allowlisted tenant-bound commands using one-time exact-body KMS
+  assertions, rejects redirects/proxies/non-Snowman hosts, and verifies Analyst
+  receipt/event digests. Analyst also has a dedicated least-privilege delivery
+  worker and ECS role in source. Private AWS routing, key provisioning/bindings,
+  capability-specific workers, and staged two-tenant proof remain to be completed.
 - Workforce identity/session/device/service schemas and fail-closed relay-key
   resolution now exist in source. The Snowman identity broker must still verify
   Google Workspace or AWS IAM Identity Center OIDC assertions and perform the
