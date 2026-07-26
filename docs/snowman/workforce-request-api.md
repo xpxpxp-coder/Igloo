@@ -82,7 +82,7 @@ Source support now exists for a separately addressed private worker service:
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/finish` | Atomically records a terminal result and hash-chain evidence event under the current lease. |
 | `POST /internal/snowman/v1/workforce/requests/{request_id}/context-packets` | Publishes a bounded metadata-only handoff under the writer's current fenced task lease. |
 | `GET /internal/snowman/v1/workforce/requests/{request_id}/context-packets` | Lists only non-expired manifests for an actively assigned reader; artifact bodies remain in their authority. |
-| `POST /internal/snowman/v1/workforce/requests/{request_id}/proactive-actions` | Evaluates an authorized trigger against the server-owned auto/approval/reject policy and durably reserves approved cost. |
+| `POST /internal/snowman/v1/workforce/requests/{request_id}/proactive-actions` | Evaluates an authorized trigger and, for a non-rejected v2 contract, atomically creates a model-routed ordinary work task under the existing approval/lease/spend/evidence controls. |
 | `POST /internal/snowman/v1/workforce/maintenance/tick` | Idempotently enforces deadlines, recovers expired leases, dead-letters exhausted tasks, expires stale proactive proposals, and appends transition evidence. |
 
 Every route requires a live `service` workforce binding and the exact
@@ -145,6 +145,16 @@ points. A private scheduler deployment may explicitly set
 `SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD`, and
 `SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS`; the relay records the exact
 policy digest used for every decision.
+The v2 proposal also requires a distinct executor identity, supported
+role/capability pair, content-addressed instruction, bounded context, evaluated
+model proposal, token/cost ceilings, artifact type, schedule, expiry, and retry
+cap. The server selects the model, binds the complete execution snapshot, and
+materializes only automatic or approval-gated decisions as ordinary work tasks.
+Rejected actions create no executable task. Database triggers keep the proactive
+status synchronized with task claim, approval, completion, cancellation,
+expiry, requeue, and dead-letter transitions. The v2 decision receipt returns
+the task, executor, selected model, execution-snapshot digest, and approval flag
+under `execution`; it is `null` for a rejected action.
 The identity-isolated worker and maintenance scheduler now implement claim,
 planning, heartbeat, governed Analyst dispatch/status, context publication,
 terminal completion, deadline enforcement, lease recovery, and dead-lettering

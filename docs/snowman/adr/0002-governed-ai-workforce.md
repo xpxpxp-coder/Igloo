@@ -103,6 +103,14 @@ usefulness evidence digest rather than a free-form rationale. “Queued” is no
 execution bypass: the scheduler/worker must still claim a fenced lease, hold the
 action capability, and stop at the recorded approval gate.
 
+The v2 proposal closes the prior payload gap. Every non-rejected action now
+includes an immutable instruction reference, bounded context, executor identity,
+supported specialist role/capability, artifact contract, schedule/expiry,
+budgets, retry cap, and optional model proposal. The relay selects an evaluated
+model and atomically inserts the action as an ordinary work task. This reuses
+the existing approval, lease fencing, spend, cancellation, context, completion,
+recovery, and hash-chain controls; rejected actions have no task authority.
+
 The private proposal endpoint does not accept a policy from an agent. It uses
 the server-owned allowlist, automatic cost ceiling, and confidence threshold;
 all default to no automatic action until explicitly configured on the private

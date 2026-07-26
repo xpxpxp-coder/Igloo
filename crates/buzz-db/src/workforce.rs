@@ -22,7 +22,7 @@ use snowman_workforce::{
 use crate::{DbError, Result};
 
 /// One specialist task created with a work request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NewWorkTask {
     /// Stable task identifier supplied by the orchestrator.
     pub task_id: Uuid,
@@ -392,6 +392,8 @@ pub struct NewProactiveAction {
     pub expires_at: DateTime<Utc>,
     /// Server-observed proposal time.
     pub created_at: DateTime<Utc>,
+    /// Complete model-routed task contract, absent only for a rejected action.
+    pub execution_task: Option<NewWorkTask>,
 }
 
 /// Result of durably evaluating one proactive action.
@@ -1224,6 +1226,8 @@ pub async fn schedule_proactive_action(
     proposal: &NewProactiveAction,
 ) -> Result<ScheduledProactiveAction> {
     let decision = decide_proactive_action(&proposal.action, &proposal.policy);
+    let executable = decision != ProactiveDecision::Reject;
+    let task = proposal.execution_task.as_ref();
     if proposal.action.community_id != *community_id.as_uuid()
         || proposal.action.action_id.is_nil()
         || proposal.action.objective_id.is_nil()
@@ -1231,12 +1235,65 @@ pub async fn schedule_proactive_action(
         || proposal.source_event_sha256 == [0; 32]
         || proposal.created_at > proposal.scheduled_for
         || proposal.expires_at <= proposal.scheduled_for
+        || executable != task.is_some()
     {
         return Err(DbError::InvalidData(
             "proactive action scope, evidence, or schedule is invalid".into(),
         ));
     }
-    let action_bytes = serde_json::to_vec(&proposal.action)
+    if let Some(task) = task {
+        validate_model_gateway_route(&task.model_gateway_route)?;
+        let instruction_reference = task
+            .expected_artifact_contract
+            .get("instruction_reference")
+            .and_then(Value::as_str);
+        let artifact_type = task
+            .expected_artifact_contract
+            .get("artifact_type")
+            .and_then(Value::as_str);
+        if task.task_id != proposal.action.action_id
+            || task.parent_task_id.is_some()
+            || task.service_identity_id.is_nil()
+            || task.available_at != proposal.scheduled_for
+            || task.deadline_at != Some(proposal.expires_at)
+            || task.max_cost_microusd
+                != i64::try_from(proposal.action.expected_cost_microusd).unwrap_or(-1)
+            || task.approval_required != (decision != ProactiveDecision::ExecuteAutomatically)
+            || !task
+                .required_capabilities
+                .contains(&proposal.action.capability)
+            || !valid_proactive_execution(&task.specialist_role, &proposal.action.capability)
+            || task.specialist_role == "lead"
+            || task.model_id.trim().is_empty()
+            || task.max_cost_microusd < 0
+            || task.expected_input_tokens < 0
+            || task.max_output_tokens < 0
+            || task.execution_snapshot_sha256 == [0; 32]
+            || task.context_references.len() > 64
+            || task
+                .context_references
+                .iter()
+                .any(|item| !is_context_reference(item))
+            || instruction_reference.is_none_or(|reference| {
+                !is_context_reference(reference)
+                    || !task.context_references.iter().any(|item| item == reference)
+            })
+            || artifact_type.is_none_or(|value| value.trim().is_empty() || value.len() > 128)
+            || !valid_capability_set(&task.required_capabilities)
+            || task.risk_tier != risk_tier_name(proposal.action.risk_tier)
+            || task.reversible != proposal.action.reversible
+            || task.risk_tier == "prohibited"
+            || (!task.reversible && !task.approval_required)
+            || !(1..=20).contains(&task.max_attempts)
+            || !(0..=100).contains(&task.priority)
+        {
+            return Err(DbError::AccessDenied(
+                "proactive execution task violates identity, model, context, budget, or risk policy"
+                    .into(),
+            ));
+        }
+    }
+    let action_bytes = serde_json::to_vec(&(&proposal.action, &proposal.execution_task))
         .map_err(|error| DbError::InvalidData(format!("proactive action is invalid: {error}")))?;
     let policy_bytes = serde_json::to_vec(&proposal.policy)
         .map_err(|error| DbError::InvalidData(format!("proactive policy is invalid: {error}")))?;
@@ -1246,16 +1303,52 @@ pub async fn schedule_proactive_action(
     let mut tx = pool.begin().await?;
     let request = sqlx::query(
         r#"
-        SELECT r.status, r.max_cost_microusd,
+        SELECT r.status, r.classification, r.max_cost_microusd,
+               r.max_input_tokens, r.max_output_tokens,
                COALESCE((
                  SELECT SUM(s.cost_microusd) FROM snowman_spend_ledger s
                  WHERE s.community_id=r.community_id AND s.request_id=r.request_id
                ), 0)::bigint AS used_cost_microusd,
                COALESCE((
+                 SELECT SUM(s.input_tokens) FROM snowman_spend_ledger s
+                 WHERE s.community_id=r.community_id AND s.request_id=r.request_id
+               ), 0)::bigint AS used_input_tokens,
+               COALESCE((
+                 SELECT SUM(s.output_tokens) FROM snowman_spend_ledger s
+                 WHERE s.community_id=r.community_id AND s.request_id=r.request_id
+               ), 0)::bigint AS used_output_tokens,
+               COALESCE((
+                 SELECT SUM(GREATEST(t.max_cost_microusd - COALESCE((
+                   SELECT SUM(s.cost_microusd) FROM snowman_spend_ledger s
+                   WHERE s.community_id=t.community_id AND s.task_id=t.task_id
+                 ), 0), 0)) FROM snowman_work_tasks t
+                 WHERE t.community_id=r.community_id AND t.request_id=r.request_id
+                   AND t.status IN ('queued','awaiting_approval','leased','running','reviewing')
+               ), 0)::bigint AS task_reserved_cost_microusd,
+               COALESCE((
+                 SELECT SUM(GREATEST(t.expected_input_tokens - COALESCE((
+                   SELECT SUM(s.input_tokens) FROM snowman_spend_ledger s
+                   WHERE s.community_id=t.community_id AND s.task_id=t.task_id
+                 ), 0), 0)) FROM snowman_work_tasks t
+                 WHERE t.community_id=r.community_id AND t.request_id=r.request_id
+                   AND t.status IN ('queued','awaiting_approval','leased','running','reviewing')
+               ), 0)::bigint AS task_reserved_input_tokens,
+               COALESCE((
+                 SELECT SUM(GREATEST(t.max_output_tokens - COALESCE((
+                   SELECT SUM(s.output_tokens) FROM snowman_spend_ledger s
+                   WHERE s.community_id=t.community_id AND s.task_id=t.task_id
+                 ), 0), 0)) FROM snowman_work_tasks t
+                 WHERE t.community_id=r.community_id AND t.request_id=r.request_id
+                   AND t.status IN ('queued','awaiting_approval','leased','running','reviewing')
+               ), 0)::bigint AS task_reserved_output_tokens,
+               COALESCE((
                  SELECT SUM(a.expected_cost_microusd) FROM snowman_proactive_actions a
                  WHERE a.community_id=r.community_id AND a.request_id=r.request_id
+                   AND a.task_id IS NULL
                    AND a.status IN ('queued', 'awaiting_approval', 'leased', 'running')
                ), 0)::bigint AS proactive_reserved_microusd,
+               (SELECT COUNT(*)::bigint FROM snowman_work_tasks t
+                WHERE t.community_id=r.community_id AND t.request_id=r.request_id) AS task_count,
                EXISTS (
                  SELECT 1 FROM snowman_workforce_identities i
                  JOIN snowman_workforce_capability_grants g
@@ -1291,7 +1384,7 @@ pub async fn schedule_proactive_action(
     }
     let existing = sqlx::query(
         r#"
-        SELECT request_id, proposed_by_identity_id, source_event_sha256,
+        SELECT request_id, task_id, proposed_by_identity_id, source_event_sha256,
                policy_sha256, action_sha256, decision, scheduled_for,
                expires_at, created_at
         FROM snowman_proactive_actions
@@ -1304,6 +1397,8 @@ pub async fn schedule_proactive_action(
     .await?;
     if let Some(existing) = existing {
         let exact = existing.try_get::<Uuid, _>("request_id")? == proposal.action.objective_id
+            && existing.try_get::<Option<Uuid>, _>("task_id")?
+                == proposal.execution_task.as_ref().map(|task| task.task_id)
             && existing.try_get::<Uuid, _>("proposed_by_identity_id")?
                 == proposal.proposed_by_identity_id
             && existing
@@ -1332,33 +1427,114 @@ pub async fn schedule_proactive_action(
         ));
     }
     if decision != ProactiveDecision::Reject {
-        let committed = request
-            .try_get::<i64, _>("used_cost_microusd")?
-            .checked_add(request.try_get::<i64, _>("proactive_reserved_microusd")?)
-            .and_then(|value| {
-                value.checked_add(i64::try_from(proposal.action.expected_cost_microusd).ok()?)
-            })
-            .ok_or_else(|| DbError::AccessDenied("proactive cost reservation overflowed".into()))?;
-        if committed > request.try_get::<i64, _>("max_cost_microusd")? {
+        let task = proposal
+            .execution_task
+            .as_ref()
+            .expect("non-rejected proactive action has an execution task");
+        if request.try_get::<i64, _>("task_count")? >= 64 {
             return Err(DbError::AccessDenied(
-                "proactive action would exceed the request cost ceiling".into(),
+                "proactive action would exceed the request task limit".into(),
             ));
         }
+        let proactive_reserved_microusd =
+            request.try_get::<i64, _>("proactive_reserved_microusd")?;
+        let committed_cost = request
+            .try_get::<i64, _>("used_cost_microusd")?
+            .checked_add(request.try_get::<i64, _>("task_reserved_cost_microusd")?)
+            .and_then(|value| value.checked_add(proactive_reserved_microusd))
+            .and_then(|value| value.checked_add(task.max_cost_microusd))
+            .ok_or_else(|| DbError::AccessDenied("proactive cost reservation overflowed".into()))?;
+        let committed_input = request
+            .try_get::<i64, _>("used_input_tokens")?
+            .checked_add(request.try_get::<i64, _>("task_reserved_input_tokens")?)
+            .and_then(|value| value.checked_add(task.expected_input_tokens))
+            .ok_or_else(|| {
+                DbError::AccessDenied("proactive input reservation overflowed".into())
+            })?;
+        let committed_output = request
+            .try_get::<i64, _>("used_output_tokens")?
+            .checked_add(request.try_get::<i64, _>("task_reserved_output_tokens")?)
+            .and_then(|value| value.checked_add(task.max_output_tokens))
+            .ok_or_else(|| {
+                DbError::AccessDenied("proactive output reservation overflowed".into())
+            })?;
+        if committed_cost > request.try_get::<i64, _>("max_cost_microusd")?
+            || committed_input > request.try_get::<i64, _>("max_input_tokens")?
+            || committed_output > request.try_get::<i64, _>("max_output_tokens")?
+        {
+            return Err(DbError::AccessDenied(
+                "proactive action would exceed a request cost or token ceiling".into(),
+            ));
+        }
+        let identity_ready: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+              SELECT 1 FROM snowman_workforce_identities i
+              WHERE i.community_id=$1 AND i.identity_id=$2
+                AND i.identity_type='service' AND i.role='agent' AND i.status='active'
+                AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > NOW())
+                AND NOT EXISTS (
+                  SELECT 1 FROM unnest($3::text[]) required(capability)
+                  WHERE NOT EXISTS (
+                    SELECT 1 FROM snowman_workforce_capability_grants g
+                    WHERE g.community_id=i.community_id AND g.identity_id=i.identity_id
+                      AND g.capability=required.capability AND g.revoked_at IS NULL
+                      AND (g.expires_at IS NULL OR g.expires_at > NOW())
+                  )
+                )
+            )
+            "#,
+        )
+        .bind(community_id)
+        .bind(task.service_identity_id)
+        .bind(&task.required_capabilities)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !identity_ready {
+            return Err(DbError::AccessDenied(
+                "proactive executor lacks an active exact capability grant".into(),
+            ));
+        }
+        let model_ready: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+              SELECT 1 FROM snowman_model_routes m
+              WHERE m.community_id=$1 AND m.model_id=$2 AND m.gateway_url=$3
+                AND m.status='active' AND m.evaluated_at <= NOW()
+                AND $4=ANY(m.suited_roles)
+                AND $5=ANY(m.allowed_classifications)
+            )
+            "#,
+        )
+        .bind(community_id)
+        .bind(&task.model_id)
+        .bind(&task.model_gateway_route)
+        .bind(&task.specialist_role)
+        .bind(request.try_get::<String, _>("classification")?)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !model_ready {
+            return Err(DbError::AccessDenied(
+                "proactive model route is not active for its role and classification".into(),
+            ));
+        }
+        insert_task(&mut tx, community_id, proposal.action.objective_id, task).await?;
     }
     sqlx::query(
         r#"
         INSERT INTO snowman_proactive_actions
-          (community_id, action_id, request_id, proposed_by_identity_id,
+          (community_id, action_id, request_id, task_id, proposed_by_identity_id,
            trigger_kind, capability, risk_tier, reversible,
            expected_cost_microusd, confidence_basis_points, usefulness_sha256,
            source_event_sha256, policy_sha256, action_sha256, decision, status,
            scheduled_for, expires_at, created_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
         "#,
     )
     .bind(community_id)
     .bind(proposal.action.action_id)
     .bind(proposal.action.objective_id)
+    .bind(proposal.execution_task.as_ref().map(|task| task.task_id))
     .bind(proposal.proposed_by_identity_id)
     .bind(proactive_trigger_name(proposal.action.trigger))
     .bind(&proposal.action.capability)
@@ -1381,27 +1557,49 @@ pub async fn schedule_proactive_action(
     .bind(proposal.created_at)
     .execute(&mut *tx)
     .await?;
+    let mut event_payload = serde_json::json!({
+        "schema_version": "snowman.proactive.decision.v2",
+        "action_sha256": hex::encode(action_sha256),
+        "policy_sha256": hex::encode(policy_sha256),
+        "source_event_sha256": hex::encode(proposal.source_event_sha256),
+        "trigger": proactive_trigger_name(proposal.action.trigger),
+        "capability": proposal.action.capability,
+        "decision": proactive_decision_name(decision),
+        "scheduled_for": proposal.scheduled_for,
+        "expires_at": proposal.expires_at,
+    });
+    if let Some(task) = proposal.execution_task.as_ref() {
+        let object = event_payload
+            .as_object_mut()
+            .expect("proactive event payload is an object");
+        object.insert(
+            "execution_snapshot_sha256".into(),
+            Value::String(hex::encode(task.execution_snapshot_sha256)),
+        );
+        object.insert(
+            "executor_identity_id".into(),
+            Value::String(task.service_identity_id.to_string()),
+        );
+        object.insert(
+            "specialist_role".into(),
+            Value::String(task.specialist_role.clone()),
+        );
+        object.insert("model_id".into(), Value::String(task.model_id.clone()));
+    }
     let event = NewWorkEvent {
         event_id: proposal.action.action_id,
         request_id: proposal.action.objective_id,
-        task_id: None,
+        task_id: proposal.execution_task.as_ref().map(|task| task.task_id),
         event_type: format!("proactive.{}", proactive_status_name(decision)),
         actor_identity: format!("snowman-service:{}", proposal.proposed_by_identity_id),
-        payload: serde_json::json!({
-            "schema_version": "snowman.proactive.decision.v1",
-            "action_sha256": hex::encode(action_sha256),
-            "policy_sha256": hex::encode(policy_sha256),
-            "source_event_sha256": hex::encode(proposal.source_event_sha256),
-            "trigger": proactive_trigger_name(proposal.action.trigger),
-            "capability": proposal.action.capability,
-            "decision": proactive_decision_name(decision),
-            "scheduled_for": proposal.scheduled_for,
-            "expires_at": proposal.expires_at,
-        }),
+        payload: event_payload,
         occurred_at: proposal.created_at,
     };
     validate_work_event(&event)?;
     append_work_event_tx(&mut tx, community_id, &event).await?;
+    if decision != ProactiveDecision::Reject {
+        refresh_request_status(&mut tx, community_id, proposal.action.objective_id).await?;
+    }
     tx.commit().await?;
     Ok(ScheduledProactiveAction {
         action_id: proposal.action.action_id,
@@ -2741,15 +2939,17 @@ pub async fn maintain_workforce(
         expired_task_rows = sqlx::query(
             r#"
             WITH due AS (
-              SELECT task_id, request_id, status AS previous_status
-              FROM snowman_work_tasks
-              WHERE community_id=$1 AND request_id=ANY($2)
-                AND status NOT IN ('succeeded','failed','cancelled','expired','dead_lettered')
+              SELECT t.task_id, t.request_id, t.status AS previous_status,
+                     (SELECT a.action_id FROM snowman_proactive_actions a
+                      WHERE a.community_id=t.community_id AND a.task_id=t.task_id) AS proactive_action_id
+              FROM snowman_work_tasks t
+              WHERE t.community_id=$1 AND t.request_id=ANY($2)
+                AND t.status NOT IN ('succeeded','failed','cancelled','expired','dead_lettered')
               FOR UPDATE
             )
             UPDATE snowman_work_tasks t SET status='expired', updated_at=$3
             FROM due WHERE t.community_id=$1 AND t.task_id=due.task_id
-            RETURNING t.request_id, t.task_id, due.previous_status
+            RETURNING t.request_id, t.task_id, due.previous_status, due.proactive_action_id
             "#,
         )
         .bind(community_id)
@@ -2785,6 +2985,7 @@ pub async fn maintain_workforce(
         )
         .await?;
     }
+    let mut materialized_expired_actions = 0_u64;
     for row in &expired_task_rows {
         let request_id: Uuid = row.try_get("request_id")?;
         let task_id: Uuid = row.try_get("task_id")?;
@@ -2805,12 +3006,34 @@ pub async fn maintain_workforce(
             observed_at,
         )
         .await?;
+        if let Some(action_id) = row.try_get::<Option<Uuid>, _>("proactive_action_id")? {
+            materialized_expired_actions += 1;
+            append_maintenance_event(
+                &mut tx,
+                community_id,
+                tick_id,
+                request_id,
+                Some(task_id),
+                "proactive.expired",
+                &actor_identity,
+                serde_json::json!({
+                    "schema_version": "snowman.workforce.maintenance.event.v1",
+                    "tick_id": tick_id,
+                    "action_id": action_id,
+                    "reason": "request_deadline_elapsed"
+                }),
+                observed_at,
+            )
+            .await?;
+        }
     }
 
     let task_deadlines = sqlx::query(
         r#"
         WITH due AS (
-          SELECT t.task_id, t.request_id, t.status AS previous_status
+          SELECT t.task_id, t.request_id, t.status AS previous_status,
+                 (SELECT a.action_id FROM snowman_proactive_actions a
+                  WHERE a.community_id=t.community_id AND a.task_id=t.task_id) AS proactive_action_id
           FROM snowman_work_tasks t
           JOIN snowman_work_requests r
             ON r.community_id=t.community_id AND r.request_id=t.request_id
@@ -2823,7 +3046,7 @@ pub async fn maintain_workforce(
         )
         UPDATE snowman_work_tasks t SET status='expired', updated_at=$2
         FROM due WHERE t.community_id=$1 AND t.task_id=due.task_id
-        RETURNING t.request_id, t.task_id, due.previous_status
+        RETURNING t.request_id, t.task_id, due.previous_status, due.proactive_action_id
         "#,
     )
     .bind(community_id)
@@ -2863,6 +3086,26 @@ pub async fn maintain_workforce(
             observed_at,
         )
         .await?;
+        if let Some(action_id) = row.try_get::<Option<Uuid>, _>("proactive_action_id")? {
+            materialized_expired_actions += 1;
+            append_maintenance_event(
+                &mut tx,
+                community_id,
+                tick_id,
+                request_id,
+                Some(task_id),
+                "proactive.expired",
+                &actor_identity,
+                serde_json::json!({
+                    "schema_version": "snowman.workforce.maintenance.event.v1",
+                    "tick_id": tick_id,
+                    "action_id": action_id,
+                    "reason": "action_expiry_elapsed"
+                }),
+                observed_at,
+            )
+            .await?;
+        }
     }
 
     let recovered = sqlx::query(
@@ -3000,7 +3243,7 @@ pub async fn maintain_workforce(
         observed_at,
         expired_requests: expired_request_ids.len() as u64,
         expired_tasks: (expired_task_rows.len() + task_deadlines.len()) as u64,
-        expired_proactive_actions: expired_actions.len() as u64,
+        expired_proactive_actions: materialized_expired_actions + expired_actions.len() as u64,
         requeued_tasks,
         dead_lettered_tasks,
     };
@@ -3756,6 +3999,16 @@ fn valid_capability_set(capabilities: &[String]) -> bool {
         })
 }
 
+fn valid_proactive_execution(role: &str, capability: &str) -> bool {
+    matches!(
+        (role, capability),
+        ("governed_analyst", "analytics.query")
+            | ("client_delivery", "artifact.build")
+            | ("quality_risk_reviewer", "artifact.build")
+            | ("research_evidence", "evidence.manifest.read")
+    )
+}
+
 fn planned_graph_is_acyclic(tasks: &[NewPlannedTask]) -> bool {
     use std::collections::{HashMap, HashSet};
 
@@ -4114,6 +4367,26 @@ mod tests {
             receipt,
             serde_json::from_value::<WorkforceMaintenanceResult>(stored).unwrap()
         );
+    }
+
+    #[test]
+    fn proactive_execution_is_bound_to_worker_supported_role_capability_pairs() {
+        assert!(valid_proactive_execution(
+            "governed_analyst",
+            "analytics.query"
+        ));
+        assert!(valid_proactive_execution(
+            "quality_risk_reviewer",
+            "artifact.build"
+        ));
+        assert!(!valid_proactive_execution(
+            "deadline_operations",
+            "calendar.write"
+        ));
+        assert!(!valid_proactive_execution(
+            "governed_analyst",
+            "artifact.build"
+        ));
     }
 
     #[test]

@@ -1062,8 +1062,20 @@ fn specialist_instruction(task: &LeasedTask) -> String {
         "research_evidence" => "Build an evidence manifest for the objective",
         _ => "Perform the assigned governed operation",
     };
+    let governed_instruction = task
+        .expected_artifact_contract
+        .get("instruction_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| {
+            reference
+                .strip_prefix("analyst360:sha256:")
+                .or_else(|| reference.strip_prefix("snowman:sha256:"))
+                .is_some_and(is_sha256)
+        })
+        .map(|reference| format!(" Follow the immutable instruction contract at {reference}."))
+        .unwrap_or_default();
     let prefix = format!(
-        "{role}. Snowman workforce request {}. Use only server-authorized Analyst 360 data and artifacts for this tenant/project. Objective: ",
+        "{role}. Snowman workforce request {}.{governed_instruction} Use only server-authorized Analyst 360 data and artifacts for this tenant/project. Objective: ",
         task.request_id
     );
     bounded_concat(&prefix, &task.objective, 4_000)
@@ -1387,6 +1399,20 @@ mod tests {
             analyst_capability(&value).unwrap(),
             Capability::ArtifactBuild
         );
+    }
+
+    #[test]
+    fn proactive_task_uses_only_immutable_instruction_reference() {
+        let mut value = task();
+        let reference = format!("snowman:sha256:{}", "d".repeat(64));
+        value.expected_artifact_contract = json!({
+            "artifact_type": "scheduled_analysis",
+            "instruction_reference": reference,
+        });
+        value.context_references.push(reference.clone());
+        let instruction = specialist_instruction(&value);
+        assert!(instruction.contains(&reference));
+        assert!(!instruction.contains("https://"));
     }
 
     #[test]

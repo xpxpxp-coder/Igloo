@@ -33,8 +33,9 @@ Required runtime values are `SNOWMAN_WORKFORCE_RELAY_URL`,
 `SNOWMAN_WORKFORCE_SCHEDULER_NOSTR_PRIVATE_KEY`. The optional interval is bounded
 from 1 through 300 seconds; AWS fixes it at 30 seconds.
 
-This scheduler enforces lifecycle safety; it does **not** execute queued
-proactive actions. Proactive execution remains blocked until each action has a
-complete instruction/artifact contract, a distinct capable executor identity,
-a fenced action lease, spend reconciliation, approval handling, and staged
-failure proof.
+This scheduler enforces lifecycle safety; it does **not** itself execute queued
+proactive actions. The v2 proactive contract materializes supported actions as
+ordinary governed work tasks, so identity, model routing, approval, fenced
+leases, spend, context, cancellation, completion, and recovery are reused rather
+than duplicated. Trigger generation, calendar/reminder delivery capabilities,
+and staged failure proof remain open.

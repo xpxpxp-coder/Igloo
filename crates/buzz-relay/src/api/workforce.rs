@@ -27,9 +27,9 @@ use buzz_db::workforce::{
     WorkTaskCompletion,
 };
 use snowman_workforce::{
-    govern_team_plan, Classification, ContextAuthority, ContextNextAction, ContextPacketManifest,
-    GovernedTeamPlan, ModelRoute, PlannedTask, ProactiveAction, ProactiveDecision,
-    ProactiveTrigger, RiskTier, SpecialistRole,
+    decide_proactive_action, govern_team_plan, Classification, ContextAuthority, ContextNextAction,
+    ContextPacketManifest, GovernedTeamPlan, ModelRoute, PlannedTask, ProactiveAction,
+    ProactiveDecision, ProactiveTrigger, RiskTier, SpecialistRole,
 };
 
 use crate::{authorization, state::AppState};
@@ -205,6 +205,18 @@ struct ProposeProactiveActionRequest {
     action_id: Uuid,
     trigger: ProactiveTrigger,
     capability: String,
+    executor_identity_id: Uuid,
+    specialist_role: SpecialistRole,
+    instruction_reference: String,
+    #[serde(default)]
+    context_references: BTreeSet<String>,
+    #[serde(default)]
+    requested_model_id: Option<String>,
+    expected_input_tokens: u64,
+    max_output_tokens: u64,
+    expected_artifact_type: String,
+    #[serde(default = "default_proactive_max_attempts")]
+    max_attempts: i32,
     risk_tier: RiskTier,
     reversible: bool,
     expected_cost_microusd: u64,
@@ -256,6 +268,10 @@ const fn default_max_output() -> i64 {
 
 const fn default_true() -> bool {
     true
+}
+
+const fn default_proactive_max_attempts() -> i32 {
+    3
 }
 
 async fn authenticate_principal(
@@ -1030,7 +1046,7 @@ pub async fn propose_proactive_action(
     let input: ProposeProactiveActionRequest = serde_json::from_slice(&body)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid proactive action JSON"))?;
     let now = Utc::now();
-    if input.schema_version != "snowman.proactive.proposal.v1"
+    if input.schema_version != "snowman.proactive.proposal.v2"
         || request_id.is_nil()
         || input.action_id.is_nil()
         || !is_recent_worker_time(input.occurred_at)
@@ -1038,6 +1054,10 @@ pub async fn propose_proactive_action(
         || input.scheduled_for > now + Duration::days(365)
         || input.expires_at <= input.scheduled_for
         || input.expires_at > input.scheduled_for + Duration::days(30)
+        || input.executor_identity_id.is_nil()
+        || input.expected_input_tokens == 0
+        || input.max_output_tokens == 0
+        || !(1..=20).contains(&input.max_attempts)
     {
         return Err(api_error(
             StatusCode::BAD_REQUEST,
@@ -1049,25 +1069,193 @@ pub async fn propose_proactive_action(
         .snowman_workforce
         .as_ref()
         .expect("workforce presence checked during authentication");
+    let action = ProactiveAction {
+        action_id: input.action_id,
+        community_id: *tenant.community().as_uuid(),
+        objective_id: request_id,
+        trigger: input.trigger,
+        capability: input.capability.clone(),
+        risk_tier: input.risk_tier,
+        reversible: input.reversible,
+        expected_cost_microusd: input.expected_cost_microusd,
+        usefulness_sha256: parse_sha256(&input.usefulness_sha256, "usefulness_sha256")?,
+        confidence_basis_points: input.confidence_basis_points,
+    };
+    let decision = decide_proactive_action(&action, &workforce.proactive_policy);
+    let execution_task = if decision == ProactiveDecision::Reject {
+        None
+    } else {
+        if !valid_proactive_executor(input.specialist_role, &input.capability)
+            || !is_context_reference(&input.instruction_reference)
+            || input.context_references.len() >= MAX_CONTEXT_REFS
+            || input
+                .context_references
+                .iter()
+                .any(|reference| !is_context_reference(reference))
+        {
+            return Err(api_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "proactive execution role, capability, or context is not supported",
+            ));
+        }
+        let status = state
+            .db
+            .get_work_request_status(tenant.community(), request_id)
+            .await
+            .map_err(|_| internal_error("proactive request envelope read failed"))?
+            .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "work request not found"))?;
+        if matches!(
+            status.status.as_str(),
+            "completed" | "failed" | "cancelled" | "expired"
+        ) {
+            return Err(api_error(
+                StatusCode::CONFLICT,
+                "proactive action request is no longer active",
+            ));
+        }
+        let classification = parse_classification(&status.classification).ok_or_else(|| {
+            internal_error("workforce request contains an unsupported classification")
+        })?;
+        let catalog = state
+            .db
+            .active_model_routes(tenant.community())
+            .await
+            .map_err(|_| internal_error("workforce model catalog read failed"))?
+            .into_iter()
+            .map(model_route_from_row)
+            .collect::<Result<Vec<_>, _>>()?;
+        if catalog.is_empty() {
+            return Err(api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "no evaluated Snowman model routes are active for this workspace",
+            ));
+        }
+        let mut context_references = input.context_references.clone();
+        context_references.insert(input.instruction_reference.clone());
+        let mut required_capabilities = BTreeSet::from([
+            input.capability.clone(),
+            "workforce.context.write".to_string(),
+        ]);
+        if input.specialist_role == SpecialistRole::QualityRiskReviewer {
+            required_capabilities.insert("artifact.review".to_string());
+        }
+        let governed = govern_team_plan(
+            GovernedTeamPlan {
+                request_id,
+                community_id: *tenant.community().as_uuid(),
+                objective_sha256: parse_sha256(&status.objective_sha256, "objective_sha256")?,
+                classification,
+                client_ready_delivery: false,
+                max_cost_microusd: nonnegative_u64(
+                    status.max_cost_microusd.saturating_sub(status.used_cost_microusd),
+                )?,
+                max_input_tokens: nonnegative_u64(
+                    status.max_input_tokens.saturating_sub(status.used_input_tokens),
+                )?,
+                max_output_tokens: nonnegative_u64(
+                    status.max_output_tokens.saturating_sub(status.used_output_tokens),
+                )?,
+                tasks: vec![PlannedTask {
+                    task_id: input.action_id,
+                    service_identity_id: input.executor_identity_id,
+                    specialist_role: input.specialist_role,
+                    depends_on: BTreeSet::new(),
+                    required_capabilities,
+                    context_packet_refs: context_references.clone(),
+                    requested_model_id: input.requested_model_id.clone(),
+                    selected_model_id: None,
+                    selected_gateway_url: None,
+                    expected_input_tokens: input.expected_input_tokens,
+                    max_output_tokens: input.max_output_tokens,
+                    max_cost_microusd: input.expected_cost_microusd,
+                    risk_tier: input.risk_tier,
+                    reversible: input.reversible,
+                    approval_required: decision != ProactiveDecision::ExecuteAutomatically,
+                    expected_artifact_type: input.expected_artifact_type.clone(),
+                }],
+            },
+            &catalog,
+        )
+        .map_err(|error| {
+            tracing::warn!(community = %tenant.community(), %error, "proactive execution contract rejected");
+            api_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "proactive execution contract violates workforce policy",
+            )
+        })?;
+        let governed_task = governed
+            .tasks
+            .into_iter()
+            .next()
+            .expect("single proactive task remains present after governance");
+        let canonical =
+            serde_json::to_vec(&(&action, &governed_task, &input.instruction_reference))
+                .map_err(|_| internal_error("proactive task canonicalization failed"))?;
+        let execution_snapshot_sha256 = domain_digest(
+            b"snowman.proactive-task-snapshot.v1\0",
+            &[
+                tenant.community().as_uuid().as_bytes(),
+                request_id.as_bytes(),
+                input.action_id.as_bytes(),
+                canonical.as_slice(),
+            ],
+        );
+        Some(NewWorkTask {
+            task_id: input.action_id,
+            parent_task_id: None,
+            specialist_role: specialist_role_name(governed_task.specialist_role).to_string(),
+            service_identity_id: governed_task.service_identity_id,
+            assigned_agent_pubkey: None,
+            required_capabilities: governed_task.required_capabilities.into_iter().collect(),
+            model_gateway_route: governed_task
+                .selected_gateway_url
+                .expect("governed proactive task has a gateway"),
+            model_id: governed_task
+                .selected_model_id
+                .expect("governed proactive task has a model"),
+            max_cost_microusd: bounded_i64(governed_task.max_cost_microusd, "max_cost_microusd")?,
+            expected_input_tokens: bounded_i64(
+                governed_task.expected_input_tokens,
+                "expected_input_tokens",
+            )?,
+            max_output_tokens: bounded_i64(governed_task.max_output_tokens, "max_output_tokens")?,
+            execution_snapshot_sha256,
+            expected_artifact_contract: json!({
+                "schema_version": "snowman.proactive.artifact-contract.v1",
+                "artifact_type": governed_task.expected_artifact_type,
+                "instruction_reference": input.instruction_reference,
+                "proactive_action_id": input.action_id,
+            }),
+            context_references: context_references.into_iter().collect(),
+            context_packet_id: None,
+            risk_tier: risk_tier_name(governed_task.risk_tier).to_string(),
+            reversible: governed_task.reversible,
+            approval_required: governed_task.approval_required,
+            priority: 60,
+            available_at: input.scheduled_for,
+            deadline_at: Some(input.expires_at),
+            max_attempts: input.max_attempts,
+        })
+    };
+    let execution_receipt = execution_task.as_ref().map(|task| {
+        json!({
+            "task_id": task.task_id,
+            "executor_identity_id": task.service_identity_id,
+            "specialist_role": task.specialist_role,
+            "model_id": task.model_id,
+            "execution_snapshot_sha256": hex::encode(task.execution_snapshot_sha256),
+            "approval_required": task.approval_required,
+        })
+    });
     let proposal = NewProactiveAction {
-        action: ProactiveAction {
-            action_id: input.action_id,
-            community_id: *tenant.community().as_uuid(),
-            objective_id: request_id,
-            trigger: input.trigger,
-            capability: input.capability,
-            risk_tier: input.risk_tier,
-            reversible: input.reversible,
-            expected_cost_microusd: input.expected_cost_microusd,
-            usefulness_sha256: parse_sha256(&input.usefulness_sha256, "usefulness_sha256")?,
-            confidence_basis_points: input.confidence_basis_points,
-        },
+        action,
         proposed_by_identity_id: principal.identity_id,
         policy: workforce.proactive_policy.clone(),
         source_event_sha256: parse_sha256(&input.source_event_sha256, "source_event_sha256")?,
         scheduled_for: input.scheduled_for,
         expires_at: input.expires_at,
         created_at: input.occurred_at,
+        execution_task,
     };
     let scheduled = state
         .db
@@ -1094,11 +1282,12 @@ pub async fn propose_proactive_action(
             StatusCode::OK
         },
         Json(json!({
-            "schema_version": "snowman.proactive.decision.v1",
+            "schema_version": "snowman.proactive.decision.v2",
             "action_id": scheduled.action_id,
             "request_id": scheduled.request_id,
             "decision": outcome,
             "inserted": scheduled.inserted,
+            "execution": execution_receipt,
         })),
     ))
 }
@@ -1559,6 +1748,16 @@ fn parse_specialist_role(value: &str) -> Option<SpecialistRole> {
         "deadline_operations" => Some(SpecialistRole::DeadlineOperations),
         _ => None,
     }
+}
+
+fn valid_proactive_executor(role: SpecialistRole, capability: &str) -> bool {
+    matches!(
+        (role, capability),
+        (SpecialistRole::GovernedAnalyst, "analytics.query")
+            | (SpecialistRole::ClientDelivery, "artifact.build")
+            | (SpecialistRole::QualityRiskReviewer, "artifact.build")
+            | (SpecialistRole::ResearchEvidence, "evidence.manifest.read")
+    )
 }
 
 const fn specialist_role_name(value: SpecialistRole) -> &'static str {
@@ -2073,5 +2272,25 @@ mod tests {
         assert!(!is_reason_code("contains client details"));
         assert!(!is_reason_code("UPPERCASE"));
         assert!(!is_reason_code(&"a".repeat(129)));
+    }
+
+    #[test]
+    fn proactive_execution_reuses_only_supported_specialist_boundaries() {
+        assert!(valid_proactive_executor(
+            SpecialistRole::GovernedAnalyst,
+            "analytics.query"
+        ));
+        assert!(valid_proactive_executor(
+            SpecialistRole::ClientDelivery,
+            "artifact.build"
+        ));
+        assert!(!valid_proactive_executor(
+            SpecialistRole::GovernedAnalyst,
+            "artifact.build"
+        ));
+        assert!(!valid_proactive_executor(
+            SpecialistRole::DeadlineOperations,
+            "calendar.write"
+        ));
     }
 }

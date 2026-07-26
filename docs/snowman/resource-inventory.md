@@ -99,9 +99,12 @@ record, not a client-side API key or direct vendor CLI.
 - Proactive next-useful actions now have a tenant-scoped durable decision store:
   authorized service proposer, source-event/action/policy/usefulness digests,
   risk/reversibility/confidence, schedule/expiry, exact idempotency, and cost
-  reservation against the originating request. The maintenance scheduler now
-  expires stale proposals but does not execute them; a trigger poller, fenced
-  proactive lease/executor, notifications, and staged 24/7 proof remain.
+  reservation against the originating request. Supported v2 decisions now
+  materialize as ordinary governed work tasks and reuse fenced leases,
+  approvals, spend, cancellation, context, recovery, and evidence; the
+  maintenance scheduler expires stale actions. A trigger poller,
+  calendar/reminder delivery capabilities, notifications, and staged 24/7 proof
+  remain.
 - A deterministic context-manifest policy now gives replacement specialists a
   bounded, classified, content-addressed handoff contract with objective,
   provenance, evidence/artifact references, decision/open-question digests, and
