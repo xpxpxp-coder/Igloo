@@ -14,6 +14,9 @@ use url::Url;
 use uuid::Uuid;
 
 use buzz_core::CommunityId;
+use snowman_workforce::{
+    validate_context_packet, Classification, ContextAuthority, ContextPacketManifest,
+};
 
 use crate::{DbError, Result};
 
@@ -292,6 +295,34 @@ pub struct EnqueuedWorkRequest {
     /// Stable request ID, including when the idempotency key already existed.
     pub request_id: Uuid,
     /// True only when this call inserted the request and its initial task graph.
+    pub inserted: bool,
+}
+
+/// A governed context handoff to persist for replacement specialists.
+#[derive(Debug, Clone)]
+pub struct NewContextPacket {
+    /// Fully policy-validated metadata-only manifest.
+    pub manifest: ContextPacketManifest,
+    /// Authenticated tenant-local service identity publishing the handoff.
+    pub created_by_identity_id: Uuid,
+    /// Authority-local immutable artifact identifier.
+    pub artifact_id: String,
+    /// Immutable artifact version or generation.
+    pub artifact_version: String,
+    /// Optional hard expiry for the handoff.
+    pub expires_at: Option<DateTime<Utc>>,
+    /// Server-observed publication time.
+    pub created_at: DateTime<Utc>,
+}
+
+/// Result of idempotently publishing a governed context handoff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublishedContextPacket {
+    /// Stable context packet identifier.
+    pub context_packet_id: Uuid,
+    /// Work request receiving the handoff.
+    pub request_id: Uuid,
+    /// True only when this call inserted the packet and evidence event.
     pub inserted: bool,
 }
 
@@ -699,6 +730,249 @@ pub async fn active_model_routes(
         })
     })
     .collect()
+}
+
+/// Persist a bounded context handoff and its lifecycle receipt exactly once.
+pub async fn publish_context_packet(
+    pool: &PgPool,
+    community_id: CommunityId,
+    packet: &NewContextPacket,
+) -> Result<PublishedContextPacket> {
+    validate_context_packet(&packet.manifest)
+        .map_err(|error| DbError::InvalidData(error.to_string()))?;
+    if packet.manifest.community_id != *community_id.as_uuid()
+        || packet.created_by_identity_id.is_nil()
+        || packet.artifact_id.trim() != packet.artifact_id
+        || packet.artifact_id.is_empty()
+        || packet.artifact_id.len() > 512
+        || packet.artifact_version.trim() != packet.artifact_version
+        || packet.artifact_version.is_empty()
+        || packet.artifact_version.len() > 256
+        || packet
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= packet.created_at)
+    {
+        return Err(DbError::InvalidData(
+            "context packet publisher, artifact, tenant, or expiry is invalid".into(),
+        ));
+    }
+    let manifest_json = serde_json::to_value(&packet.manifest)
+        .map_err(|error| DbError::InvalidData(format!("context manifest is invalid: {error}")))?;
+    let manifest_bytes = serde_json::to_vec(&packet.manifest)
+        .map_err(|error| DbError::InvalidData(format!("context manifest is invalid: {error}")))?;
+    let manifest_sha256 = sha256(&manifest_bytes);
+    let community_id = *community_id.as_uuid();
+    let authority = context_authority_name(packet.manifest.authority);
+    let classification = classification_name(packet.manifest.classification);
+    let mut tx = pool.begin().await?;
+    let existing = sqlx::query(
+        r#"
+        SELECT p.request_id, p.authority, p.artifact_id, p.artifact_version,
+               p.content_sha256, p.size_bytes, p.expires_at,
+               m.created_by_identity_id, m.manifest_sha256, m.created_at
+        FROM snowman_context_packets p
+        JOIN snowman_context_packet_manifests m
+          ON m.community_id=p.community_id AND m.context_packet_id=p.context_packet_id
+        WHERE p.community_id=$1 AND p.context_packet_id=$2
+        "#,
+    )
+    .bind(community_id)
+    .bind(packet.manifest.context_packet_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(existing) = existing {
+        let exact = existing.try_get::<Uuid, _>("request_id")? == packet.manifest.request_id
+            && existing.try_get::<String, _>("authority")? == authority
+            && existing.try_get::<String, _>("artifact_id")? == packet.artifact_id
+            && existing.try_get::<String, _>("artifact_version")? == packet.artifact_version
+            && existing.try_get::<Vec<u8>, _>("content_sha256")?.as_slice()
+                == packet.manifest.content_sha256.as_slice()
+            && existing.try_get::<i64, _>("size_bytes")?
+                == i64::try_from(packet.manifest.size_bytes).unwrap_or(i64::MAX)
+            && existing.try_get::<Option<DateTime<Utc>>, _>("expires_at")? == packet.expires_at
+            && existing.try_get::<Uuid, _>("created_by_identity_id")?
+                == packet.created_by_identity_id
+            && existing
+                .try_get::<Vec<u8>, _>("manifest_sha256")?
+                .as_slice()
+                == manifest_sha256.as_slice()
+            && existing.try_get::<DateTime<Utc>, _>("created_at")? == packet.created_at;
+        if exact {
+            tx.commit().await?;
+            return Ok(PublishedContextPacket {
+                context_packet_id: packet.manifest.context_packet_id,
+                request_id: packet.manifest.request_id,
+                inserted: false,
+            });
+        }
+        return Err(DbError::AccessDenied(
+            "context packet identifier was reused for different evidence".into(),
+        ));
+    }
+    let authority_row = sqlx::query(
+        r#"
+        SELECT r.objective_sha256, r.classification, r.status,
+               EXISTS (
+                 SELECT 1 FROM snowman_workforce_identities i
+                 WHERE i.community_id=r.community_id AND i.identity_id=$3
+                   AND i.identity_type='service' AND i.role='agent'
+                   AND i.status='active' AND i.revoked_at IS NULL
+                   AND (i.expires_at IS NULL OR i.expires_at > NOW())
+                   AND EXISTS (
+                     SELECT 1 FROM snowman_workforce_capability_grants g
+                     WHERE g.community_id=i.community_id AND g.identity_id=i.identity_id
+                       AND g.capability='workforce.context.write'
+                       AND g.revoked_at IS NULL
+                       AND (g.expires_at IS NULL OR g.expires_at > NOW())
+                   )
+               ) AS publisher_authorized
+        FROM snowman_work_requests r
+        WHERE r.community_id=$1 AND r.request_id=$2
+        FOR UPDATE
+        "#,
+    )
+    .bind(community_id)
+    .bind(packet.manifest.request_id)
+    .bind(packet.created_by_identity_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| DbError::InvalidData("context packet request was not found".into()))?;
+    if authority_row
+        .try_get::<Vec<u8>, _>("objective_sha256")?
+        .as_slice()
+        != packet.manifest.objective_sha256.as_slice()
+        || authority_row.try_get::<String, _>("classification")? != classification
+        || matches!(
+            authority_row.try_get::<String, _>("status")?.as_str(),
+            "cancelled" | "expired"
+        )
+        || !authority_row.try_get::<bool, _>("publisher_authorized")?
+    {
+        return Err(DbError::AccessDenied(
+            "context packet does not match request or publisher authority".into(),
+        ));
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO snowman_context_packets
+          (community_id, context_packet_id, request_id, schema_version,
+           classification, authority, artifact_id, artifact_version,
+           content_sha256, size_bytes, expires_at, created_at)
+        VALUES ($1,$2,$3,'snowman.workforce.context.v1',$4,$5,$6,$7,$8,$9,$10,$11)
+        "#,
+    )
+    .bind(community_id)
+    .bind(packet.manifest.context_packet_id)
+    .bind(packet.manifest.request_id)
+    .bind(classification)
+    .bind(authority)
+    .bind(&packet.artifact_id)
+    .bind(&packet.artifact_version)
+    .bind(packet.manifest.content_sha256.as_slice())
+    .bind(
+        i64::try_from(packet.manifest.size_bytes).map_err(|_| {
+            DbError::InvalidData("context packet size exceeds database bounds".into())
+        })?,
+    )
+    .bind(packet.expires_at)
+    .bind(packet.created_at)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO snowman_context_packet_manifests
+          (community_id, context_packet_id, request_id, created_by_identity_id,
+           objective_sha256, content_reference, source_event_sha256,
+           manifest_sha256, artifact_references, evidence_references,
+           decision_digests, open_question_digests, next_actions, created_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+        "#,
+    )
+    .bind(community_id)
+    .bind(packet.manifest.context_packet_id)
+    .bind(packet.manifest.request_id)
+    .bind(packet.created_by_identity_id)
+    .bind(packet.manifest.objective_sha256.as_slice())
+    .bind(&packet.manifest.content_reference)
+    .bind(packet.manifest.source_event_sha256.as_slice())
+    .bind(manifest_sha256.as_slice())
+    .bind(
+        packet
+            .manifest
+            .artifact_references
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+    .bind(
+        packet
+            .manifest
+            .evidence_references
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+    .bind(
+        packet
+            .manifest
+            .decision_digests
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+    .bind(
+        packet
+            .manifest
+            .open_question_digests
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+    .bind(manifest_json["next_actions"].clone())
+    .bind(packet.created_at)
+    .execute(&mut *tx)
+    .await?;
+    let event = NewWorkEvent {
+        event_id: packet.manifest.context_packet_id,
+        request_id: packet.manifest.request_id,
+        task_id: None,
+        event_type: "context.published".into(),
+        actor_identity: format!("snowman-service:{}", packet.created_by_identity_id),
+        payload: serde_json::json!({
+            "schema_version": "snowman.work.event.v1",
+            "context_reference": packet.manifest.content_reference,
+            "content_sha256": hex::encode(packet.manifest.content_sha256),
+            "manifest_sha256": hex::encode(manifest_sha256),
+            "source_event_sha256": hex::encode(packet.manifest.source_event_sha256),
+            "artifact_reference_count": packet.manifest.artifact_references.len(),
+            "evidence_reference_count": packet.manifest.evidence_references.len(),
+            "next_action_count": packet.manifest.next_actions.len(),
+        }),
+        occurred_at: packet.created_at,
+    };
+    validate_work_event(&event)?;
+    append_work_event_tx(&mut tx, community_id, &event).await?;
+    tx.commit().await?;
+    Ok(PublishedContextPacket {
+        context_packet_id: packet.manifest.context_packet_id,
+        request_id: packet.manifest.request_id,
+        inserted: true,
+    })
+}
+
+const fn classification_name(classification: Classification) -> &'static str {
+    match classification {
+        Classification::Internal => "internal",
+        Classification::Confidential => "confidential",
+        Classification::Restricted => "restricted",
+    }
+}
+
+const fn context_authority_name(authority: ContextAuthority) -> &'static str {
+    match authority {
+        ContextAuthority::Analyst360 => "analyst360",
+        ContextAuthority::SnowmanCommandCenter => "snowman-command-center",
+    }
 }
 
 /// Atomically replace a leased lead planning task with its governed DAG.

@@ -44,6 +44,7 @@ const runtimeAuthorityFiles = [
   "migrations/0028_snowman_workforce_claim_idempotency.sql",
   "migrations/0029_snowman_analyst_event_boundary.sql",
   "migrations/0030_snowman_governed_team_plans.sql",
+  "migrations/0031_snowman_context_packet_manifests.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -160,6 +161,11 @@ requireFragment(
   "crates/snowman-workforce/src/lib.rs",
   "validate_context_packet",
   "replacement agents must receive only a bounded evidence-linked context manifest",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "workforce.context.write",
+  "context handoffs must require an exact tenant-local publisher capability",
 );
 requireFragment(
   "crates/buzz-relay/src/api/workforce.rs",

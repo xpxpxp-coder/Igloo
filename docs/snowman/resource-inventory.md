@@ -62,8 +62,12 @@ claims require live verification before use.
 - A deterministic context-manifest policy now gives replacement specialists a
   bounded, classified, content-addressed handoff contract with objective,
   provenance, evidence/artifact references, decision/open-question digests, and
-  governed next actions. Persistence and retrieval through the private worker
-  plane, expiry enforcement, and staged replacement-agent proof remain.
+  governed next actions. Tenant-scoped, idempotent persistence now verifies an
+  active `workforce.context.write` service identity, matches the request's
+  objective/classification, stores only the bounded manifest plus immutable
+  artifact coordinates, and appends `context.published` evidence. Private API
+  publication/retrieval, expiry enforcement, and staged replacement-agent proof
+  remain.
 - Governed human request intake and metadata-only status reads now exist at
   `/api/snowman/v1/work-requests`. The endpoint deliberately creates only a
   lead planning task. The private source boundary now leases that task, validates

@@ -102,6 +102,13 @@ evidence, artifacts, and next actions; and rejects ambient capabilities,
 prohibited actions, or missing approval gates. Raw client exports and transcript
 URLs are not valid handoffs.
 
+`buzz-db` persists the validated manifest under the request's exact tenant,
+objective, and classification only when an active tenant-local service identity
+holds `workforce.context.write`. Exact packet replays are idempotent, conflicting
+reuse fails closed, and each publication appends a minimized hash-chain receipt.
+The stored record contains immutable coordinates and digests, never the raw
+handoff artifact.
+
 The `buzz-db` workforce store now adds durable request/task state reconciliation,
 fenced leases and recovery, exact-snapshot approvals, hard spend/token ledgers,
 an evaluated tenant model catalog, atomic lead-to-specialist DAG expansion,

@@ -2977,6 +2977,15 @@ impl Db {
         workforce::active_model_routes(&self.pool, community).await
     }
 
+    /// Publish one bounded evidence-linked handoff for replacement specialists.
+    pub async fn publish_context_packet(
+        &self,
+        community: CommunityId,
+        packet: &workforce::NewContextPacket,
+    ) -> Result<workforce::PublishedContextPacket> {
+        workforce::publish_context_packet(&self.pool, community, packet).await
+    }
+
     /// Atomically replace a live leased lead task with a governed specialist DAG.
     pub async fn commit_work_plan(
         &self,
