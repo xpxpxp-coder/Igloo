@@ -20,6 +20,7 @@ session, an exact tenant-role match, and a fine-grained grant:
 | `POST /api/snowman/v1/work-requests` | `workforce.requests.create` | Idempotently accepts an objective and enqueues a capability-bounded lead planning task. |
 | `GET /api/snowman/v1/work-requests/{request_id}` | `workforce.requests.read` | Returns lifecycle, task, budget, spend, and bounded hash-chain evidence metadata. |
 | `POST /api/snowman/v1/work-requests/{request_id}/cancel` | `workforce.requests.cancel` | Idempotently cancels every non-terminal task, deletes every live lease, and appends human-attributed hash-chain evidence. |
+| `POST /api/snowman/v1/work-requests/{request_id}/tasks/{task_id}/approval` | `workforce.tasks.approve` | Records an idempotent approve/deny/revoke decision bound to the exact task snapshot and an expiry of at most 24 hours. |
 
 The server derives `community_id` from the normalized request host and derives
 the requester from the signed relay key's live workforce binding. Neither is a
@@ -102,6 +103,15 @@ one transaction. A worker holding a formerly valid lease therefore cannot
 heartbeat, record spend, or finish after cancellation commits. Exact
 `cancellation_id` retries return the original result; conflicting reuse and
 terminal-state cancellation fail closed.
+
+Approval requests never accept free-form rationale or a replacement action.
+The command center submits the task's published execution-snapshot digest, a
+content digest for the rationale retained by the governed evidence authority,
+and an expiry no more than 24 hours after the decision. Approval advances only
+the matching gated snapshot. Denial or revocation immediately deletes any live
+lease, and every decision appends `task.approval_decided` evidence. Exact
+`approval_id` retries are safe; conflicting reuse, stale snapshots, terminal
+requests, and terminal tasks fail closed.
 
 The proposal schema never accepts a gateway URL or selected model. It accepts a
 bounded role, distinct service identity, requested model override (optional),

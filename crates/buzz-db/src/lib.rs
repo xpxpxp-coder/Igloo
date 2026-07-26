@@ -3073,6 +3073,15 @@ impl Db {
         workforce::record_work_spend(&self.pool, community, entry).await
     }
 
+    /// Persist one exact-snapshot human approval decision and its evidence.
+    pub async fn record_work_approval(
+        &self,
+        community: CommunityId,
+        approval: &workforce::WorkApproval,
+    ) -> Result<bool> {
+        workforce::record_work_approval(&self.pool, community, approval).await
+    }
+
     /// Returns all relay members of `community` ordered by `created_at` ascending.
     pub async fn list_relay_members(
         &self,

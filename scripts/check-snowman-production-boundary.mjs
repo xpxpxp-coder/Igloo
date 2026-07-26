@@ -162,9 +162,19 @@ requireFragment(
   "human request cancellation must require an exact workforce capability",
 );
 requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  '"workforce.tasks.approve"',
+  "human task decisions must require an exact workforce capability",
+);
+requireFragment(
   "crates/buzz-db/src/workforce.rs",
   "DELETE FROM snowman_task_leases l USING snowman_work_tasks t",
   "request cancellation must invalidate every outstanding task lease",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  '"task.approval_decided"',
+  "task approvals must append evidence bound to the exact execution snapshot",
 );
 requireFragment(
   "infra/aws/preflight.tf",

@@ -109,3 +109,8 @@ tenant/capability authority. Cancellation atomically marks every non-terminal
 task, destroys all live leases, and appends bounded human-attributed evidence,
 so an already-running worker loses heartbeat, spend, and completion authority as
 soon as the transaction commits.
+
+Human task decisions are also an enforceable control path rather than a UI-only
+record. Approve, deny, and revoke operations bind to the immutable task snapshot
+and a maximum 24-hour expiry, use exact replay protection, append hash-chain
+evidence, and invalidate any live lease immediately on denial or revocation.

@@ -2170,22 +2170,66 @@ pub async fn record_work_approval(
     pool: &PgPool,
     community_id: CommunityId,
     approval: &WorkApproval,
-) -> Result<()> {
-    if !matches!(
-        approval.decision.as_str(),
-        "approved" | "denied" | "revoked"
-    ) || approval.approver_identity.trim().is_empty()
+) -> Result<bool> {
+    if approval.approval_id.is_nil()
+        || approval.request_id.is_nil()
+        || approval.task_id.is_nil()
+        || approval.task_snapshot_sha256 == [0; 32]
+        || approval.rationale_sha256 == [0; 32]
+        || !matches!(
+            approval.decision.as_str(),
+            "approved" | "denied" | "revoked"
+        )
+        || approval.approver_identity.trim() != approval.approver_identity
+        || approval.approver_identity.is_empty()
+        || approval.approver_identity.len() > 256
         || approval.expires_at <= approval.decided_at
+        || approval.expires_at - approval.decided_at > Duration::hours(24)
     {
         return Err(DbError::InvalidData(
-            "approval requires a valid decision, approver, and future expiry".into(),
+            "approval requires bounded identities, evidence, decision, and expiry".into(),
         ));
     }
     let community_id = *community_id.as_uuid();
     let mut tx = pool.begin().await?;
+    let existing = sqlx::query(
+        "SELECT request_id, task_id, task_snapshot_sha256, decision, \
+                approver_identity, rationale_sha256, decided_at, expires_at \
+         FROM snowman_work_approvals WHERE community_id=$1 AND approval_id=$2",
+    )
+    .bind(community_id)
+    .bind(approval.approval_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(existing) = existing {
+        let exact = existing.try_get::<Uuid, _>("request_id")? == approval.request_id
+            && existing.try_get::<Uuid, _>("task_id")? == approval.task_id
+            && existing
+                .try_get::<Vec<u8>, _>("task_snapshot_sha256")?
+                .as_slice()
+                == approval.task_snapshot_sha256.as_slice()
+            && existing.try_get::<String, _>("decision")? == approval.decision
+            && existing.try_get::<String, _>("approver_identity")? == approval.approver_identity
+            && existing
+                .try_get::<Vec<u8>, _>("rationale_sha256")?
+                .as_slice()
+                == approval.rationale_sha256.as_slice()
+            && existing.try_get::<DateTime<Utc>, _>("decided_at")? == approval.decided_at
+            && existing.try_get::<DateTime<Utc>, _>("expires_at")? == approval.expires_at;
+        if exact {
+            tx.commit().await?;
+            return Ok(false);
+        }
+        return Err(DbError::AccessDenied(
+            "approval identifier was reused for a different decision".into(),
+        ));
+    }
     let task = sqlx::query(
-        "SELECT execution_snapshot_sha256, approval_required FROM snowman_work_tasks \
-         WHERE community_id=$1 AND request_id=$2 AND task_id=$3 FOR UPDATE",
+        "SELECT t.execution_snapshot_sha256, t.approval_required, t.status, r.status AS request_status \
+         FROM snowman_work_tasks t JOIN snowman_work_requests r \
+           ON r.community_id=t.community_id AND r.request_id=t.request_id \
+         WHERE t.community_id=$1 AND t.request_id=$2 AND t.task_id=$3 \
+         FOR UPDATE OF t, r",
     )
     .bind(community_id)
     .bind(approval.request_id)
@@ -2195,6 +2239,10 @@ pub async fn record_work_approval(
     let current_snapshot: Vec<u8> = task.try_get("execution_snapshot_sha256")?;
     if current_snapshot.as_slice() != approval.task_snapshot_sha256.as_slice()
         || !task.try_get::<bool, _>("approval_required")?
+        || matches!(
+            task.try_get::<String, _>("request_status")?.as_str(),
+            "completed" | "failed" | "cancelled" | "expired"
+        )
     {
         return Err(DbError::AccessDenied(
             "approval does not match the current gated task snapshot".into(),
@@ -2225,10 +2273,10 @@ pub async fn record_work_approval(
         "denied" => "failed",
         _ => "awaiting_approval",
     };
-    sqlx::query(
+    let updated = sqlx::query(
         "UPDATE snowman_work_tasks SET status=$4, updated_at=NOW() \
          WHERE community_id=$1 AND request_id=$2 AND task_id=$3 \
-           AND status IN ('awaiting_approval','queued')",
+           AND status IN ('awaiting_approval','queued','leased','running','reviewing')",
     )
     .bind(community_id)
     .bind(approval.request_id)
@@ -2236,9 +2284,39 @@ pub async fn record_work_approval(
     .bind(next_status)
     .execute(&mut *tx)
     .await?;
+    if updated.rows_affected() != 1 {
+        return Err(DbError::AccessDenied(
+            "approval cannot change a terminal task".into(),
+        ));
+    }
+    if approval.decision != "approved" {
+        sqlx::query("DELETE FROM snowman_task_leases WHERE community_id=$1 AND task_id=$2")
+            .bind(community_id)
+            .bind(approval.task_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let event = NewWorkEvent {
+        event_id: approval.approval_id,
+        request_id: approval.request_id,
+        task_id: Some(approval.task_id),
+        event_type: "task.approval_decided".into(),
+        actor_identity: approval.approver_identity.clone(),
+        payload: serde_json::json!({
+            "schema_version": "snowman.work.event.v1",
+            "decision": approval.decision,
+            "task_snapshot_sha256": hex::encode(approval.task_snapshot_sha256),
+            "rationale_sha256": hex::encode(approval.rationale_sha256),
+            "expires_at": approval.expires_at,
+            "lease_invalidated": approval.decision != "approved",
+        }),
+        occurred_at: approval.decided_at,
+    };
+    validate_work_event(&event)?;
+    append_work_event_tx(&mut tx, community_id, &event).await?;
     refresh_request_status(&mut tx, community_id, approval.request_id).await?;
     tx.commit().await?;
-    Ok(())
+    Ok(true)
 }
 
 async fn refresh_request_status(

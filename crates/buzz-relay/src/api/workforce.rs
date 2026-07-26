@@ -23,7 +23,7 @@ use uuid::Uuid;
 use buzz_auth::LimitType;
 use buzz_db::workforce::{
     NewPlannedTask, NewWorkPlan, NewWorkRequest, NewWorkTask, SpendEntry, StoredModelRoute,
-    WorkRequestCancellation, WorkTaskCompletion,
+    WorkApproval, WorkRequestCancellation, WorkTaskCompletion,
 };
 use snowman_workforce::{
     govern_team_plan, Classification, GovernedTeamPlan, ModelRoute, PlannedTask, RiskTier,
@@ -88,6 +88,17 @@ struct CancelWorkRequest {
     cancellation_id: Uuid,
     reason_code: String,
     occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DecideWorkTaskApproval {
+    approval_id: Uuid,
+    task_snapshot_sha256: String,
+    decision: String,
+    rationale_sha256: String,
+    decided_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -541,6 +552,78 @@ pub async fn cancel_work_request(
         "cancelled_task_count": cancelled.cancelled_task_count,
         "inserted": cancelled.inserted,
         "status": "cancelled",
+    })))
+}
+
+/// Record a human decision bound to the task's exact execution snapshot.
+pub async fn decide_work_task_approval(
+    State(state): State<Arc<AppState>>,
+    Path((request_id, task_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let path = format!("{CREATE_PATH}/{request_id}/tasks/{task_id}/approval");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.tasks.approve",
+        "human",
+    )
+    .await?;
+    let input: DecideWorkTaskApproval = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid approval JSON"))?;
+    if request_id.is_nil()
+        || task_id.is_nil()
+        || input.approval_id.is_nil()
+        || !matches!(input.decision.as_str(), "approved" | "denied" | "revoked")
+        || !is_recent_worker_time(input.decided_at)
+        || input.expires_at <= input.decided_at
+        || input.expires_at - input.decided_at > Duration::hours(24)
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "approval has invalid identity, decision, time, or expiry fields",
+        ));
+    }
+    let approval = WorkApproval {
+        approval_id: input.approval_id,
+        request_id,
+        task_id,
+        task_snapshot_sha256: parse_sha256(&input.task_snapshot_sha256, "task_snapshot_sha256")?,
+        decision: input.decision,
+        approver_identity: format!("snowman:{}", principal.identity_id),
+        rationale_sha256: parse_sha256(&input.rationale_sha256, "rationale_sha256")?,
+        decided_at: input.decided_at,
+        expires_at: input.expires_at,
+    };
+    let inserted = state
+        .db
+        .record_work_approval(tenant.community(), &approval)
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "approval conflicts with the current task snapshot or lifecycle",
+            ),
+            _ => internal_error("workforce approval persistence failed"),
+        })?;
+    metrics::counter!(
+        "snowman_workforce_approvals_total",
+        "decision" => approval.decision.clone(),
+        "outcome" => if inserted { "recorded" } else { "idempotent_replay" }
+    )
+    .increment(1);
+    Ok(Json(json!({
+        "schema_version": "snowman.work.task.approval.v1",
+        "approval_id": approval.approval_id,
+        "request_id": request_id,
+        "task_id": task_id,
+        "decision": approval.decision,
+        "expires_at": approval.expires_at,
+        "inserted": inserted,
     })))
 }
 

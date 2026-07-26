@@ -84,6 +84,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(api::workforce::cancel_work_request),
         )
         .route(
+            "/api/snowman/v1/work-requests/{request_id}/tasks/{task_id}/approval",
+            post(api::workforce::decide_work_task_approval),
+        )
+        .route(
             "/internal/snowman/v1/workforce/tasks/claim",
             post(api::workforce::claim_work_task),
         )
