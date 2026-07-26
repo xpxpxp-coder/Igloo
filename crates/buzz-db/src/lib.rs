@@ -45,6 +45,8 @@ pub mod reaction;
 pub mod relay_members;
 /// Replica freshness fence for keyset-cursor read routing.
 pub mod replica_fence;
+/// Least-privilege database runtime role provisioning and verification.
+pub mod runtime_security;
 /// Thread metadata persistence.
 pub mod thread;
 /// Per-community usage rollup queries for Prometheus gauges.

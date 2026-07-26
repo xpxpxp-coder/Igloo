@@ -80,9 +80,15 @@ the highest risks without changing the production-readiness verdict:
 - a hard-zero, digest-pinned dormant relay task definition with non-root/read-
   only execution, dropped capabilities, exact task/execution roles, an empty
   governed runtime-secret shell, and no ECS service capable of starting it.
+- a one-shot, no-service database/key bootstrap task that reads only the
+  RDS-managed master secret, runs migrations, provisions and verifies a
+  DML-only serving identity, generates relay/HMAC keys outside Terraform, and
+  writes only the exact KMS-encrypted runtime secret. Relay startup no longer
+  performs partition DDL in the AWS contract.
 
 These are implementation foundations, not staged proof. OIDC assertion exchange,
-private integration routing, the database/key bootstrap and authenticated edge,
+private integration routing, live database/bootstrap evidence, recurring
+partition rotation and the authenticated edge,
 AWS workers/scheduler/sandbox, KMS audit checkpoints, recovery/load/isolation
 exercises, comprehensive branding, accessibility, UAT, and launch evidence remain
 open gates.

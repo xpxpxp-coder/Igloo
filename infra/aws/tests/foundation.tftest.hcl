@@ -104,8 +104,8 @@ run "production_ha_foundation" {
   command = plan
 
   variables {
-    environment                 = "production"
-    application_hostname        = "command.snowmanai.org"
+    environment           = "production"
+    application_hostname  = "command.snowmanai.org"
     backup_retention_days = 35
   }
 

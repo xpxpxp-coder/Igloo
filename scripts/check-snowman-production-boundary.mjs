@@ -9,6 +9,8 @@ const read = (path) => readFileSync(resolve(repoRoot, path), "utf8");
 const identity = JSON.parse(read("product/identity.json"));
 
 const runtimeAuthorityFiles = [
+  "Cargo.toml",
+  "Dockerfile",
   "crates/buzz-relay/src/config.rs",
   "crates/buzz-relay/src/main.rs",
   "crates/buzz-relay/src/authorization.rs",
@@ -29,6 +31,8 @@ const runtimeAuthorityFiles = [
   "crates/buzz-db/src/analyst_integration.rs",
   "crates/snowman-workforce/src/lib.rs",
   "crates/snowman-aws-auth/src/lib.rs",
+  "crates/snowman-bootstrap/src/main.rs",
+  "crates/buzz-db/src/runtime_security.rs",
   "crates/buzz-pubsub/src/connection.rs",
   "migrations/0025_snowman_workforce.sql",
   "migrations/0026_snowman_workforce_identity.sql",
@@ -74,6 +78,7 @@ const runtimeAuthorityFiles = [
 
 const forbidden = [
   ["Block GitHub", /github\.com\/block\//i],
+  ["Block contributor GitHub", /github\.com\/tlongwell-block\//i],
   ["Block GitHub API", /api\.github\.com\/repos\/block\//i],
   ["Block GHCR", /ghcr\.io\/block\//i],
   ["Builderlab runtime", /(?:^|[^a-z0-9-])(?:[a-z0-9-]+\.)*builderlab\.xyz\b/i],
@@ -145,6 +150,21 @@ requireFragment(
   "infra/aws/compute.tf",
   "readonlyRootFilesystem = true",
   "the dormant relay task must use a read-only root filesystem",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  'entryPoint             = ["/usr/local/bin/snowman-bootstrap"]',
+  "database/key bootstrap must use the governed one-shot entry point",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "NOT has_schema_privilege(current_user, 'public', 'CREATE')",
+  "the serving database identity must fail closed on schema DDL",
+);
+requireFragment(
+  "crates/snowman-bootstrap/src/main.rs",
+  "no secret values were logged",
+  "bootstrap logs must not contain runtime secret values",
 );
 requireFragment(
   "infra/aws/compute.tf",

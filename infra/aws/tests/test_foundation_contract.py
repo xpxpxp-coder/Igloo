@@ -92,6 +92,20 @@ class AwsFoundationContractTests(unittest.TestCase):
         self.assertNotIn('"s3:*"', source)
         self.assertNotIn('"kms:*"', source)
 
+    def test_bootstrap_is_one_shot_and_secret_values_never_enter_terraform(self) -> None:
+        source = (ROOT / "compute.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'resource "aws_ecs_task_definition" "bootstrap"',
+            'entryPoint             = ["/usr/local/bin/snowman-bootstrap"]',
+            'aws_db_instance.postgres.master_user_secret[0].secret_arn',
+            '"secretsmanager:PutSecretValue"',
+            'SNOWMAN_PARTITION_MAINTENANCE_MODE", value = "external"',
+            'RELAY_OWNER_PUBKEY", valueFrom =',
+        ):
+            self.assertIn(fragment, source)
+        self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
+        self.assertNotIn('SNOWMAN_RELAY_OWNER_PUBKEY", value =', source)
+
     def test_operations_are_encrypted_alerted_and_budgeted(self) -> None:
         source = (ROOT / "operations.tf").read_text(encoding="utf-8")
         for fragment in (

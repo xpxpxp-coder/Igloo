@@ -28,6 +28,7 @@ members = [
     "crates/buzz-dev-mcp",
     "crates/snowman-workforce",
     "crates/snowman-aws-auth",
+    "crates/snowman-bootstrap",
     "examples/countdown-bot",
 ]
 exclude = ["desktop/src-tauri"]
@@ -38,7 +39,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.88.0"
 license = "Apache-2.0"
-repository = "https://github.com/block/sprout"
+repository = "https://github.com/xpxpxp-coder/Igloo"
 
 [workspace.dependencies]
 # Runtime
@@ -65,6 +66,7 @@ nostr = { version = "0.44", features = ["nip44", "nip98"] }
 # Serialization
 serde       = { version = "1", features = ["derive"] }
 postcard    = { version = "1", default-features = false, features = ["use-std"] }
+percent-encoding = "2"
 
 # Inter-relay mesh transport (buzz-relay-mesh)
 iroh = { version = "1.0.0-rc.0", default-features = false, features = ["tls-ring"] }
@@ -100,6 +102,7 @@ hex       = "0.4"
 hmac      = "0.13"
 aws-config = "1.10.1"
 aws-sdk-kms = "1.114.0"
+aws-sdk-secretsmanager = "1"
 aws-credential-types = "1.3.0"
 aws-sigv4 = "1.5.1"
 aws-smithy-runtime-api = "1.14.0"
@@ -169,12 +172,3 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
-
-# Temporary fork pin: aws-creds 0.39.1 (via rust-s3) cannot read EKS Pod Identity
-# credentials (AWS_CONTAINER_CREDENTIALS_FULL_URI + AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE),
-# which the relay pod on bb-block requires for S3 media + git storage. This pins
-# aws-creds to a fork that adopts the aws-creds portion of durch/rust-s3#449
-# (FULL_URI + token-file + Authorization header, refresh-safe, with a loopback
-# allowlist for the auth token). Revert to crates.io once #449 lands upstream.
-[patch.crates-io]
-aws-creds = { git = "https://github.com/tlongwell-block/rust-s3", rev = "c9fce3620dd434c1f810101d672cf384268dbb0f" }

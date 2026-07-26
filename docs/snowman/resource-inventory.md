@@ -40,9 +40,13 @@ claims require live verification before use.
   Terraform root emits its password-free runtime contract. It has not been planned against or
   applied to a live Snowman account because the current AWS SSO session is
   expired. A digest-pinned, non-root, read-only relay task definition and exact
-  roles now exist but are hard-dormant with no ECS service; database/key
-  bootstrap, ALB authenticated origin/WAF, worker/model services, backup vault
-  lock, and recovery proof remain.
+  roles now exist but are hard-dormant with no ECS service. A separate one-shot
+  bootstrap task now runs embedded migrations, reconciles a no-DDL/DML-only
+  serving role, generates relay/HMAC material outside Terraform, verifies the
+  serving identity, and writes only the exact KMS-encrypted runtime JSON secret.
+  Its execution still requires an enrolled Snowman owner public key and live
+  staging evidence. ALB authenticated origin/WAF, recurring partition rotation,
+  worker/model services, backup vault lock, and recovery proof remain.
 - The tenant-scoped Postgres workforce queue, fenced lease/recovery primitives,
   exact-snapshot approvals, capability-bound service identities, immutable
   context references, hard spend/token ledgers, aggregate request-state

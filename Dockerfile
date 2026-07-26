@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# Public Buzz relay image — published as ghcr.io/block/buzz:<tag>.
+# Snowman Command Center image — published only to the Snowman-owned ECR repo.
 #
 # Builds the `buzz-relay` binary (Rust 1.95) and the `buzz-web` static bundle
 # (pnpm + vite), then assembles them into a small debian-slim runtime with
@@ -67,9 +67,11 @@ COPY . .
 RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
                                    -p buzz-admin --bin buzz-admin \
                                    -p buzz-pair-relay --bin buzz-pair-relay \
+                                   -p snowman-bootstrap --bin snowman-bootstrap \
     && strip target/release/buzz-relay \
     && strip target/release/buzz-admin \
-    && strip target/release/buzz-pair-relay
+    && strip target/release/buzz-pair-relay \
+    && strip target/release/snowman-bootstrap
 
 # ─── Stage 4: web bundle (pnpm + vite) ──────────────────────────────────────
 # Independent of the Rust layers so a CSS change doesn't bust Rust cache and
@@ -114,14 +116,13 @@ RUN pnpm -C web build && pnpm -C admin-web build
 # ─── Stage 5: runtime ───────────────────────────────────────────────────────
 FROM debian:${DEBIAN_VERSION}-slim AS runtime
 
-# OCI annotations: required for GHCR to auto-link the image to this repo and
-# inherit its visibility. org.opencontainers.image.source is the load-bearing
-# one — without it GHCR keeps the image private even when the repo is public.
-LABEL org.opencontainers.image.title="Buzz" \
-      org.opencontainers.image.description="WebSocket relay server for the Buzz communications platform" \
-      org.opencontainers.image.source="https://github.com/block/buzz" \
-      org.opencontainers.image.url="https://github.com/block/buzz" \
-      org.opencontainers.image.documentation="https://github.com/block/buzz#readme" \
+# OCI annotations identify the Snowman fork and product. Upstream provenance is
+# retained in the shipped notices rather than advertising an upstream runtime.
+LABEL org.opencontainers.image.title="Snowman Command Center" \
+      org.opencontainers.image.description="Governed intelligence and agent-operations control plane for Snowman 360" \
+      org.opencontainers.image.source="https://github.com/xpxpxp-coder/Igloo" \
+      org.opencontainers.image.url="https://snowmanai.org" \
+      org.opencontainers.image.documentation="https://snowmanai.org/docs" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get update \
@@ -138,6 +139,7 @@ RUN apt-get update \
 COPY --from=builder    /build/target/release/buzz-relay /usr/local/bin/buzz-relay
 COPY --from=builder    /build/target/release/buzz-admin /usr/local/bin/buzz-admin
 COPY --from=builder    /build/target/release/buzz-pair-relay /usr/local/bin/buzz-pair-relay
+COPY --from=builder    /build/target/release/snowman-bootstrap /usr/local/bin/snowman-bootstrap
 COPY --from=web-builder /build/web/dist                 /srv/buzz/web
 COPY --from=web-builder /build/admin-web/dist           /srv/buzz/admin-web
 
