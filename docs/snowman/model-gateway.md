@@ -18,7 +18,8 @@ a provider endpoint or credential and cannot call a model runtime directly.
    role, capability, classification, model, token and cost policy.
 4. The route comes only from operations configuration. It must be a private
    `.internal`/`.local` HTTP origin, a Snowman-owned HTTPS origin, or an exact
-   same-account SageMaker endpoint; request data can never select or override it.
+   same-account SageMaker endpoint and inference component; request data can
+   never select or override either coordinate.
 5. The gateway invokes either a pinned OpenAI-compatible Snowman runtime with
    proxies and redirects disabled or SageMaker Runtime through the VPC interface
    endpoint and task-role SigV4 authentication. It accepts only JSON, enforces a
@@ -33,8 +34,8 @@ The gateway stores no prompt or output. Its dedicated Valkey identity can only
 ECS task runs without a public IP, as non-root, with a read-only root filesystem
 and all Linux capabilities dropped. Its task role has only exact `kms:Verify`
 and exact ElastiCache connection grants. SageMaker routes add only
-`sagemaker:InvokeEndpoint` on their exact configured endpoint ARNs; there is no
-wildcard inference permission.
+`sagemaker:InvokeEndpoint` on their exact configured endpoint and inference
+component ARNs; there is no wildcard inference permission.
 
 The AWS root now also defines a default-off cross-account PrivateLink provider.
 It uses an internal Network Load Balancer with Snowman TLS, endpoint-service

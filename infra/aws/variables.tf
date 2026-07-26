@@ -197,6 +197,7 @@ variable "model_gateway_routes" {
     backend_kind                       = string
     backend_origin                     = optional(string)
     sagemaker_endpoint_name            = optional(string)
+    sagemaker_inference_component_name = optional(string)
     backend_model                      = string
     max_input_tokens                   = number
     max_output_tokens                  = number
@@ -212,11 +213,13 @@ variable "model_gateway_routes" {
       can(regex("^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$", route.backend_model)) &&
       contains(["private_openai", "sagemaker"], route.backend_kind) &&
       (
-        (route.backend_kind == "private_openai" && route.sagemaker_endpoint_name == null && (
+        (route.backend_kind == "private_openai" && route.sagemaker_endpoint_name == null && route.sagemaker_inference_component_name == null && (
           can(regex("^http://[a-z0-9-]+([.][a-z0-9-]+)*[.](internal|local):[0-9]{2,5}$", route.backend_origin)) ||
           can(regex("^https://([a-z0-9-]+[.])*snowmanai[.]org$", route.backend_origin))
         )) ||
-        (route.backend_kind == "sagemaker" && route.backend_origin == null && can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$", route.sagemaker_endpoint_name)))
+        (route.backend_kind == "sagemaker" && route.backend_origin == null &&
+          can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$", route.sagemaker_endpoint_name)) &&
+        can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$", route.sagemaker_inference_component_name)))
       ) &&
       route.max_input_tokens > 0 && route.max_input_tokens <= 1000000 &&
       route.max_output_tokens > 0 && route.max_output_tokens <= 100000 &&

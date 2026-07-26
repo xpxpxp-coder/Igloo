@@ -165,6 +165,7 @@ class AwsFoundationContractTests(unittest.TestCase):
             'condition     = var.model_gateway_desired_count == 0',
             'actions = ["sagemaker:InvokeEndpoint"]',
             'endpoint/${route.sagemaker_endpoint_name}',
+            'inference-component/${route.sagemaker_inference_component_name}',
         ):
             self.assertIn(fragment, source)
         self.assertRegex(source, r'actions\s*=\s*\["elasticache:Connect"\]')

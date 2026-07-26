@@ -212,11 +212,18 @@ data "aws_iam_policy_document" "model_gateway_task" {
       sid     = "InvokeExactSnowmanSageMakerEndpoints"
       effect  = "Allow"
       actions = ["sagemaker:InvokeEndpoint"]
-      resources = sort([
-        for route in values(var.model_gateway_routes) :
-        "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${var.expected_workload_account_id}:endpoint/${route.sagemaker_endpoint_name}"
-        if route.backend_kind == "sagemaker"
-      ])
+      resources = sort(concat(
+        [
+          for route in values(var.model_gateway_routes) :
+          "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${var.expected_workload_account_id}:endpoint/${route.sagemaker_endpoint_name}"
+          if route.backend_kind == "sagemaker"
+        ],
+        [
+          for route in values(var.model_gateway_routes) :
+          "arn:${data.aws_partition.current.partition}:sagemaker:${var.aws_region}:${var.expected_workload_account_id}:inference-component/${route.sagemaker_inference_component_name}"
+          if route.backend_kind == "sagemaker"
+        ]
+      ))
     }
   }
 }

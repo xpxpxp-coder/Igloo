@@ -80,6 +80,8 @@ pub struct ModelRoute {
     pub backend_origin: Option<String>,
     /// Exact same-account endpoint; required only for `sagemaker`.
     pub sagemaker_endpoint_name: Option<String>,
+    /// Exact inference component hosted by the endpoint; required only for `sagemaker`.
+    pub sagemaker_inference_component_name: Option<String>,
     /// Model identifier understood by the private runtime.
     pub backend_model: String,
     /// Route input-token ceiling.
@@ -707,10 +709,15 @@ async fn invoke_sagemaker(
         .sagemaker_endpoint_name
         .as_deref()
         .ok_or(GatewayError::Inference)?;
+    let inference_component_name = route
+        .sagemaker_inference_component_name
+        .as_deref()
+        .ok_or(GatewayError::Inference)?;
     let output = state
         .sagemaker
         .invoke_endpoint()
         .endpoint_name(endpoint_name)
+        .inference_component_name(inference_component_name)
         .content_type("application/json")
         .accept("application/json")
         .inference_id(format!("snowman-{generation_id}"))
@@ -855,6 +862,7 @@ fn validate_route(route: &ModelRoute) -> Result<(), ConfigError> {
                 && (host == "snowmanai.org" || host.ends_with(".snowmanai.org"))
                 && origin.port_or_known_default() == Some(443);
             if route.sagemaker_endpoint_name.is_some()
+                || route.sagemaker_inference_component_name.is_some()
                 || origin.username() != ""
                 || origin.password().is_some()
                 || !matches!(origin.path(), "" | "/")
@@ -870,7 +878,17 @@ fn validate_route(route: &ModelRoute) -> Result<(), ConfigError> {
                 .sagemaker_endpoint_name
                 .as_deref()
                 .ok_or(ConfigError::Invalid("SageMaker endpoint is required"))?;
-            if route.backend_origin.is_some() || !valid_sagemaker_endpoint_name(endpoint) {
+            let inference_component =
+                route
+                    .sagemaker_inference_component_name
+                    .as_deref()
+                    .ok_or(ConfigError::Invalid(
+                        "SageMaker inference component is required",
+                    ))?;
+            if route.backend_origin.is_some()
+                || !valid_sagemaker_name(endpoint)
+                || !valid_sagemaker_name(inference_component)
+            {
                 return Err(ConfigError::Invalid("SageMaker model route is invalid"));
             }
         }
@@ -879,7 +897,7 @@ fn validate_route(route: &ModelRoute) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn valid_sagemaker_endpoint_name(value: &str) -> bool {
+fn valid_sagemaker_name(value: &str) -> bool {
     let bytes = value.as_bytes();
     (1..=63).contains(&bytes.len())
         && bytes[0].is_ascii_alphanumeric()
@@ -961,6 +979,7 @@ mod tests {
             backend_kind: "private_openai".into(),
             backend_origin: Some(origin.into()),
             sagemaker_endpoint_name: None,
+            sagemaker_inference_component_name: None,
             backend_model: "snowman-llama-70b".into(),
             max_input_tokens: 10_000,
             max_output_tokens: 2_000,
@@ -987,6 +1006,8 @@ mod tests {
         sagemaker.backend_kind = "sagemaker".into();
         sagemaker.backend_origin = None;
         sagemaker.sagemaker_endpoint_name = Some("snowman-staging-delivery".into());
+        sagemaker.sagemaker_inference_component_name =
+            Some("snowman-staging-delivery-component".into());
         assert!(validate_route(&sagemaker).is_ok());
         sagemaker.backend_origin = Some("https://api.openai.com".into());
         assert!(validate_route(&sagemaker).is_err());
