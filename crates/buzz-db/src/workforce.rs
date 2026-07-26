@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 use buzz_core::CommunityId;
 use snowman_workforce::{
-    validate_context_packet, Classification, ContextAuthority, ContextPacketManifest,
+    decide_proactive_action, validate_context_packet, Classification, ContextAuthority,
+    ContextPacketManifest, ProactiveAction, ProactiveDecision, ProactivePolicy, ProactiveTrigger,
 };
 
 use crate::{DbError, Result};
@@ -349,6 +350,38 @@ pub struct StoredContextPacket {
     pub manifest_sha256: [u8; 32],
     /// Server-observed publication time.
     pub created_at: DateTime<Utc>,
+}
+
+/// One policy-evaluated proactive action proposed by a tenant-local scheduler.
+#[derive(Debug, Clone)]
+pub struct NewProactiveAction {
+    /// Bounded action evaluated by the shared workforce policy kernel.
+    pub action: ProactiveAction,
+    /// Active tenant-local service identity proposing the action.
+    pub proposed_by_identity_id: Uuid,
+    /// Exact policy snapshot used for the decision.
+    pub policy: ProactivePolicy,
+    /// Digest of the authorized schedule, signal, objective, or review event.
+    pub source_event_sha256: [u8; 32],
+    /// Earliest time this action may execute or request approval.
+    pub scheduled_for: DateTime<Utc>,
+    /// Time after which the action must not execute.
+    pub expires_at: DateTime<Utc>,
+    /// Server-observed proposal time.
+    pub created_at: DateTime<Utc>,
+}
+
+/// Result of durably evaluating one proactive action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScheduledProactiveAction {
+    /// Stable action identifier.
+    pub action_id: Uuid,
+    /// Request/objective this action advances.
+    pub request_id: Uuid,
+    /// Policy outcome controlling execution.
+    pub decision: ProactiveDecision,
+    /// True only when the action and evidence receipt were first inserted.
+    pub inserted: bool,
 }
 
 /// Server-authoritative request envelope used to govern a planner proposal.
@@ -1150,6 +1183,237 @@ pub async fn list_context_packets(
             })
         })
         .collect()
+}
+
+/// Evaluate and durably record one proactive next-useful action exactly once.
+///
+/// Automatic execution is only a queue decision. A later worker still needs
+/// the exact action capability, a fenced lease, and hard spend enforcement.
+pub async fn schedule_proactive_action(
+    pool: &PgPool,
+    community_id: CommunityId,
+    proposal: &NewProactiveAction,
+) -> Result<ScheduledProactiveAction> {
+    let decision = decide_proactive_action(&proposal.action, &proposal.policy);
+    if proposal.action.community_id != *community_id.as_uuid()
+        || proposal.action.action_id.is_nil()
+        || proposal.action.objective_id.is_nil()
+        || proposal.proposed_by_identity_id.is_nil()
+        || proposal.source_event_sha256 == [0; 32]
+        || proposal.created_at > proposal.scheduled_for
+        || proposal.expires_at <= proposal.scheduled_for
+    {
+        return Err(DbError::InvalidData(
+            "proactive action scope, evidence, or schedule is invalid".into(),
+        ));
+    }
+    let action_bytes = serde_json::to_vec(&proposal.action)
+        .map_err(|error| DbError::InvalidData(format!("proactive action is invalid: {error}")))?;
+    let policy_bytes = serde_json::to_vec(&proposal.policy)
+        .map_err(|error| DbError::InvalidData(format!("proactive policy is invalid: {error}")))?;
+    let action_sha256 = sha256(&action_bytes);
+    let policy_sha256 = sha256(&policy_bytes);
+    let community_id = *community_id.as_uuid();
+    let mut tx = pool.begin().await?;
+    let request = sqlx::query(
+        r#"
+        SELECT r.status, r.max_cost_microusd,
+               COALESCE((
+                 SELECT SUM(s.cost_microusd) FROM snowman_spend_ledger s
+                 WHERE s.community_id=r.community_id AND s.request_id=r.request_id
+               ), 0)::bigint AS used_cost_microusd,
+               COALESCE((
+                 SELECT SUM(a.expected_cost_microusd) FROM snowman_proactive_actions a
+                 WHERE a.community_id=r.community_id AND a.request_id=r.request_id
+                   AND a.status IN ('queued', 'awaiting_approval', 'leased', 'running')
+               ), 0)::bigint AS proactive_reserved_microusd,
+               EXISTS (
+                 SELECT 1 FROM snowman_workforce_identities i
+                 JOIN snowman_workforce_capability_grants g
+                   ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+                 WHERE i.community_id=r.community_id AND i.identity_id=$3
+                   AND i.identity_type='service' AND i.role='agent'
+                   AND i.status='active' AND i.revoked_at IS NULL
+                   AND (i.expires_at IS NULL OR i.expires_at > NOW())
+                   AND g.capability='workforce.proactive.propose'
+                   AND g.revoked_at IS NULL
+                   AND (g.expires_at IS NULL OR g.expires_at > NOW())
+               ) AS proposer_authorized
+        FROM snowman_work_requests r
+        WHERE r.community_id=$1 AND r.request_id=$2
+        FOR UPDATE
+        "#,
+    )
+    .bind(community_id)
+    .bind(proposal.action.objective_id)
+    .bind(proposal.proposed_by_identity_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| DbError::InvalidData("proactive action request was not found".into()))?;
+    if !request.try_get::<bool, _>("proposer_authorized")?
+        || !matches!(
+            request.try_get::<String, _>("status")?.as_str(),
+            "requested" | "planned" | "running" | "awaiting_approval" | "reviewing"
+        )
+    {
+        return Err(DbError::AccessDenied(
+            "proactive proposer or request lifecycle is not authorized".into(),
+        ));
+    }
+    let existing = sqlx::query(
+        r#"
+        SELECT request_id, proposed_by_identity_id, source_event_sha256,
+               policy_sha256, action_sha256, decision, scheduled_for,
+               expires_at, created_at
+        FROM snowman_proactive_actions
+        WHERE community_id=$1 AND action_id=$2
+        "#,
+    )
+    .bind(community_id)
+    .bind(proposal.action.action_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some(existing) = existing {
+        let exact = existing.try_get::<Uuid, _>("request_id")? == proposal.action.objective_id
+            && existing.try_get::<Uuid, _>("proposed_by_identity_id")?
+                == proposal.proposed_by_identity_id
+            && existing
+                .try_get::<Vec<u8>, _>("source_event_sha256")?
+                .as_slice()
+                == proposal.source_event_sha256.as_slice()
+            && existing.try_get::<Vec<u8>, _>("policy_sha256")?.as_slice()
+                == policy_sha256.as_slice()
+            && existing.try_get::<Vec<u8>, _>("action_sha256")?.as_slice()
+                == action_sha256.as_slice()
+            && existing.try_get::<String, _>("decision")? == proactive_decision_name(decision)
+            && existing.try_get::<DateTime<Utc>, _>("scheduled_for")? == proposal.scheduled_for
+            && existing.try_get::<DateTime<Utc>, _>("expires_at")? == proposal.expires_at
+            && existing.try_get::<DateTime<Utc>, _>("created_at")? == proposal.created_at;
+        if exact {
+            tx.commit().await?;
+            return Ok(ScheduledProactiveAction {
+                action_id: proposal.action.action_id,
+                request_id: proposal.action.objective_id,
+                decision,
+                inserted: false,
+            });
+        }
+        return Err(DbError::AccessDenied(
+            "proactive action identifier was reused for a different policy decision".into(),
+        ));
+    }
+    if decision != ProactiveDecision::Reject {
+        let committed = request
+            .try_get::<i64, _>("used_cost_microusd")?
+            .checked_add(request.try_get::<i64, _>("proactive_reserved_microusd")?)
+            .and_then(|value| {
+                value.checked_add(i64::try_from(proposal.action.expected_cost_microusd).ok()?)
+            })
+            .ok_or_else(|| DbError::AccessDenied("proactive cost reservation overflowed".into()))?;
+        if committed > request.try_get::<i64, _>("max_cost_microusd")? {
+            return Err(DbError::AccessDenied(
+                "proactive action would exceed the request cost ceiling".into(),
+            ));
+        }
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO snowman_proactive_actions
+          (community_id, action_id, request_id, proposed_by_identity_id,
+           trigger_kind, capability, risk_tier, reversible,
+           expected_cost_microusd, confidence_basis_points, usefulness_sha256,
+           source_event_sha256, policy_sha256, action_sha256, decision, status,
+           scheduled_for, expires_at, created_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+        "#,
+    )
+    .bind(community_id)
+    .bind(proposal.action.action_id)
+    .bind(proposal.action.objective_id)
+    .bind(proposal.proposed_by_identity_id)
+    .bind(proactive_trigger_name(proposal.action.trigger))
+    .bind(&proposal.action.capability)
+    .bind(risk_tier_name(proposal.action.risk_tier))
+    .bind(proposal.action.reversible)
+    .bind(
+        i64::try_from(proposal.action.expected_cost_microusd).map_err(|_| {
+            DbError::InvalidData("proactive action cost exceeds database bounds".into())
+        })?,
+    )
+    .bind(i32::from(proposal.action.confidence_basis_points))
+    .bind(proposal.action.usefulness_sha256.as_slice())
+    .bind(proposal.source_event_sha256.as_slice())
+    .bind(policy_sha256.as_slice())
+    .bind(action_sha256.as_slice())
+    .bind(proactive_decision_name(decision))
+    .bind(proactive_status_name(decision))
+    .bind(proposal.scheduled_for)
+    .bind(proposal.expires_at)
+    .bind(proposal.created_at)
+    .execute(&mut *tx)
+    .await?;
+    let event = NewWorkEvent {
+        event_id: proposal.action.action_id,
+        request_id: proposal.action.objective_id,
+        task_id: None,
+        event_type: format!("proactive.{}", proactive_status_name(decision)),
+        actor_identity: format!("snowman-service:{}", proposal.proposed_by_identity_id),
+        payload: serde_json::json!({
+            "schema_version": "snowman.proactive.decision.v1",
+            "action_sha256": hex::encode(action_sha256),
+            "policy_sha256": hex::encode(policy_sha256),
+            "source_event_sha256": hex::encode(proposal.source_event_sha256),
+            "trigger": proactive_trigger_name(proposal.action.trigger),
+            "capability": proposal.action.capability,
+            "decision": proactive_decision_name(decision),
+            "scheduled_for": proposal.scheduled_for,
+            "expires_at": proposal.expires_at,
+        }),
+        occurred_at: proposal.created_at,
+    };
+    validate_work_event(&event)?;
+    append_work_event_tx(&mut tx, community_id, &event).await?;
+    tx.commit().await?;
+    Ok(ScheduledProactiveAction {
+        action_id: proposal.action.action_id,
+        request_id: proposal.action.objective_id,
+        decision,
+        inserted: true,
+    })
+}
+
+const fn proactive_trigger_name(trigger: ProactiveTrigger) -> &'static str {
+    match trigger {
+        ProactiveTrigger::UserObjective => "user_objective",
+        ProactiveTrigger::AuthorizedSchedule => "authorized_schedule",
+        ProactiveTrigger::TenantSignal => "tenant_signal",
+        ProactiveTrigger::PolicyReview => "policy_review",
+    }
+}
+
+const fn proactive_decision_name(decision: ProactiveDecision) -> &'static str {
+    match decision {
+        ProactiveDecision::ExecuteAutomatically => "execute_automatically",
+        ProactiveDecision::AwaitHumanApproval => "await_human_approval",
+        ProactiveDecision::Reject => "reject",
+    }
+}
+
+const fn proactive_status_name(decision: ProactiveDecision) -> &'static str {
+    match decision {
+        ProactiveDecision::ExecuteAutomatically => "queued",
+        ProactiveDecision::AwaitHumanApproval => "awaiting_approval",
+        ProactiveDecision::Reject => "rejected",
+    }
+}
+
+const fn risk_tier_name(risk: snowman_workforce::RiskTier) -> &'static str {
+    match risk {
+        snowman_workforce::RiskTier::Low => "low",
+        snowman_workforce::RiskTier::Moderate => "moderate",
+        snowman_workforce::RiskTier::High => "high",
+        snowman_workforce::RiskTier::Prohibited => "prohibited",
+    }
 }
 
 const fn classification_name(classification: Classification) -> &'static str {

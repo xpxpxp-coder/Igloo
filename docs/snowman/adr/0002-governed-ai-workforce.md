@@ -94,6 +94,15 @@ quality/risk reviewer for client-ready delivery. Its proactive policy executes
 only useful, confident, low-risk, reversible, allowlisted work below a hard cost
 threshold and turns other useful work into an approval request.
 
+The durable proactive-action store records the exact action and policy digests,
+authorized trigger provenance, tenant-local proposer, decision, schedule,
+expiry, cost reservation, and hash-chain receipt. It requires the exact
+`workforce.proactive.propose` service capability, refuses inactive objectives,
+reserves against the request's hard cost ceiling before queueing, and stores a
+usefulness evidence digest rather than a free-form rationale. “Queued” is not an
+execution bypass: the scheduler/worker must still claim a fenced lease, hold the
+action capability, and stop at the recorded approval gate.
+
 The kernel also validates a metadata-only `ContextPacketManifest` for
 replacement agents. It binds tenant, request, objective, authority, content and
 provenance digests; caps the handoff artifact at 1 MiB; permits only

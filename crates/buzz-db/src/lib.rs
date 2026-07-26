@@ -3136,6 +3136,15 @@ impl Db {
             .await
     }
 
+    /// Evaluate and durably record one proactive next-useful action.
+    pub async fn schedule_proactive_action(
+        &self,
+        community: CommunityId,
+        proposal: &workforce::NewProactiveAction,
+    ) -> Result<workforce::ScheduledProactiveAction> {
+        workforce::schedule_proactive_action(&self.pool, community, proposal).await
+    }
+
     /// Returns whether a member has persisted acceptance evidence for a policy version.
     pub async fn has_join_policy_acceptance(
         &self,

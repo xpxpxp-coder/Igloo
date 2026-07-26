@@ -45,6 +45,7 @@ const runtimeAuthorityFiles = [
   "migrations/0029_snowman_analyst_event_boundary.sql",
   "migrations/0030_snowman_governed_team_plans.sql",
   "migrations/0031_snowman_context_packet_manifests.sql",
+  "migrations/0032_snowman_proactive_actions.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -151,6 +152,16 @@ requireFragment(
   "crates/snowman-workforce/src/lib.rs",
   "ExecuteAutomatically",
   "proactive action policy must distinguish automatic work from human-gated work",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "workforce.proactive.propose",
+  "proactive proposals must require an exact tenant-local service capability",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "proactive action would exceed the request cost ceiling",
+  "proactive work must reserve against the originating request budget",
 );
 requireFragment(
   "crates/snowman-workforce/src/lib.rs",

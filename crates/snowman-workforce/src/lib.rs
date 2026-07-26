@@ -166,18 +166,21 @@ pub struct ProactiveAction {
     pub risk_tier: RiskTier,
     pub reversible: bool,
     pub expected_cost_microusd: u64,
-    pub usefulness_basis: String,
+    /// Digest of the evidence explaining why this action is useful. The
+    /// narrative remains in an immutable Snowman/Analyst artifact.
+    pub usefulness_sha256: [u8; 32],
     pub confidence_basis_points: u16,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProactiveDecision {
     ExecuteAutomatically,
     AwaitHumanApproval,
     Reject,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProactivePolicy {
     pub automatic_capabilities: BTreeSet<String>,
     pub max_automatic_cost_microusd: u64,
@@ -293,10 +296,18 @@ pub fn decide_proactive_action(
     action: &ProactiveAction,
     policy: &ProactivePolicy,
 ) -> ProactiveDecision {
-    if action.risk_tier == RiskTier::Prohibited
-        || action.usefulness_basis.trim().is_empty()
+    if policy.minimum_confidence_basis_points > 10_000
+        || policy.automatic_capabilities.iter().any(|capability| {
+            !is_capability(capability) || is_dangerous_ambient_capability(capability)
+        })
+        || action.risk_tier == RiskTier::Prohibited
+        || action.usefulness_sha256 == [0; 32]
         || action.confidence_basis_points > 10_000
+        || action.action_id.is_nil()
+        || action.community_id.is_nil()
         || action.objective_id.is_nil()
+        || !is_capability(&action.capability)
+        || is_dangerous_ambient_capability(&action.capability)
     {
         return ProactiveDecision::Reject;
     }
@@ -677,7 +688,7 @@ mod tests {
             risk_tier: RiskTier::Low,
             reversible: true,
             expected_cost_microusd: 100,
-            usefulness_basis: "Project deadline is within the configured reminder window.".into(),
+            usefulness_sha256: [9; 32],
             confidence_basis_points: 9_000,
         };
         assert_eq!(
@@ -690,6 +701,12 @@ mod tests {
             ProactiveDecision::AwaitHumanApproval
         );
         action.risk_tier = RiskTier::Prohibited;
+        assert_eq!(
+            decide_proactive_action(&action, &policy),
+            ProactiveDecision::Reject
+        );
+        action.risk_tier = RiskTier::Low;
+        action.capability = "aws.all".into();
         assert_eq!(
             decide_proactive_action(&action, &policy),
             ProactiveDecision::Reject

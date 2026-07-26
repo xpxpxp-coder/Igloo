@@ -56,9 +56,14 @@ claims require live verification before use.
   context references, hard spend/token ledgers, aggregate request-state
   reconciliation, and a serialized secret-rejecting lifecycle-event hash chain
   now exist in source. AWS
-  scheduler/worker services, sandbox isolation, proactive-policy evaluation,
-  and staged failure proof still must be built before
+  scheduler/worker services, sandbox isolation, and staged failure proof still
+  must be built before
   the product can honestly provide 24/7 service.
+- Proactive next-useful actions now have a tenant-scoped durable decision store:
+  authorized service proposer, source-event/action/policy/usefulness digests,
+  risk/reversibility/confidence, schedule/expiry, exact idempotency, and cost
+  reservation against the originating request. The AWS schedule poller, fenced
+  proactive lease/executor, notifications, and staged 24/7 recovery proof remain.
 - A deterministic context-manifest policy now gives replacement specialists a
   bounded, classified, content-addressed handoff contract with objective,
   provenance, evidence/artifact references, decision/open-question digests, and
