@@ -76,12 +76,13 @@ exact model but never bypasses the evaluated catalog.
 
 ## Remaining production gates
 
-- Build capability-specific Analyst job executors that revalidate `model_id`
-  against the Snowman model catalog, produce immutable artifacts, and publish
-  accurate token/cost receipts. Command acceptance and polling are implemented;
-  queued jobs are not yet executed by this worker.
-- Add ECS task/service definitions with one task role and Secrets Manager secret
-  per service identity, private Analyst routing, and no NAT/internet egress.
+- Deploy the locally tested Analyst analytics/generative executors and private
+  Snowman model gateway with the cross-account KMS bindings, private ingress,
+  and a pinned Snowman-hosted inference fleet. Reconcile the gateway usage
+  receipt back into the Command Center spend ledger before task completion.
+- Activate the now-defined per-identity ECS task/services only after their
+  Secrets Manager values, private Analyst route, provisioned workforce
+  identities/catalog, and zero-internet-egress plan have passed review.
 - Add a scheduler/recovery service, task dead-letter policy, runtime metrics and
   alarms, graceful draining, and bounded concurrency.
 - Prove crash/re-lease idempotency, KMS/Analyst degradation, cancellation,

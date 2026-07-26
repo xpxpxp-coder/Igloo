@@ -399,10 +399,21 @@ resource "aws_elasticache_user" "relay" {
   }
 }
 
+resource "aws_elasticache_user" "model_gateway" {
+  user_id       = "snowman-${var.environment}-model-gateway"
+  user_name     = "snowman-${var.environment}-model-gateway"
+  access_string = "on ~snowman:model-gateway:nonce:* +set +ping"
+  engine        = "valkey"
+
+  authentication_mode {
+    type = "iam"
+  }
+}
+
 resource "aws_elasticache_user_group" "relay" {
   engine        = "valkey"
   user_group_id = "snowman-${var.environment}-relay"
-  user_ids      = [aws_elasticache_user.relay.user_id]
+  user_ids      = [aws_elasticache_user.relay.user_id, aws_elasticache_user.model_gateway.user_id]
 }
 
 resource "aws_elasticache_replication_group" "valkey" {

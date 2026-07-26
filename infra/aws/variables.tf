@@ -122,6 +122,61 @@ variable "model_gateway_desired_count" {
   }
 }
 
+variable "model_gateway_principals" {
+  description = "Analyst workload policies allowed to call the private model gateway. Map keys are exact service principal IDs."
+  type = map(object({
+    key_id           = string
+    tenant_id        = string
+    client_id        = string
+    project_id       = string
+    model_ids        = set(string)
+    specialist_roles = set(string)
+    capabilities     = set(string)
+    classifications  = set(string)
+  }))
+  default = {}
+  validation {
+    condition = alltrue([
+      for principal_id, policy in var.model_gateway_principals :
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$", principal_id)) &&
+      can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/[0-9a-fA-F-]{36}$", policy.key_id)) &&
+      policy.tenant_id == policy.client_id &&
+      length(policy.model_ids) > 0 && length(policy.specialist_roles) > 0 &&
+      length(policy.capabilities) > 0 && length(policy.classifications) > 0 &&
+      alltrue([for classification in policy.classifications : contains(["internal", "confidential", "restricted"], classification)])
+    ])
+    error_message = "Every model-gateway principal must be a non-empty, tenant-consistent, KMS-bound policy."
+  }
+}
+
+variable "model_gateway_routes" {
+  description = "Operations-owned model catalog. Map keys are public Snowman model IDs; backends remain private Snowman inference origins."
+  type = map(object({
+    backend_origin                     = string
+    backend_model                      = string
+    max_input_tokens                   = number
+    max_output_tokens                  = number
+    max_cost_microusd                  = number
+    input_microusd_per_million_tokens  = number
+    output_microusd_per_million_tokens = number
+  }))
+  default = {}
+  validation {
+    condition = alltrue([
+      for model_id, route in var.model_gateway_routes :
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$", model_id)) &&
+      can(regex("^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$", route.backend_model)) &&
+      can(regex("^http://[a-z0-9-]+([.][a-z0-9-]+)*[.](internal|local):[0-9]{2,5}$", route.backend_origin)) &&
+      route.max_input_tokens > 0 && route.max_input_tokens <= 1000000 &&
+      route.max_output_tokens > 0 && route.max_output_tokens <= 100000 &&
+      route.max_cost_microusd > 0 && route.max_cost_microusd <= 100000000 &&
+      route.input_microusd_per_million_tokens >= 0 &&
+      route.output_microusd_per_million_tokens >= 0
+    ])
+    error_message = "Every model route must bind a bounded Snowman model ID to an exact private .internal/.local inference origin."
+  }
+}
+
 variable "external_model_processors_enabled" {
   type        = bool
   description = "Fail-closed switch. Requires a future provider/data-class approval before it can become true."

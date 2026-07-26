@@ -30,6 +30,7 @@ members = [
     "crates/snowman-aws-auth",
     "crates/snowman-bootstrap",
     "crates/snowman-analyst-client",
+    "crates/snowman-model-gateway",
     "crates/snowman-workforce-worker",
     "examples/countdown-bot",
 ]

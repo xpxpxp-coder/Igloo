@@ -52,10 +52,14 @@ record, not a client-side API key or direct vendor CLI.
 
 ## Capabilities that must be added
 
-- A Snowman model gateway at `models.snowmanai.org`, backed by a governed model
-  catalog and a Snowman-hosted AWS inference fleet for strict zero-third-party
-  processing. The clients now default to this authority, but the service itself
-  is not yet deployed or proven.
+- A private Snowman model gateway is now implemented and locally tested. It
+  accepts only exact KMS-signed Analyst requests, revalidates tenant, role,
+  capability, classification, model and budgets, consumes replay nonces in a
+  dedicated least-privilege Valkey namespace, and can route only to private or
+  Snowman-owned inference origins. Its dormant ECS service/task and IAM/network
+  boundaries exist in source. Private cross-account ingress, a governed model
+  catalog deployment, the pinned Snowman-hosted AWS inference fleet, usage
+  reconciliation, and live zero-egress proof remain.
 - The Command Center AWS root now defines and validates the isolated managed
   substrate: three-AZ network layout, no NAT/private internet route, exact AWS
   endpoints, managed PostgreSQL, IAM-authenticated TLS Valkey, KMS/object-lock

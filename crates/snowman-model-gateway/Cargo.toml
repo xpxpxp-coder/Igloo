@@ -1,0 +1,38 @@
+[package]
+name = "snowman-model-gateway"
+description = "Private, policy-enforcing inference gateway for the Snowman AI workforce"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aws-config = { workspace = true }
+aws-sdk-kms = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
+buzz-pubsub = { path = "../buzz-pubsub" }
+chrono = { workspace = true }
+futures-util = { workspace = true }
+hex = { workspace = true }
+redis = { workspace = true }
+reqwest = { workspace = true, features = ["stream"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+snowman-aws-auth = { path = "../snowman-aws-auth" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+
+[lib]
+name = "snowman_model_gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "snowman-model-gateway"
+path = "src/main.rs"

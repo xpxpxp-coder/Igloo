@@ -8900,6 +8900,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "snowman-model-gateway"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-sdk-kms",
+ "axum",
+ "base64",
+ "buzz-pubsub",
+ "chrono",
+ "futures-util",
+ "hex",
+ "redis",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "snowman-aws-auth",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "snowman-workforce"
 version = "0.1.0"
 dependencies = [

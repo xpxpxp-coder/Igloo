@@ -17,6 +17,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Governed workforce request API](workforce-request-api.md)
 - [Analyst 360 event and receipt boundary](analyst-event-boundary.md)
 - [Durable workforce worker](workforce-worker.md)
+- [Private model gateway](model-gateway.md)
 
 These documents distinguish three states:
 

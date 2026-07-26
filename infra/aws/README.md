@@ -41,9 +41,10 @@ root is deployable:
    AWS Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
    delivery, and tested recovery;
 3. ECS relay service plus scheduler, sandbox, and internal
-   model-gateway/inference task definitions/services with distinct
-   least-privilege roles, plus staged activation of the now-defined workforce
-   services;
+   scheduler, sandbox, and pinned Snowman-hosted inference task
+   definitions/services with distinct least-privilege roles; private ingress
+   for the now-defined model-gateway service; plus staged activation of the
+   now-defined workforce services;
 4. WAF, centralized encrypted logs/metrics/traces, alarms, synthetic probes,
    budgets, autoscaling, dormant staging controls, and evidence export; and
 5. CI plan/policy tests, SBOM/provenance/signature enforcement, staged apply,

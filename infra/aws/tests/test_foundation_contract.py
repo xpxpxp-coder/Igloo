@@ -101,7 +101,6 @@ class AwsFoundationContractTests(unittest.TestCase):
     def test_dormant_relay_compute_is_least_privilege_and_non_root(self) -> None:
         source = (ROOT / "compute.tf").read_text(encoding="utf-8")
         for fragment in (
-            'actions   = ["elasticache:Connect"]',
             'readonlyRootFilesystem = true',
             'user                   = "10001"',
             'drop = ["ALL"]',
@@ -112,6 +111,7 @@ class AwsFoundationContractTests(unittest.TestCase):
             'condition     = var.relay_desired_count == 0',
         ):
             self.assertIn(fragment, source)
+        self.assertRegex(source, r'actions\s*=\s*\["elasticache:Connect"\]')
         self.assertNotIn('resource "aws_ecs_service"', source)
         self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
         self.assertNotIn('"s3:*"', source)
@@ -146,6 +146,29 @@ class AwsFoundationContractTests(unittest.TestCase):
             'prefix_list_id    = var.analyst360_private_prefix_list_id',
         ):
             self.assertIn(fragment, source)
+        self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
+        self.assertNotIn('"kms:*"', source)
+        self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
+
+    def test_model_gateway_is_kms_bound_private_and_hard_dormant(self) -> None:
+        source = (ROOT / "model_gateway.tf").read_text(encoding="utf-8")
+        data_plane = (ROOT / "data_plane.tf").read_text(encoding="utf-8")
+        network = (ROOT / "network.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'entryPoint             = ["/usr/local/bin/snowman-model-gateway"]',
+            'actions   = ["kms:Verify"]',
+            'readonlyRootFilesystem = true',
+            'capabilities       = { drop = ["ALL"] }',
+            'assign_public_ip = false',
+            'SNOWMAN_MODEL_GATEWAY_PRINCIPALS_JSON',
+            'SNOWMAN_MODEL_GATEWAY_ROUTES_JSON',
+            'condition     = var.model_gateway_desired_count == 0',
+        ):
+            self.assertIn(fragment, source)
+        self.assertRegex(source, r'actions\s*=\s*\["elasticache:Connect"\]')
+        self.assertIn('~snowman:model-gateway:nonce:* +set +ping', data_plane)
+        self.assertIn('resource "aws_vpc_security_group_egress_rule" "model_gateway_to_inference"', network)
+        self.assertIn('resource "aws_vpc_security_group_egress_rule" "model_gateway_to_valkey"', network)
         self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
         self.assertNotIn('"kms:*"', source)
         self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
