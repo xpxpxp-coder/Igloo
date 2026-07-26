@@ -74,6 +74,10 @@ const runtimeAuthorityFiles = [
   ".github/workflows/docker.yml",
   ".github/workflows/helm-chart.yml",
   ".github/workflows/push-gateway-helm-chart.yml",
+  ".github/workflows/signed-macos-canary.yml",
+  ".github/workflows/linux-canary.yml",
+  ".github/workflows/windows-canary.yml",
+  ".github/workflows/mobile-release-candidate.yml",
   "Dockerfile.push-gateway",
   "deploy/compose/.env.example",
   "deploy/compose/compose.yml",
@@ -342,6 +346,11 @@ requireFragment(
   "Dockerfile.push-gateway",
   "https://github.com/snowman-ai-org/snowman-command-center",
   "container provenance must identify the Snowman-owned source repository",
+);
+requireFragment(
+  ".github/workflows/release.yml",
+  "Snowman-owned macOS signing and notarization is not provisioned",
+  "macOS release must fail closed until Snowman owns the signing path",
 );
 requireFragment(
   "crates/buzz-dev-mcp/src/shell.rs",

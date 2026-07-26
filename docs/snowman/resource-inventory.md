@@ -23,8 +23,9 @@ Relay, push-gateway, and Helm publishers now default only to the
 and label images with the Snowman source repository. Production Terraform still
 requires a Snowman-account ECR digest. Creation/control of the final Snowman
 Command Center GitHub repository/package permissions and Apple/mobile signing
-identities remains owner-held; upstream Block signing jobs are unreachable on
-this fork and are not an acceptable Snowman release path.
+identities remains owner-held. Every active release/canary repository guard is
+now Snowman-owned, and macOS jobs fail closed before signing until the Snowman
+mechanism exists; no Block action or registry remains in deployment workflows.
 
 ## Snowman-controlled platform resources
 

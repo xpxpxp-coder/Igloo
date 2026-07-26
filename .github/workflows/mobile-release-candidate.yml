@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       target_sha:
-        description: Exact current block/buzz main commit
+        description: Exact current Snowman Command Center main commit
         required: true
         type: string
 
@@ -47,8 +47,8 @@ jobs:
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
-          if [ "$REPOSITORY" != "block/buzz" ]; then
-            echo "::error::Mobile candidate publication is restricted to block/buzz"
+          if [ "$REPOSITORY" != "snowman-ai-org/snowman-command-center" ]; then
+            echo "::error::Mobile candidate publication is restricted to the Snowman repository"
             exit 1
           fi
 

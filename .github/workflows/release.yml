@@ -15,7 +15,7 @@ jobs:
   # create the release objects all four platform jobs upload into.
   setup:
     name: Setup
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'snowman-ai-org/snowman-command-center'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -94,7 +94,7 @@ jobs:
 
   release:
     name: Release
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'snowman-ai-org/snowman-command-center'
     runs-on: macos-latest
     needs: setup
     timeout-minutes: 60
@@ -212,15 +212,11 @@ jobs:
       - name: Stage signing entitlements
         run: cp desktop/src-tauri/Entitlements.plist "${RUNNER_TEMP}/entitlements.plist"
 
-      - name: Codesign and Notarize
+      - name: Snowman macOS signing gate
         id: codesign
-        uses: block/apple-codesign-action@679535d1ab7c5a7c18e6f9afcba3464512cc3dde # v1.1.0
-        with:
-          osx-codesign-role: ${{ secrets.OSX_CODESIGN_ROLE }}
-          codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
-          unsigned-artifact-path: ${{ steps.unsigned.outputs.dmg }}
-          entitlements-plist-path: ${{ runner.temp }}/entitlements.plist
-          artifact-name: buzz-${{ github.sha }}-${{ github.run_id }}-arm64
+        run: |
+          echo "::error::Snowman-owned macOS signing and notarization is not provisioned"
+          exit 1
 
       - name: Replace DMG and rebuild updater archive
         env:
@@ -309,7 +305,7 @@ jobs:
 
   release-macos-x64:
     name: Release macOS (Intel)
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'snowman-ai-org/snowman-command-center'
     runs-on: macos-latest
     needs: setup
     timeout-minutes: 60
@@ -388,15 +384,11 @@ jobs:
       - name: Stage signing entitlements
         run: cp desktop/src-tauri/Entitlements.plist "${RUNNER_TEMP}/entitlements.plist"
 
-      - name: Codesign and Notarize
+      - name: Snowman macOS signing gate
         id: codesign
-        uses: block/apple-codesign-action@679535d1ab7c5a7c18e6f9afcba3464512cc3dde # v1.1.0
-        with:
-          osx-codesign-role: ${{ secrets.OSX_CODESIGN_ROLE }}
-          codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
-          unsigned-artifact-path: ${{ steps.unsigned.outputs.dmg }}
-          entitlements-plist-path: ${{ runner.temp }}/entitlements.plist
-          artifact-name: buzz-${{ github.sha }}-${{ github.run_id }}-x64
+        run: |
+          echo "::error::Snowman-owned macOS signing and notarization is not provisioned"
+          exit 1
 
       - name: Replace DMG and rebuild updater archive
         env:
@@ -473,7 +465,7 @@ jobs:
 
   release-linux:
     name: Release Linux
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'snowman-ai-org/snowman-command-center'
     runs-on: ubuntu-latest
     # Digest-pinned like the SHA-pinned actions below; Renovate keeps it fresh.
     container: ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982

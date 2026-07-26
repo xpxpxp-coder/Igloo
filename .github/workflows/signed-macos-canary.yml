@@ -12,7 +12,7 @@ permissions:
 jobs:
   build:
     name: Build signed macOS canary
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'snowman-ai-org/snowman-command-center'
     runs-on: macos-latest
     timeout-minutes: 60
     permissions:
@@ -168,15 +168,11 @@ jobs:
       - name: Stage signing entitlements
         run: cp desktop/src-tauri/Entitlements.plist "${RUNNER_TEMP}/entitlements.plist"
 
-      - name: Codesign and notarize
+      - name: Snowman macOS signing gate
         id: codesign
-        uses: block/apple-codesign-action@679535d1ab7c5a7c18e6f9afcba3464512cc3dde # v1.1.0
-        with:
-          osx-codesign-role: ${{ secrets.OSX_CODESIGN_ROLE }}
-          codesign-s3-bucket: ${{ secrets.CODESIGN_S3_BUCKET }}
-          unsigned-artifact-path: ${{ steps.unsigned.outputs.dmg }}
-          entitlements-plist-path: ${{ runner.temp }}/entitlements.plist
-          artifact-name: buzz-canary-${{ github.sha }}-${{ github.run_id }}-arm64
+        run: |
+          echo "::error::Snowman-owned macOS signing and notarization is not provisioned"
+          exit 1
 
       - name: Verify signed app
         env:
