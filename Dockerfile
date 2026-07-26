@@ -68,10 +68,12 @@ RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
                                    -p buzz-admin --bin buzz-admin \
                                    -p buzz-pair-relay --bin buzz-pair-relay \
                                    -p snowman-bootstrap --bin snowman-bootstrap \
+                                   -p snowman-workforce-worker --bin snowman-workforce-worker \
     && strip target/release/buzz-relay \
     && strip target/release/buzz-admin \
     && strip target/release/buzz-pair-relay \
-    && strip target/release/snowman-bootstrap
+    && strip target/release/snowman-bootstrap \
+    && strip target/release/snowman-workforce-worker
 
 # ─── Stage 4: web bundle (pnpm + vite) ──────────────────────────────────────
 # Independent of the Rust layers so a CSS change doesn't bust Rust cache and
@@ -140,6 +142,7 @@ COPY --from=builder    /build/target/release/buzz-relay /usr/local/bin/buzz-rela
 COPY --from=builder    /build/target/release/buzz-admin /usr/local/bin/buzz-admin
 COPY --from=builder    /build/target/release/buzz-pair-relay /usr/local/bin/buzz-pair-relay
 COPY --from=builder    /build/target/release/snowman-bootstrap /usr/local/bin/snowman-bootstrap
+COPY --from=builder    /build/target/release/snowman-workforce-worker /usr/local/bin/snowman-workforce-worker
 COPY --from=web-builder /build/web/dist                 /srv/buzz/web
 COPY --from=web-builder /build/admin-web/dist           /srv/buzz/admin-web
 
