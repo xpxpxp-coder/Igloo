@@ -45,6 +45,13 @@ boundary; the NLB security group can egress solely to the model-gateway security
 group on port 8443. No public load balancer, public IP, CIDR ingress, peering, or
 shared VPC is introduced.
 
+Transient inference failure is now an explicit `503` contract with a bounded
+`inference_unavailable` code, `retryable=true`, and `Retry-After: 60`. Analyst
+derives one stable generation ID per exact job/model/role/capability tuple and
+honors the retry floor, while permanent request, policy, authorization, replay,
+and budget failures remain non-retryable. Lost-success response reconciliation
+is still a separate production gate.
+
 ## Remaining production gates
 
 - Provision and prove the Analyst interface endpoint plus its TLS/DNS identity;
@@ -52,8 +59,8 @@ shared VPC is introduced.
 - Build, evaluate, pin, scan, sign, and deploy the Snowman-hosted inference
   images and weights into the now-defined hard-dormant private inference fleet.
   Hosted third-party inference remains prohibited.
-- Prove scale-from-zero retries retain the same generation/spend fence and do
-  not duplicate charges or artifacts during the expected cold-start failure.
+- Prove the now-implemented stable generation and retry contract in staged
+  scale-from-zero operation without duplicate charges or artifacts.
 - Add response-receipt reconciliation to the Command Center spend ledger and a
   crash/retry test that proves a lost response cannot create untracked spend.
 - Add saturation, timeout, cancellation, malformed-backend, cross-tenant,

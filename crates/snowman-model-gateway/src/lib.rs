@@ -270,11 +270,18 @@ async fn generate(State(state): State<AppState>, headers: HeaderMap, body: Bytes
         Ok(response) => (StatusCode::OK, Json(response)).into_response(),
         Err(error) => {
             tracing::warn!(code = error.code(), "model generation rejected");
-            (
+            let mut response = (
                 error.status(),
-                Json(json!({"error": {"code": error.code()}})),
+                Json(json!({"error": {"code": error.code(), "retryable": error.retryable()}})),
             )
-                .into_response()
+                .into_response();
+            if let Some(seconds) = error.retry_after_seconds() {
+                response.headers_mut().insert(
+                    axum::http::header::RETRY_AFTER,
+                    axum::http::HeaderValue::from_static(seconds),
+                );
+            }
+            response
         }
     }
 }
@@ -314,8 +321,16 @@ impl GatewayError {
             Self::Authorization => StatusCode::FORBIDDEN,
             Self::Replay => StatusCode::CONFLICT,
             Self::Budget => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::Inference => StatusCode::BAD_GATEWAY,
+            Self::Inference => StatusCode::SERVICE_UNAVAILABLE,
         }
+    }
+
+    fn retryable(&self) -> bool {
+        matches!(self, Self::Inference)
+    }
+
+    fn retry_after_seconds(&self) -> Option<&'static str> {
+        self.retryable().then_some("60")
     }
 }
 
@@ -1018,6 +1033,26 @@ mod tests {
         assert_eq!(token_cost(1, 1).unwrap(), 1);
         assert_eq!(token_cost(1_000_000, 2_000_000).unwrap(), 2_000_000);
         assert!(token_cost(u64::MAX, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn only_inference_unavailability_is_retryable() {
+        assert_eq!(
+            GatewayError::Inference.status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(GatewayError::Inference.retryable());
+        assert_eq!(GatewayError::Inference.retry_after_seconds(), Some("60"));
+        for error in [
+            GatewayError::Invalid,
+            GatewayError::Authentication,
+            GatewayError::Authorization,
+            GatewayError::Replay,
+            GatewayError::Budget,
+        ] {
+            assert!(!error.retryable());
+            assert_eq!(error.retry_after_seconds(), None);
+        }
     }
 
     #[test]
