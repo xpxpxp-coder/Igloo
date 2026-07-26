@@ -2,6 +2,8 @@
 /target/
 /dist/
 /admin-web/dist/
+__pycache__/
+*.py[cod]
 
 # lefthook-generated hook scripts (machine-specific)
 .hooks/
