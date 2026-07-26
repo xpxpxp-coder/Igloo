@@ -80,6 +80,9 @@ Source support now exists for a separately addressed private worker service:
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/heartbeat` | Renews only the matching live fencing generation and bearer lease. |
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/spend` | Records an actor-, task-, request-, model-, and provider-receipt-bound ledger entry under hard caps. |
 | `POST /internal/snowman/v1/workforce/tasks/{task_id}/finish` | Atomically records a terminal result and hash-chain evidence event under the current lease. |
+| `POST /internal/snowman/v1/workforce/requests/{request_id}/context-packets` | Publishes a bounded metadata-only handoff under the writer's current fenced task lease. |
+| `GET /internal/snowman/v1/workforce/requests/{request_id}/context-packets` | Lists only non-expired manifests for an actively assigned reader; artifact bodies remain in their authority. |
+| `POST /internal/snowman/v1/workforce/requests/{request_id}/proactive-actions` | Evaluates an authorized trigger against the server-owned auto/approval/reject policy and durably reserves approved cost. |
 
 Every route requires a live `service` workforce binding and the exact
 capability appropriate to the operation. Claim, heartbeat, spend, and finish use
@@ -128,6 +131,13 @@ original plan; conflicting retries fail closed.
 intake. Production public relay tasks must keep it false. Only a private
 Cloudflare/AWS-addressed service with security-group/edge restrictions may turn
 it on; signed service identity remains required even on that private network.
+Proactive auto-run is fail-closed by default: its capability allowlist is empty,
+its automatic cost ceiling is zero, and its minimum confidence is 10,000 basis
+points. A private scheduler deployment may explicitly set
+`SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES`,
+`SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD`, and
+`SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS`; the relay records the exact
+policy digest used for every decision.
 The API foundation does not itself constitute the AWS worker, model gateway,
 sandbox, scheduler, or staged execution proof.
 

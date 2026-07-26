@@ -103,6 +103,11 @@ usefulness evidence digest rather than a free-form rationale. “Queued” is no
 execution bypass: the scheduler/worker must still claim a fenced lease, hold the
 action capability, and stop at the recorded approval gate.
 
+The private proposal endpoint does not accept a policy from an agent. It uses
+the server-owned allowlist, automatic cost ceiling, and confidence threshold;
+all default to no automatic action until explicitly configured on the private
+worker deployment.
+
 The kernel also validates a metadata-only `ContextPacketManifest` for
 replacement agents. It binds tenant, request, objective, authority, content and
 provenance digests; caps the handoff artifact at 1 MiB; permits only

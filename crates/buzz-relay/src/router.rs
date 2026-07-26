@@ -96,6 +96,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(api::workforce::list_context_packets).post(api::workforce::publish_context_packet),
         )
         .route(
+            "/internal/snowman/v1/workforce/requests/{request_id}/proactive-actions",
+            post(api::workforce::propose_proactive_action),
+        )
+        .route(
             "/internal/snowman/v1/workforce/tasks/{task_id}/heartbeat",
             post(api::workforce::heartbeat_work_task),
         )

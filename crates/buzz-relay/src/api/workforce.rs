@@ -22,13 +22,14 @@ use uuid::Uuid;
 
 use buzz_auth::LimitType;
 use buzz_db::workforce::{
-    NewContextPacket, NewPlannedTask, NewWorkPlan, NewWorkRequest, NewWorkTask, SpendEntry,
-    StoredContextPacket, StoredModelRoute, WorkApproval, WorkRequestCancellation,
+    NewContextPacket, NewPlannedTask, NewProactiveAction, NewWorkPlan, NewWorkRequest, NewWorkTask,
+    SpendEntry, StoredContextPacket, StoredModelRoute, WorkApproval, WorkRequestCancellation,
     WorkTaskCompletion,
 };
 use snowman_workforce::{
     govern_team_plan, Classification, ContextAuthority, ContextNextAction, ContextPacketManifest,
-    GovernedTeamPlan, ModelRoute, PlannedTask, RiskTier, SpecialistRole,
+    GovernedTeamPlan, ModelRoute, PlannedTask, ProactiveAction, ProactiveDecision,
+    ProactiveTrigger, RiskTier, SpecialistRole,
 };
 
 use crate::{authorization, state::AppState};
@@ -186,6 +187,24 @@ struct ContextNextActionInput {
     expected_cost_microusd: u64,
     confidence_basis_points: u16,
     usefulness_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposeProactiveActionRequest {
+    schema_version: String,
+    action_id: Uuid,
+    trigger: ProactiveTrigger,
+    capability: String,
+    risk_tier: RiskTier,
+    reversible: bool,
+    expected_cost_microusd: u64,
+    confidence_basis_points: u16,
+    usefulness_sha256: String,
+    source_event_sha256: String,
+    scheduled_for: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    occurred_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -907,6 +926,101 @@ pub async fn list_context_packets(
     })))
 }
 
+/// Evaluate and persist one trigger-grounded proactive next-useful action.
+pub async fn propose_proactive_action(
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/requests/{request_id}/proactive-actions");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.proactive.propose",
+        "service",
+    )
+    .await?;
+    let input: ProposeProactiveActionRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid proactive action JSON"))?;
+    let now = Utc::now();
+    if input.schema_version != "snowman.proactive.proposal.v1"
+        || request_id.is_nil()
+        || input.action_id.is_nil()
+        || !is_recent_worker_time(input.occurred_at)
+        || input.scheduled_for < input.occurred_at
+        || input.scheduled_for > now + Duration::days(365)
+        || input.expires_at <= input.scheduled_for
+        || input.expires_at > input.scheduled_for + Duration::days(30)
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "proactive action has an invalid schema, identity, schedule, or expiry",
+        ));
+    }
+    let workforce = state
+        .config
+        .snowman_workforce
+        .as_ref()
+        .expect("workforce presence checked during authentication");
+    let proposal = NewProactiveAction {
+        action: ProactiveAction {
+            action_id: input.action_id,
+            community_id: *tenant.community().as_uuid(),
+            objective_id: request_id,
+            trigger: input.trigger,
+            capability: input.capability,
+            risk_tier: input.risk_tier,
+            reversible: input.reversible,
+            expected_cost_microusd: input.expected_cost_microusd,
+            usefulness_sha256: parse_sha256(&input.usefulness_sha256, "usefulness_sha256")?,
+            confidence_basis_points: input.confidence_basis_points,
+        },
+        proposed_by_identity_id: principal.identity_id,
+        policy: workforce.proactive_policy.clone(),
+        source_event_sha256: parse_sha256(&input.source_event_sha256, "source_event_sha256")?,
+        scheduled_for: input.scheduled_for,
+        expires_at: input.expires_at,
+        created_at: input.occurred_at,
+    };
+    let scheduled = state
+        .db
+        .schedule_proactive_action(tenant.community(), &proposal)
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "proactive action conflicts with identity, lifecycle, policy, or budget",
+            ),
+            _ => internal_error("proactive action persistence failed"),
+        })?;
+    let outcome = proactive_decision_name(scheduled.decision);
+    metrics::counter!(
+        "snowman_workforce_proactive_actions_total",
+        "decision" => outcome,
+        "outcome" => if scheduled.inserted { "evaluated" } else { "replayed" }
+    )
+    .increment(1);
+    Ok((
+        if scheduled.inserted {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(json!({
+            "schema_version": "snowman.proactive.decision.v1",
+            "action_id": scheduled.action_id,
+            "request_id": scheduled.request_id,
+            "decision": outcome,
+            "inserted": scheduled.inserted,
+        })),
+    ))
+}
+
 /// Validate a lead planner proposal, choose approved best-fit models, and
 /// atomically replace the lead task with a durable specialist DAG.
 pub async fn commit_team_plan(
@@ -1583,6 +1697,14 @@ const fn context_authority_name(value: ContextAuthority) -> &'static str {
     match value {
         ContextAuthority::Analyst360 => "analyst360",
         ContextAuthority::SnowmanCommandCenter => "snowman-command-center",
+    }
+}
+
+const fn proactive_decision_name(value: ProactiveDecision) -> &'static str {
+    match value {
+        ProactiveDecision::ExecuteAutomatically => "execute_automatically",
+        ProactiveDecision::AwaitHumanApproval => "await_human_approval",
+        ProactiveDecision::Reject => "reject",
     }
 }
 

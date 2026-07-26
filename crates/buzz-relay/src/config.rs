@@ -1,5 +1,6 @@
 //! Relay configuration from environment variables.
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -55,6 +56,8 @@ pub struct SnowmanWorkforceConfig {
     pub model_gateway_url: String,
     /// Evaluated model route selected for the initial planning task.
     pub planning_model_id: String,
+    /// Server-owned allowlist, confidence, and spend policy for proactive work.
+    pub proactive_policy: snowman_workforce::ProactivePolicy,
 }
 
 /// Relay runtime configuration, loaded from environment variables.
@@ -441,6 +444,26 @@ fn parse_bool(name: &str, default: bool) -> Result<bool, ConfigError> {
     }
 }
 
+fn valid_proactive_capability(capability: &str) -> bool {
+    let segments = capability.split('.').collect::<Vec<_>>();
+    capability.len() <= 128
+        && segments.len() >= 2
+        && segments[0]
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+        && !matches!(
+            capability,
+            "admin.all" | "aws.all" | "filesystem.all" | "network.all" | "tool.all"
+        )
+}
+
 fn parse_optional_bool(name: &str) -> Result<bool, ConfigError> {
     parse_bool(name, false)
 }
@@ -684,10 +707,54 @@ impl Config {
                     "SNOWMAN_PLANNING_MODEL_ID must contain 1-256 characters".to_string(),
                 ));
             }
+            let proactive_automatic_capabilities =
+                std::env::var("SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES")
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect::<BTreeSet<_>>();
+            if proactive_automatic_capabilities
+                .iter()
+                .any(|capability| !valid_proactive_capability(capability))
+            {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES must contain only bounded namespaced capabilities"
+                        .to_string(),
+                ));
+            }
+            let proactive_max_automatic_cost_microusd =
+                std::env::var("SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD")
+                    .unwrap_or_else(|_| "0".to_string())
+                    .parse::<u64>()
+                    .map_err(|_| {
+                        ConfigError::InvalidValue(
+                    "SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD must be a non-negative integer"
+                        .to_string(),
+                )
+                    })?;
+            let proactive_minimum_confidence_basis_points =
+                std::env::var("SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS")
+                    .unwrap_or_else(|_| "10000".to_string())
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|value| *value <= 10_000)
+                    .ok_or_else(|| {
+                        ConfigError::InvalidValue(
+                            "SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS must be 0-10000"
+                                .to_string(),
+                        )
+                    })?;
             Some(SnowmanWorkforceConfig {
                 lead_service_identity_id,
                 model_gateway_url,
                 planning_model_id,
+                proactive_policy: snowman_workforce::ProactivePolicy {
+                    automatic_capabilities: proactive_automatic_capabilities,
+                    max_automatic_cost_microusd: proactive_max_automatic_cost_microusd,
+                    minimum_confidence_basis_points: proactive_minimum_confidence_basis_points,
+                },
             })
         } else {
             None
@@ -1471,6 +1538,9 @@ mod tests {
             "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID",
             "SNOWMAN_MODEL_GATEWAY_URL",
             "SNOWMAN_PLANNING_MODEL_ID",
+            "SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES",
+            "SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD",
+            "SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS",
         ];
         let previous: Vec<_> = keys
             .iter()
@@ -1492,6 +1562,9 @@ mod tests {
             "SNOWMAN_MODEL_GATEWAY_URL",
             "https://models.snowmanai.org/v1",
         );
+        std::env::set_var("SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES", "aws.all");
+        let ambient = Config::from_env();
+        std::env::set_var("SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES", "");
         let snowman = Config::from_env();
 
         for (key, value) in previous {
@@ -1507,13 +1580,22 @@ mod tests {
             Err(ConfigError::InvalidValue(ref message))
                 if message.contains("Snowman-controlled HTTPS URL")
         ));
+        assert!(matches!(
+            ambient,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("bounded namespaced capabilities")
+        ));
         let config = snowman.expect("Snowman workforce config");
+        let workforce = config.snowman_workforce.expect("workforce enabled");
         assert_eq!(
-            config
-                .snowman_workforce
-                .expect("workforce enabled")
-                .model_gateway_url,
+            workforce.model_gateway_url,
             "https://models.snowmanai.org/v1"
+        );
+        assert!(workforce.proactive_policy.automatic_capabilities.is_empty());
+        assert_eq!(workforce.proactive_policy.max_automatic_cost_microusd, 0);
+        assert_eq!(
+            workforce.proactive_policy.minimum_confidence_basis_points,
+            10_000
         );
     }
 

@@ -527,12 +527,18 @@ fn validate_gateway(raw: &str) -> bool {
 }
 
 fn is_capability(value: &str) -> bool {
+    let segments = value.split('.').collect::<Vec<_>>();
     value.len() <= 128
-        && value.contains('.')
-        && value.chars().all(|character| {
-            character.is_ascii_lowercase()
-                || character.is_ascii_digit()
-                || matches!(character, '.' | '_')
+        && segments.len() >= 2
+        && segments[0]
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
         })
 }
 

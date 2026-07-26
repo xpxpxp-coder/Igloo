@@ -159,6 +159,16 @@ requireFragment(
   "proactive proposals must require an exact tenant-local service capability",
 );
 requireFragment(
+  "crates/buzz-relay/src/config.rs",
+  "SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES",
+  "proactive automatic authority must come from server-owned configuration",
+);
+requireFragment(
+  "crates/buzz-relay/src/router.rs",
+  "/internal/snowman/v1/workforce/requests/{request_id}/proactive-actions",
+  "proactive proposals must remain behind the private workforce plane",
+);
+requireFragment(
   "crates/buzz-db/src/workforce.rs",
   "proactive action would exceed the request cost ceiling",
   "proactive work must reserve against the originating request budget",
