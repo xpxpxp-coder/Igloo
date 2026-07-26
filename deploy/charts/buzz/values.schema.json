@@ -61,6 +61,18 @@
         "sendBuffer": { "type": "integer", "minimum": 1 },
         "requireAuthToken": { "type": "boolean" },
         "requireRelayMembership": { "type": "boolean" },
+        "snowmanRoleScopes": { "type": "boolean" },
+        "snowmanWorkforceIdentityRequired": { "type": "boolean" },
+        "snowmanWorkforce": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "leadServiceIdentityId": { "type": "string", "pattern": "^([0-9a-fA-F-]{36})?$" },
+            "modelGatewayUrl": { "type": "string" },
+            "planningModelId": { "type": "string", "maxLength": 256 }
+          }
+        },
         "requireMediaGetAuth": { "type": "boolean" },
         "allowNipOaAuth": { "type": "boolean" },
         "huddleAudioAvailable": {

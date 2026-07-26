@@ -13,6 +13,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Production acceptance criteria](production-acceptance-criteria.md)
 - [External dependency and data-egress register](external-dependency-register.md)
 - [Available resource and reuse inventory](resource-inventory.md)
+- [Governed workforce request API](workforce-request-api.md)
 
 These documents distinguish three states:
 

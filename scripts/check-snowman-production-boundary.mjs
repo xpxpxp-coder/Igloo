@@ -11,6 +11,7 @@ const identity = JSON.parse(read("product/identity.json"));
 const runtimeAuthorityFiles = [
   "crates/buzz-relay/src/config.rs",
   "crates/buzz-relay/src/authorization.rs",
+  "crates/buzz-relay/src/api/workforce.rs",
   "crates/buzz-relay/src/nip11.rs",
   "crates/buzz-push-gateway/src/config.rs",
   "crates/buzz-push-gateway/src/http.rs",
@@ -26,6 +27,7 @@ const runtimeAuthorityFiles = [
   "crates/snowman-workforce/src/lib.rs",
   "migrations/0025_snowman_workforce.sql",
   "migrations/0026_snowman_workforce_identity.sql",
+  "migrations/0027_snowman_workforce_request_contract.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -48,6 +50,7 @@ const runtimeAuthorityFiles = [
   ".github/workflows/release.yml",
   "deploy/compose/compose.yml",
   "deploy/charts/buzz/values.yaml",
+  "deploy/charts/buzz/templates/deployment.yaml",
   "deploy/charts/buzz-push-gateway/values.yaml",
   "deploy/charts/buzz-push-gateway/values-production.yaml",
   "deploy/charts/buzz-push-gateway/values.schema.json",
@@ -211,6 +214,26 @@ requireFragment(
   "workforce workers must use durable concurrent claims",
 );
 requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  '"workforce.requests.create"',
+  "workforce request intake must require an exact human capability",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  "tenant.community()",
+  "workforce requests must use the server-derived tenant",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  'required_capabilities: vec!["workforce.plan".to_string()]',
+  "public intake must enqueue only a bounded planning capability",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  'strip_prefix("analyst360:sha256:")',
+  "workforce context must use immutable Analyst 360 evidence coordinates",
+);
+requireFragment(
   "crates/buzz-db/src/workforce.rs",
   "execution_snapshot_sha256",
   "human approvals must bind to an exact execution snapshot",
@@ -234,6 +257,11 @@ requireFragment(
   "migrations/0026_snowman_workforce_identity.sql",
   "snowman_workforce_capability_grants",
   "service identities must have tenant-scoped capability grants",
+);
+requireFragment(
+  "migrations/0027_snowman_workforce_request_contract.sql",
+  "request_contract_sha256",
+  "workforce idempotency must bind the complete canonical request contract",
 );
 requireFragment(
   "desktop/src-tauri/src/mesh_llm/transport_policy.rs",

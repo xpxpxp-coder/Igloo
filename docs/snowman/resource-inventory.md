@@ -38,6 +38,10 @@ claims require live verification before use.
   scheduler/worker services, sandbox isolation, proactive-policy evaluation,
   cancellation/event APIs, and staged failure proof still must be built before
   the product can honestly provide 24/7 service.
+- Governed human request intake and metadata-only status reads now exist at
+  `/api/snowman/v1/work-requests`. The endpoint deliberately creates only a
+  lead planning task; private worker identity, validated plan expansion, and
+  AWS execution are still required before the request can run end to end.
 - Workforce identity/session/device/service schemas and fail-closed relay-key
   resolution now exist in source. The Snowman identity broker must still verify
   Google Workspace or AWS IAM Identity Center OIDC assertions and perform the

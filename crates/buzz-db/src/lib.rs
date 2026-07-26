@@ -2930,6 +2930,49 @@ impl Db {
         workforce_identity::resolve_workforce_principal(&self.pool, community, pubkey).await
     }
 
+    /// Verify an active tenant-local agent service identity and capability.
+    pub async fn active_service_identity_has_capability(
+        &self,
+        community: CommunityId,
+        identity_id: Uuid,
+        capability: &str,
+    ) -> Result<bool> {
+        workforce_identity::active_service_identity_has_capability(
+            &self.pool,
+            community,
+            identity_id,
+            capability,
+        )
+        .await
+    }
+
+    /// Idempotently enqueue a governed Snowman work request on the writer.
+    pub async fn enqueue_work_request(
+        &self,
+        community: CommunityId,
+        request: &workforce::NewWorkRequest,
+    ) -> Result<workforce::EnqueuedWorkRequest> {
+        workforce::enqueue_work_request(&self.pool, community, request).await
+    }
+
+    /// Read current Snowman work-request state from the writer.
+    pub async fn get_work_request_status(
+        &self,
+        community: CommunityId,
+        request_id: Uuid,
+    ) -> Result<Option<workforce::WorkRequestStatus>> {
+        workforce::get_work_request_status(&self.pool, community, request_id).await
+    }
+
+    /// Append one hash-chained Snowman workforce lifecycle event.
+    pub async fn append_work_event(
+        &self,
+        community: CommunityId,
+        event: &workforce::NewWorkEvent,
+    ) -> Result<workforce::AppendedWorkEvent> {
+        workforce::append_work_event(&self.pool, community, event).await
+    }
+
     /// Returns all relay members of `community` ordered by `created_at` ascending.
     pub async fn list_relay_members(
         &self,

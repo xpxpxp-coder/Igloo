@@ -11,6 +11,53 @@ use buzz_core::CommunityId;
 
 use crate::state::AppState;
 
+/// Resolve a live workforce principal and require one exact fine-grained
+/// capability. This is the authorization boundary for Snowman REST control
+/// planes; a Nostr signature or relay role alone never satisfies it.
+pub async fn require_workforce_capability(
+    state: &AppState,
+    community: CommunityId,
+    pubkey: &nostr::PublicKey,
+    capability: &str,
+    human_only: bool,
+) -> Result<buzz_db::workforce_identity::WorkforcePrincipal, String> {
+    if !state.config.snowman_workforce_identity_required {
+        return Err("Snowman workforce identity enforcement is disabled".to_string());
+    }
+    let principal = state
+        .db
+        .resolve_workforce_principal(community, pubkey.as_bytes())
+        .await
+        .map_err(|error| format!("workforce identity lookup failed: {error}"))?
+        .ok_or_else(|| "relay key has no active Snowman workforce binding".to_string())?;
+    if human_only && principal.identity_type != "human" {
+        return Err("this workforce operation requires a live human session".to_string());
+    }
+    if !principal
+        .capabilities
+        .iter()
+        .any(|granted| granted == capability)
+    {
+        return Err("Snowman workforce capability is not granted".to_string());
+    }
+
+    let member = state
+        .db
+        .get_relay_member(community, &pubkey.to_hex())
+        .await
+        .map_err(|error| format!("tenant role lookup failed: {error}"))?
+        .ok_or_else(|| "workforce identity has no tenant membership".to_string())?;
+    let member_role = if member.role == "bot" {
+        "agent"
+    } else {
+        member.role.as_str()
+    };
+    if member_role != principal.role {
+        return Err("workforce identity role differs from tenant membership".to_string());
+    }
+    Ok(principal)
+}
+
 /// Apply Snowman's tenant role scope policy to an authenticated context.
 ///
 /// Returns `Ok(None)` when the compatibility mode is active. In governed mode,

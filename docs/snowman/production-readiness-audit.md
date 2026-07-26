@@ -56,6 +56,9 @@ the highest risks without changing the production-readiness verdict:
 - tenant-scoped durable work requests/tasks, model-per-specialist routes,
   fenced leases, retry/dead-letter recovery, exact-snapshot approvals, immutable
   context references, and hard token/cost ledgers;
+- a versioned human request/status API that derives tenant and actor authority
+  server-side, requires exact workforce capabilities, creates only a bounded
+  planning task, and exposes metadata-only hash-chain evidence;
 - Snowman-only model, update, release, pairing, push, image, and workflow
   destination enforcement with an automated production-boundary scanner;
 - default-off agent shell/network access, workspace containment, ambient secret

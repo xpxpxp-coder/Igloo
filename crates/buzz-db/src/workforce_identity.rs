@@ -97,6 +97,40 @@ pub async fn resolve_workforce_principal(
     .map_err(DbError::from)
 }
 
+/// Verify that a tenant-local service identity is active, agent-scoped, and
+/// holds one exact capability before a task is assigned to it.
+pub async fn active_service_identity_has_capability(
+    pool: &PgPool,
+    community_id: CommunityId,
+    identity_id: Uuid,
+    capability: &str,
+) -> Result<bool> {
+    if identity_id.is_nil() || capability.trim().is_empty() {
+        return Ok(false);
+    }
+    sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+          SELECT 1
+          FROM snowman_workforce_identities i
+          JOIN snowman_workforce_capability_grants g
+            ON g.community_id=i.community_id AND g.identity_id=i.identity_id
+          WHERE i.community_id=$1 AND i.identity_id=$2
+            AND i.identity_type='service' AND i.role='agent' AND i.status='active'
+            AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at > NOW())
+            AND g.capability=$3 AND g.revoked_at IS NULL
+            AND (g.expires_at IS NULL OR g.expires_at > NOW())
+        )
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(identity_id)
+    .bind(capability)
+    .fetch_one(pool)
+    .await
+    .map_err(DbError::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -119,6 +119,12 @@ spec:
             - { name: BUZZ_REQUIRE_RELAY_MEMBERSHIP, value: {{ .Values.relay.requireRelayMembership | quote }} }
             - { name: SNOWMAN_ROLE_SCOPES, value: {{ .Values.relay.snowmanRoleScopes | quote }} }
             - { name: SNOWMAN_WORKFORCE_IDENTITY_REQUIRED, value: {{ .Values.relay.snowmanWorkforceIdentityRequired | quote }} }
+            - { name: SNOWMAN_WORKFORCE_API_ENABLED, value: {{ .Values.relay.snowmanWorkforce.enabled | quote }} }
+            {{- if .Values.relay.snowmanWorkforce.enabled }}
+            - { name: SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID, value: {{ .Values.relay.snowmanWorkforce.leadServiceIdentityId | quote }} }
+            - { name: SNOWMAN_MODEL_GATEWAY_URL, value: {{ .Values.relay.snowmanWorkforce.modelGatewayUrl | quote }} }
+            - { name: SNOWMAN_PLANNING_MODEL_ID, value: {{ .Values.relay.snowmanWorkforce.planningModelId | quote }} }
+            {{- end }}
             - { name: BUZZ_REQUIRE_MEDIA_GET_AUTH, value: {{ .Values.relay.requireMediaGetAuth | quote }} }
             - { name: BUZZ_ALLOW_NIP_OA_AUTH,      value: {{ .Values.relay.allowNipOaAuth | quote }} }
             - { name: BUZZ_PUBKEY_ALLOWLIST,       value: {{ .Values.relay.pubkeyAllowlist | quote }} }

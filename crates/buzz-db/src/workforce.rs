@@ -6,6 +6,7 @@
 //! replacement worker has acquired it.
 
 use chrono::{DateTime, Duration, Utc};
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -66,6 +67,8 @@ pub struct NewWorkRequest {
     pub idempotency_key: String,
     /// Authenticated Snowman human or service subject.
     pub requester_identity: String,
+    /// Digest of the complete canonical intake contract used for exact replay.
+    pub request_contract_sha256: [u8; 32],
     /// User objective. Client records must not be embedded here.
     pub objective: String,
     /// `internal`, `confidential`, or `restricted`.
@@ -196,6 +199,112 @@ pub struct AppendedWorkEvent {
     pub event_sha256: [u8; 32],
 }
 
+/// Result of idempotently accepting a Snowman work request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnqueuedWorkRequest {
+    /// Stable request ID, including when the idempotency key already existed.
+    pub request_id: Uuid,
+    /// True only when this call inserted the request and its initial task graph.
+    pub inserted: bool,
+}
+
+/// Governed request status returned to authorized command-center callers.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkRequestStatus {
+    /// Stable request ID.
+    pub request_id: Uuid,
+    /// Digest of the objective retained for evidence correlation.
+    pub objective_sha256: String,
+    /// Digest of the complete canonical intake contract.
+    pub request_contract_sha256: String,
+    /// Data classification applied to this request.
+    pub classification: String,
+    /// Aggregate lifecycle status.
+    pub status: String,
+    /// Optional user deadline.
+    pub deadline_at: Option<DateTime<Utc>>,
+    /// Hard request budget in millionths of a US dollar.
+    pub max_cost_microusd: i64,
+    /// Spend recorded so far.
+    pub used_cost_microusd: i64,
+    /// Hard input-token ceiling.
+    pub max_input_tokens: i64,
+    /// Input tokens recorded so far.
+    pub used_input_tokens: i64,
+    /// Hard output-token ceiling.
+    pub max_output_tokens: i64,
+    /// Output tokens recorded so far.
+    pub used_output_tokens: i64,
+    /// Current specialist task state.
+    pub tasks: Vec<WorkTaskStatus>,
+    /// Bounded lifecycle evidence, ordered by request-local sequence.
+    pub events: Vec<WorkEventStatus>,
+    /// Total event count. The response carries at most the newest 200 events.
+    pub event_count: i64,
+    /// Request creation time.
+    pub created_at: DateTime<Utc>,
+    /// Last aggregate status change.
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One specialist task in an authorized status response.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkTaskStatus {
+    /// Stable task ID.
+    pub task_id: Uuid,
+    /// Delegation parent, when present.
+    pub parent_task_id: Option<Uuid>,
+    /// Named specialist role.
+    pub specialist_role: String,
+    /// Selected model, invoked only through the Snowman model gateway.
+    pub model_id: String,
+    /// Deny-by-default task capability set.
+    pub required_capabilities: Vec<String>,
+    /// Machine-readable expected work product.
+    pub expected_artifact_contract: Value,
+    /// Immutable Analyst 360 or Snowman context packet reference.
+    pub context_packet_id: Option<Uuid>,
+    /// Risk classification.
+    pub risk_tier: String,
+    /// Whether work can be undone safely.
+    pub reversible: bool,
+    /// Whether execution is stopped at a human gate.
+    pub approval_required: bool,
+    /// Current task lifecycle status.
+    pub status: String,
+    /// Execution attempts consumed.
+    pub attempt_count: i32,
+    /// Maximum execution attempts.
+    pub max_attempts: i32,
+    /// Optional task deadline.
+    pub deadline_at: Option<DateTime<Utc>>,
+    /// Immutable execution snapshot digest.
+    pub execution_snapshot_sha256: String,
+}
+
+/// One hash-chained lifecycle event safe for the command-center response.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkEventStatus {
+    /// Stable event ID.
+    pub event_id: Uuid,
+    /// Optional task ID.
+    pub task_id: Option<Uuid>,
+    /// Monotonic request-local sequence.
+    pub sequence: i64,
+    /// Namespaced lifecycle event type.
+    pub event_type: String,
+    /// Stable Snowman workforce actor identifier.
+    pub actor_identity: String,
+    /// Bounded metadata and immutable artifact references.
+    pub payload: Value,
+    /// Previous event digest, absent for the genesis event.
+    pub previous_event_sha256: Option<String>,
+    /// This event's evidence digest.
+    pub event_sha256: String,
+    /// Producer-observed event time.
+    pub occurred_at: DateTime<Utc>,
+}
+
 /// Insert a work request and its initial task graph exactly once.
 ///
 /// Reusing an idempotency key with the same objective returns the original
@@ -204,7 +313,7 @@ pub async fn enqueue_work_request(
     pool: &PgPool,
     community_id: CommunityId,
     request: &NewWorkRequest,
-) -> Result<Uuid> {
+) -> Result<EnqueuedWorkRequest> {
     validate_new_request(request)?;
     let community_id = *community_id.as_uuid();
     let idempotency_digest = sha256(request.idempotency_key.as_bytes());
@@ -214,9 +323,9 @@ pub async fn enqueue_work_request(
         r#"
         INSERT INTO snowman_work_requests
           (community_id, request_id, idempotency_key_sha256, requester_identity,
-           objective, objective_sha256, classification, status, deadline_at,
-           max_cost_microusd, max_input_tokens, max_output_tokens)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,'requested',$8,$9,$10,$11)
+           objective, objective_sha256, request_contract_sha256, classification,
+           status, deadline_at, max_cost_microusd, max_input_tokens, max_output_tokens)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'requested',$9,$10,$11,$12)
         ON CONFLICT (community_id, idempotency_key_sha256) DO NOTHING
         RETURNING request_id
         "#,
@@ -227,6 +336,7 @@ pub async fn enqueue_work_request(
     .bind(&request.requester_identity)
     .bind(&request.objective)
     .bind(objective_digest.as_slice())
+    .bind(request.request_contract_sha256.as_slice())
     .bind(&request.classification)
     .bind(request.deadline_at)
     .bind(request.max_cost_microusd)
@@ -237,29 +347,225 @@ pub async fn enqueue_work_request(
 
     if inserted.is_none() {
         let existing = sqlx::query(
-            "SELECT request_id, objective_sha256 FROM snowman_work_requests WHERE community_id=$1 AND idempotency_key_sha256=$2",
+            "SELECT request_id, objective_sha256, request_contract_sha256, requester_identity, classification, deadline_at, \
+                    max_cost_microusd, max_input_tokens, max_output_tokens \
+             FROM snowman_work_requests \
+             WHERE community_id=$1 AND idempotency_key_sha256=$2",
         )
         .bind(community_id)
         .bind(idempotency_digest.as_slice())
         .fetch_one(&mut *tx)
         .await?;
         let existing_digest: Vec<u8> = existing.try_get("objective_sha256")?;
-        if existing_digest.as_slice() != objective_digest.as_slice() {
+        let exact_replay = existing_digest.as_slice() == objective_digest.as_slice()
+            && existing
+                .try_get::<Vec<u8>, _>("request_contract_sha256")?
+                .as_slice()
+                == request.request_contract_sha256.as_slice()
+            && existing.try_get::<String, _>("requester_identity")? == request.requester_identity
+            && existing.try_get::<String, _>("classification")? == request.classification
+            && existing.try_get::<Option<DateTime<Utc>>, _>("deadline_at")? == request.deadline_at
+            && existing.try_get::<i64, _>("max_cost_microusd")? == request.max_cost_microusd
+            && existing.try_get::<i64, _>("max_input_tokens")? == request.max_input_tokens
+            && existing.try_get::<i64, _>("max_output_tokens")? == request.max_output_tokens;
+        if !exact_replay {
             return Err(DbError::AccessDenied(
-                "Snowman workforce idempotency key was reused for a different objective".into(),
+                "Snowman workforce idempotency key was reused for a different request".into(),
             ));
         }
         let existing_id: Uuid = existing.try_get("request_id")?;
         tx.commit().await?;
-        return Ok(existing_id);
+        return Ok(EnqueuedWorkRequest {
+            request_id: existing_id,
+            inserted: false,
+        });
     }
 
     for task in &request.tasks {
         insert_task(&mut tx, community_id, request.request_id, task).await?;
     }
+    let accepted_at = Utc::now();
+    let accepted_event = NewWorkEvent {
+        event_id: request.request_id,
+        request_id: request.request_id,
+        task_id: None,
+        event_type: "request.accepted".to_string(),
+        actor_identity: request.requester_identity.clone(),
+        payload: serde_json::json!({
+            "schema_version": "snowman.work.event.v1",
+            "classification": request.classification,
+            "objective_sha256": hex::encode(objective_digest),
+            "request_contract_sha256": hex::encode(request.request_contract_sha256),
+            "initial_task_count": request.tasks.len(),
+        }),
+        occurred_at: accepted_at,
+    };
+    validate_work_event(&accepted_event)?;
+    let accepted_digest = work_event_digest(community_id, 0, None, &accepted_event)?;
+    sqlx::query(
+        r#"
+        INSERT INTO snowman_work_events
+          (community_id, event_id, request_id, task_id, sequence, event_type,
+           actor_identity, payload, previous_event_sha256, event_sha256, occurred_at)
+        VALUES ($1,$2,$3,NULL,0,$4,$5,$6,NULL,$7,$8)
+        "#,
+    )
+    .bind(community_id)
+    .bind(accepted_event.event_id)
+    .bind(accepted_event.request_id)
+    .bind(&accepted_event.event_type)
+    .bind(&accepted_event.actor_identity)
+    .bind(&accepted_event.payload)
+    .bind(accepted_digest.as_slice())
+    .bind(accepted_event.occurred_at)
+    .execute(&mut *tx)
+    .await?;
     refresh_request_status(&mut tx, community_id, request.request_id).await?;
     tx.commit().await?;
-    Ok(request.request_id)
+    Ok(EnqueuedWorkRequest {
+        request_id: request.request_id,
+        inserted: true,
+    })
+}
+
+/// Read one request from the writer with strict tenant scoping.
+///
+/// Raw objective text and requester identifiers are deliberately omitted. The
+/// command center receives only current state, budgets, bounded event metadata,
+/// and immutable evidence coordinates.
+pub async fn get_work_request_status(
+    pool: &PgPool,
+    community_id: CommunityId,
+    request_id: Uuid,
+) -> Result<Option<WorkRequestStatus>> {
+    let community_id = *community_id.as_uuid();
+    let request = sqlx::query(
+        r#"
+        SELECT r.request_id, r.objective_sha256, r.request_contract_sha256,
+               r.classification, r.status,
+               r.deadline_at, r.max_cost_microusd, r.max_input_tokens,
+               r.max_output_tokens, r.created_at, r.updated_at,
+               COALESCE(SUM(s.cost_microusd), 0)::bigint AS used_cost_microusd,
+               COALESCE(SUM(s.input_tokens), 0)::bigint AS used_input_tokens,
+               COALESCE(SUM(s.output_tokens), 0)::bigint AS used_output_tokens
+        FROM snowman_work_requests r
+        LEFT JOIN snowman_spend_ledger s
+          ON s.community_id=r.community_id AND s.request_id=r.request_id
+        WHERE r.community_id=$1 AND r.request_id=$2
+        GROUP BY r.community_id, r.request_id
+        "#,
+    )
+    .bind(community_id)
+    .bind(request_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(request) = request else {
+        return Ok(None);
+    };
+
+    let task_rows = sqlx::query(
+        r#"
+        SELECT task_id, parent_task_id, specialist_role, model_id,
+               required_capabilities, expected_artifact_contract,
+               context_packet_id, risk_tier, reversible, approval_required,
+               status, attempt_count, max_attempts, deadline_at,
+               execution_snapshot_sha256
+        FROM snowman_work_tasks
+        WHERE community_id=$1 AND request_id=$2
+        ORDER BY created_at, task_id
+        "#,
+    )
+    .bind(community_id)
+    .bind(request_id)
+    .fetch_all(pool)
+    .await?;
+    let tasks = task_rows
+        .into_iter()
+        .map(|row| -> Result<WorkTaskStatus> {
+            Ok(WorkTaskStatus {
+                task_id: row.try_get("task_id")?,
+                parent_task_id: row.try_get("parent_task_id")?,
+                specialist_role: row.try_get("specialist_role")?,
+                model_id: row.try_get("model_id")?,
+                required_capabilities: row.try_get("required_capabilities")?,
+                expected_artifact_contract: row.try_get("expected_artifact_contract")?,
+                context_packet_id: row.try_get("context_packet_id")?,
+                risk_tier: row.try_get("risk_tier")?,
+                reversible: row.try_get("reversible")?,
+                approval_required: row.try_get("approval_required")?,
+                status: row.try_get("status")?,
+                attempt_count: row.try_get("attempt_count")?,
+                max_attempts: row.try_get("max_attempts")?,
+                deadline_at: row.try_get("deadline_at")?,
+                execution_snapshot_sha256: hex::encode(
+                    row.try_get::<Vec<u8>, _>("execution_snapshot_sha256")?,
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let event_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::bigint FROM snowman_work_events WHERE community_id=$1 AND request_id=$2",
+    )
+    .bind(community_id)
+    .bind(request_id)
+    .fetch_one(pool)
+    .await?;
+    let mut event_rows = sqlx::query(
+        r#"
+        SELECT event_id, task_id, sequence, event_type, actor_identity, payload,
+               previous_event_sha256, event_sha256, occurred_at
+        FROM snowman_work_events
+        WHERE community_id=$1 AND request_id=$2
+        ORDER BY sequence DESC
+        LIMIT 200
+        "#,
+    )
+    .bind(community_id)
+    .bind(request_id)
+    .fetch_all(pool)
+    .await?;
+    event_rows.reverse();
+    let events = event_rows
+        .into_iter()
+        .map(|row| -> Result<WorkEventStatus> {
+            Ok(WorkEventStatus {
+                event_id: row.try_get("event_id")?,
+                task_id: row.try_get("task_id")?,
+                sequence: row.try_get("sequence")?,
+                event_type: row.try_get("event_type")?,
+                actor_identity: row.try_get("actor_identity")?,
+                payload: row.try_get("payload")?,
+                previous_event_sha256: row
+                    .try_get::<Option<Vec<u8>>, _>("previous_event_sha256")?
+                    .map(hex::encode),
+                event_sha256: hex::encode(row.try_get::<Vec<u8>, _>("event_sha256")?),
+                occurred_at: row.try_get("occurred_at")?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(Some(WorkRequestStatus {
+        request_id: request.try_get("request_id")?,
+        objective_sha256: hex::encode(request.try_get::<Vec<u8>, _>("objective_sha256")?),
+        request_contract_sha256: hex::encode(
+            request.try_get::<Vec<u8>, _>("request_contract_sha256")?,
+        ),
+        classification: request.try_get("classification")?,
+        status: request.try_get("status")?,
+        deadline_at: request.try_get("deadline_at")?,
+        max_cost_microusd: request.try_get("max_cost_microusd")?,
+        used_cost_microusd: request.try_get("used_cost_microusd")?,
+        max_input_tokens: request.try_get("max_input_tokens")?,
+        used_input_tokens: request.try_get("used_input_tokens")?,
+        max_output_tokens: request.try_get("max_output_tokens")?,
+        used_output_tokens: request.try_get("used_output_tokens")?,
+        tasks,
+        events,
+        event_count,
+        created_at: request.try_get("created_at")?,
+        updated_at: request.try_get("updated_at")?,
+    }))
 }
 
 /// Claim the next due task using `FOR UPDATE SKIP LOCKED` and a fenced lease.
@@ -892,6 +1198,7 @@ fn validate_new_request(request: &NewWorkRequest) -> Result<()> {
         || request.requester_identity.trim().is_empty()
         || request.objective.trim().is_empty()
         || request.tasks.is_empty()
+        || request.request_contract_sha256 == [0; 32]
     {
         return Err(DbError::InvalidData(
             "idempotency key, requester, objective, and at least one task are required".into(),
@@ -1063,6 +1370,7 @@ mod tests {
             request_id,
             idempotency_key: "user-request-1".into(),
             requester_identity: "google:founder@snowmanai.org".into(),
+            request_contract_sha256: sha256(b"complete-request-contract-v1"),
             objective: "Prepare an evidence-backed client-ready brief.".into(),
             classification: "confidential".into(),
             deadline_at: None,

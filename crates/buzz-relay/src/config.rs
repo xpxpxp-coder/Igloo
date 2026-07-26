@@ -46,6 +46,17 @@ pub struct JoinPolicyConfig {
     pub version: String,
 }
 
+/// Fail-closed intake configuration for the governed Snowman AI Workforce.
+#[derive(Debug, Clone)]
+pub struct SnowmanWorkforceConfig {
+    /// Tenant-local service identity assigned to the initial planning task.
+    pub lead_service_identity_id: uuid::Uuid,
+    /// Snowman-controlled model gateway used by the planning worker.
+    pub model_gateway_url: String,
+    /// Evaluated model route selected for the initial planning task.
+    pub planning_model_id: String,
+}
+
 /// Relay runtime configuration, loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -123,6 +134,11 @@ pub struct Config {
     /// Require every relay key to resolve to a live Snowman workforce human
     /// session or capability-bounded service identity before authentication.
     pub snowman_workforce_identity_required: bool,
+
+    /// Governed workforce request intake. `None` disables every workforce API
+    /// route; enabling it requires closed membership, live workforce identity,
+    /// a tenant-bound lead service identity, and a Snowman-only model gateway.
+    pub snowman_workforce: Option<SnowmanWorkforceConfig>,
 
     /// Whether this deployment can serve huddle (voice) audio.
     ///
@@ -349,6 +365,30 @@ fn parse_operator_api_origin(raw: &str) -> Result<String, ConfigError> {
     Ok(raw.trim_end_matches('/').to_string())
 }
 
+fn validate_snowman_gateway_url(raw: &str) -> Result<(), ConfigError> {
+    let url = url::Url::parse(raw.trim()).map_err(|error| {
+        ConfigError::InvalidValue(format!(
+            "SNOWMAN_MODEL_GATEWAY_URL is not a valid URL: {error}"
+        ))
+    })?;
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let snowman_host = host == "snowmanai.org" || host.ends_with(".snowmanai.org");
+    if url.scheme() != "https"
+        || !snowman_host
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ConfigError::InvalidValue(
+            "SNOWMAN_MODEL_GATEWAY_URL must be a credential-free Snowman-controlled HTTPS URL on port 443"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn parse_push_gateway_delivery_url(raw: &str) -> Result<url::Url, ConfigError> {
     let url = url::Url::parse(raw.trim()).map_err(|e| {
         ConfigError::InvalidValue(format!(
@@ -509,6 +549,61 @@ impl Config {
                     .to_string(),
             ));
         }
+        let snowman_workforce_enabled = parse_bool("SNOWMAN_WORKFORCE_API_ENABLED", false)?;
+        let snowman_workforce = if snowman_workforce_enabled {
+            if !snowman_workforce_identity_required {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_WORKFORCE_API_ENABLED=true requires SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true"
+                        .to_string(),
+                ));
+            }
+            let lead_service_identity_id = std::env::var("SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID")
+                .map_err(|_| {
+                    ConfigError::InvalidValue(
+                        "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID is required when the workforce API is enabled"
+                            .to_string(),
+                    )
+                })?
+                .parse::<uuid::Uuid>()
+                .map_err(|_| {
+                    ConfigError::InvalidValue(
+                        "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID must be a non-nil UUID".to_string(),
+                    )
+                })?;
+            if lead_service_identity_id.is_nil() {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID must be a non-nil UUID".to_string(),
+                ));
+            }
+            let model_gateway_url = std::env::var("SNOWMAN_MODEL_GATEWAY_URL").map_err(|_| {
+                ConfigError::InvalidValue(
+                    "SNOWMAN_MODEL_GATEWAY_URL is required when the workforce API is enabled"
+                        .to_string(),
+                )
+            })?;
+            validate_snowman_gateway_url(&model_gateway_url)?;
+            let planning_model_id = std::env::var("SNOWMAN_PLANNING_MODEL_ID")
+                .map_err(|_| {
+                    ConfigError::InvalidValue(
+                        "SNOWMAN_PLANNING_MODEL_ID is required when the workforce API is enabled"
+                            .to_string(),
+                    )
+                })?
+                .trim()
+                .to_string();
+            if planning_model_id.is_empty() || planning_model_id.len() > 256 {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_PLANNING_MODEL_ID must contain 1-256 characters".to_string(),
+                ));
+            }
+            Some(SnowmanWorkforceConfig {
+                lead_service_identity_id,
+                model_gateway_url,
+                planning_model_id,
+            })
+        } else {
+            None
+        };
 
         // Defaults true → single-pod (N=1) keeps today's huddle behavior. A
         // horizontally-scaled deployment sets this false; see the field doc.
@@ -917,6 +1012,7 @@ impl Config {
             require_relay_membership,
             snowman_role_scopes,
             snowman_workforce_identity_required,
+            snowman_workforce,
             huddle_audio_available,
             mesh,
             mesh_demo_echo,
@@ -1203,6 +1299,63 @@ mod tests {
             governed
                 .expect("governed workforce identity config")
                 .snowman_workforce_identity_required
+        );
+    }
+
+    #[test]
+    fn workforce_api_requires_snowman_only_model_gateway() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let keys = [
+            "BUZZ_REQUIRE_RELAY_MEMBERSHIP",
+            "SNOWMAN_ROLE_SCOPES",
+            "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED",
+            "SNOWMAN_WORKFORCE_API_ENABLED",
+            "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID",
+            "SNOWMAN_MODEL_GATEWAY_URL",
+            "SNOWMAN_PLANNING_MODEL_ID",
+        ];
+        let previous: Vec<_> = keys
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect();
+        std::env::set_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP", "true");
+        std::env::set_var("SNOWMAN_ROLE_SCOPES", "true");
+        std::env::set_var("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", "true");
+        std::env::set_var("SNOWMAN_WORKFORCE_API_ENABLED", "true");
+        std::env::set_var(
+            "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID",
+            "8d7d246a-58b9-4d44-825d-bc9b4307c16a",
+        );
+        std::env::set_var("SNOWMAN_PLANNING_MODEL_ID", "snowman-planner-v1");
+
+        std::env::set_var("SNOWMAN_MODEL_GATEWAY_URL", "https://api.block.xyz/v1");
+        let external = Config::from_env();
+        std::env::set_var(
+            "SNOWMAN_MODEL_GATEWAY_URL",
+            "https://models.snowmanai.org/v1",
+        );
+        let snowman = Config::from_env();
+
+        for (key, value) in previous {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        assert!(matches!(
+            external,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("Snowman-controlled HTTPS URL")
+        ));
+        let config = snowman.expect("Snowman workforce config");
+        assert_eq!(
+            config
+                .snowman_workforce
+                .expect("workforce enabled")
+                .model_gateway_url,
+            "https://models.snowmanai.org/v1"
         );
     }
 
