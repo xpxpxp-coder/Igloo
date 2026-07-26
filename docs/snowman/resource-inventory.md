@@ -45,8 +45,11 @@ claims require live verification before use.
   serving role, generates relay/HMAC material outside Terraform, verifies the
   serving identity, and writes only the exact KMS-encrypted runtime JSON secret.
   Its execution still requires an enrolled Snowman owner public key and live
-  staging evidence. ALB authenticated origin/WAF, recurring partition rotation,
-  worker/model services, backup vault lock, and recovery proof remain.
+  staging evidence. A default-off Cloudflare-CIDR plus Snowman-specific mTLS,
+  exact-host WAF, governed-log ALB edge now exists in source and passes dormant,
+  enabled-edge, and production-HA mock plans; its Cloudflare certificate/DNS and
+  live bypass proof remain. Recurring partition rotation, worker/model services,
+  backup vault lock, and recovery proof remain.
 - The tenant-scoped Postgres workforce queue, fenced lease/recovery primitives,
   exact-snapshot approvals, capability-bound service identities, immutable
   context references, hard spend/token ledgers, aggregate request-state

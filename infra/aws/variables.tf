@@ -179,6 +179,37 @@ variable "cloudflare_origin_ipv4_cidrs" {
   }
 }
 
+variable "edge_enabled" {
+  type        = bool
+  description = "Create the cost-bearing Cloudflare-authenticated ALB/WAF edge. Dormant baselines keep this false."
+  default     = false
+}
+
+variable "cloudflare_origin_pull_ca_pem" {
+  type        = string
+  description = "Public CA bundle for the Snowman-specific Cloudflare authenticated-origin-pull client certificate."
+  default     = ""
+  sensitive   = true
+  validation {
+    condition = (
+      !var.edge_enabled ||
+      (startswith(trimspace(var.cloudflare_origin_pull_ca_pem), "-----BEGIN CERTIFICATE-----") &&
+      endswith(trimspace(var.cloudflare_origin_pull_ca_pem), "-----END CERTIFICATE-----"))
+    )
+    error_message = "An enabled edge requires a PEM Cloudflare origin-pull CA bundle."
+  }
+}
+
+variable "cloudflare_origin_pull_ca_sha256" {
+  type        = string
+  description = "Reviewed lowercase SHA-256 digest of the exact public origin-pull CA PEM."
+  default     = ""
+  validation {
+    condition     = !var.edge_enabled || can(regex("^[0-9a-f]{64}$", var.cloudflare_origin_pull_ca_sha256))
+    error_message = "An enabled edge requires a reviewed lowercase SHA-256 CA digest."
+  }
+}
+
 variable "database_instance_class" {
   type        = string
   description = "Cost-bounded RDS PostgreSQL instance class."

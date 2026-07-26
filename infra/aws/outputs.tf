@@ -25,6 +25,10 @@ output "network_posture" {
     model_gateway_security_group = aws_security_group.model_gateway.id
     inference_security_group     = aws_security_group.inference.id
     nat_gateway_count            = 0
+    edge_enabled                 = var.edge_enabled
+    edge_dns_name                = var.edge_enabled ? aws_lb.edge[0].dns_name : null
+    edge_zone_id                 = var.edge_enabled ? aws_lb.edge[0].zone_id : null
+    edge_waf_log_group           = var.edge_enabled ? aws_cloudwatch_log_group.waf[0].name : null
   }
 }
 

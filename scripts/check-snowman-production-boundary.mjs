@@ -70,6 +70,7 @@ const runtimeAuthorityFiles = [
   "infra/aws/variables.tf",
   "infra/aws/preflight.tf",
   "infra/aws/network.tf",
+  "infra/aws/edge.tf",
   "infra/aws/data_plane.tf",
   "infra/aws/compute.tf",
   "infra/aws/operations.tf",
@@ -150,6 +151,21 @@ requireFragment(
   "infra/aws/compute.tf",
   "readonlyRootFilesystem = true",
   "the dormant relay task must use a read-only root filesystem",
+);
+requireFragment(
+  "infra/aws/edge.tf",
+  'mode            = "verify"',
+  "the public AWS listener must verify the Snowman Cloudflare client certificate",
+);
+requireFragment(
+  "infra/aws/edge.tf",
+  'name     = "exact-snowman-host"',
+  "the edge WAF must reject alternate host authority",
+);
+requireFragment(
+  "infra/aws/variables.tf",
+  'variable "edge_enabled"',
+  "the cost-bearing edge must have an explicit activation switch",
 );
 requireFragment(
   "infra/aws/compute.tf",

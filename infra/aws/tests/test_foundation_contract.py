@@ -23,6 +23,31 @@ class AwsFoundationContractTests(unittest.TestCase):
         ):
             self.assertIn(service, source)
 
+    def test_edge_is_dormant_by_default_and_fails_closed_when_enabled(self) -> None:
+        variables = (ROOT / "variables.tf").read_text(encoding="utf-8")
+        edge = (ROOT / "edge.tf").read_text(encoding="utf-8")
+        network = (ROOT / "network.tf").read_text(encoding="utf-8")
+        self.assertIn('variable "edge_enabled"', variables)
+        self.assertIn("default     = false", variables)
+        for fragment in (
+            'mode            = "verify"',
+            "cloudflare_origin_pull_ca_sha256",
+            "drop_invalid_header_fields = true",
+            "enable_deletion_protection = true",
+            'ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"',
+            'name     = "exact-snowman-host"',
+            'header_name       = "cf-connecting-ip"',
+            'name        = "AWSManagedRulesCommonRuleSet"',
+            'name        = "AWSManagedRulesKnownBadInputsRuleSet"',
+            "sampled_requests_enabled   = false",
+            'name = "authorization"',
+            'name = "cookie"',
+            "query_string {}",
+        ):
+            self.assertIn(fragment, edge)
+        self.assertIn('description                  = "ALB readiness probes only"', network)
+        self.assertIn("aws-waf-logs-snowman-command-center-*", (ROOT / "data_plane.tf").read_text(encoding="utf-8"))
+
     def test_managed_state_is_encrypted_locked_and_private(self) -> None:
         source = (ROOT / "data_plane.tf").read_text(encoding="utf-8")
         required = (

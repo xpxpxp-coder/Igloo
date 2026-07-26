@@ -98,6 +98,37 @@ run "dormant_staging_foundation" {
     condition     = aws_ecs_task_definition.relay.cpu == "512" && aws_ecs_task_definition.relay.memory == "1024"
     error_message = "The dormant relay task must keep its cost-bounded CPU and memory allocation."
   }
+  assert {
+    condition     = length(aws_lb.edge) == 0 && length(aws_wafv2_web_acl.edge) == 0
+    error_message = "Dormant staging must not incur ALB/WAF edge cost."
+  }
+}
+
+run "explicit_authenticated_edge" {
+  command = plan
+
+  variables {
+    edge_enabled                     = true
+    cloudflare_origin_pull_ca_pem    = "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----"
+    cloudflare_origin_pull_ca_sha256 = "57e5c4f97e96792b099ff6bfa1ad3fb9a08ed78ff734be7310ee4d02f71d1e16"
+  }
+
+  assert {
+    condition     = length(aws_lb.edge) == 1 && !aws_lb.edge[0].internal && aws_lb.edge[0].enable_deletion_protection
+    error_message = "Explicit edge activation must create one protected public ALB."
+  }
+  assert {
+    condition     = aws_lb_listener.https[0].mutual_authentication[0].mode == "verify"
+    error_message = "The public listener must verify the Cloudflare client certificate."
+  }
+  assert {
+    condition     = aws_s3_object.origin_pull_ca[0].source_hash == var.cloudflare_origin_pull_ca_sha256
+    error_message = "The trust-store object must match the reviewed CA digest."
+  }
+  assert {
+    condition     = length(aws_wafv2_web_acl_association.edge) == 1
+    error_message = "The edge ALB must have exactly one WAF association."
+  }
 }
 
 run "production_ha_foundation" {

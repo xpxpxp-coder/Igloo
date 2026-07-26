@@ -41,7 +41,7 @@ evidence, and systematic Snowman branding.
 | Storage/search/media tenant scoping | Substantially proven, adversarial proof pending | community-aware modules in `crates/buzz-db`, `buzz-search`, `buzz-media`; multitenant conformance tests | Add cross-tenant signed-event, REST, media, search, git, workflow, pub/sub, and cache tests to the launch gate. |
 | Observability | Useful baseline | `crates/buzz-relay/src/{metrics,telemetry}.rs`; chart metrics/health configuration | Standardize Snowman OTLP, structured audit-safe logs, SLOs, dashboards, paging, synthetic probes, and runbooks. |
 | Supply chain | Useful baseline | pinned GitHub Actions; Docker provenance attestation in `.github/workflows/docker.yml`; multi-platform release workflows | Add Snowman-owned registries/signing trust, SBOM and vulnerability policy, dependency review, reproducible release evidence, and digest-only deploys. |
-| Deployment | Validated managed AWS substrate, compute/edge/recovery proof incomplete | `infra/aws`; Compose remains unsuitable for production | Keep Compose out of production. Complete least-privilege ECS tasks, WAF/ALB, image trust, backup vault/recovery, live plan, and staged proof. |
+| Deployment | Validated managed AWS substrate and default-off authenticated edge; live compute/recovery proof incomplete | `infra/aws`; Compose remains unsuitable for production | Keep Compose out of production. Prove the mTLS ALB/WAF edge and least-privilege ECS tasks in staging; complete image trust, backup vault/recovery, live plan, and staged proof. |
 | Accessibility | Meaningful component-level work, acceptance proof absent | extensive ARIA/reduced-motion usage and UI tests across desktop/web/mobile | Add automated axe/semantic checks plus keyboard, zoom, contrast, screen-reader, and mobile accessibility UAT evidence. |
 | Branding | Not started | Buzz/Sprout names, `xyz.block` identifiers, bee/hive assets, Catppuccin theme and deep links remain pervasive | Create a central product identity/design token layer, then migrate every supported surface while retaining protocol identifiers where compatibility requires them. |
 | Analyst 360 integration | Bidirectional source boundary implemented; runtime proof required | `crates/buzz-relay/src/api/analyst_integration.rs`; `crates/buzz-db/src/analyst_integration.rs`; `migrations/0029_snowman_analyst_event_boundary.sql`; Analyst 360 migration 047, command/outbox modules, and dedicated delivery worker | Keep the asymmetric, versioned command/event boundary. Complete private AWS routing, KMS/IAM provisioning/bindings, and adversarial cross-tenant staging proof; never share databases or copy raw Aptive rows/transcripts here by default. |
@@ -88,7 +88,7 @@ the highest risks without changing the production-readiness verdict:
 
 These are implementation foundations, not staged proof. OIDC assertion exchange,
 private integration routing, live database/bootstrap evidence, recurring
-partition rotation and the authenticated edge,
+partition rotation and authenticated-edge bypass tests,
 AWS workers/scheduler/sandbox, KMS audit checkpoints, recovery/load/isolation
 exercises, comprehensive branding, accessibility, UAT, and launch evidence remain
 open gates.

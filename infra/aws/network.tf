@@ -186,6 +186,24 @@ resource "aws_vpc_security_group_egress_rule" "edge_to_relay" {
   ip_protocol                  = "tcp"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "relay_health_from_edge" {
+  security_group_id            = aws_security_group.relay.id
+  referenced_security_group_id = aws_security_group.edge.id
+  from_port                    = 8081
+  to_port                      = 8081
+  ip_protocol                  = "tcp"
+  description                  = "ALB readiness probes only"
+}
+
+resource "aws_vpc_security_group_egress_rule" "edge_to_relay_health" {
+  security_group_id            = aws_security_group.edge.id
+  referenced_security_group_id = aws_security_group.relay.id
+  from_port                    = 8081
+  to_port                      = 8081
+  ip_protocol                  = "tcp"
+  description                  = "ALB readiness probes only"
+}
+
 resource "aws_vpc_security_group_ingress_rule" "relay_from_worker" {
   security_group_id            = aws_security_group.relay.id
   referenced_security_group_id = aws_security_group.worker.id
