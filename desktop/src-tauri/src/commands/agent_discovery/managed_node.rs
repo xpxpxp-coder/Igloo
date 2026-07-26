@@ -74,7 +74,7 @@ fn managed_node_unsupported_step() -> InstallStepResult {
         success: false,
         stdout: String::new(),
         stderr: format!(
-            "Buzz does not provide a managed Node.js runtime for {}-{} yet",
+            "Snowman Command Center does not provide a managed Node.js runtime for {}-{} yet",
             std::env::consts::OS,
             std::env::consts::ARCH
         ),
@@ -87,7 +87,7 @@ fn managed_node_unsupported_step() -> InstallStepResult {
 }
 
 fn managed_node_install_hint() -> String {
-    "Buzz could not install its private Node.js runtime. Check your network and app-data directory permissions, then click Install again.".to_string()
+    "Snowman Command Center could not install its private Node.js runtime. Check your network and app-data directory permissions, then click Install again.".to_string()
 }
 
 fn managed_node_failed_step(stderr: String) -> InstallStepResult {
@@ -466,7 +466,7 @@ fn verify_node_tree(dir: &std::path::Path) -> Result<(), String> {
 
 /// Guidance text shown when the Buzz-private npm prefix is not available.
 fn managed_npm_prefix_hint() -> String {
-    "Buzz could not create its private Node tools directory. Check app-data directory permissions, restart Buzz, then click Install again.".to_string()
+    "Snowman Command Center could not create its private Node tools directory. Check app-data directory permissions, restart Snowman Command Center, then click Install again.".to_string()
 }
 
 pub(super) fn managed_npm_command(command: &str) -> Result<Option<String>, Box<InstallStepResult>> {

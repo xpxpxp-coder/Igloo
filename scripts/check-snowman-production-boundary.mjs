@@ -11,6 +11,10 @@ const identity = JSON.parse(read("product/identity.json"));
 const runtimeAuthorityFiles = [
   "Cargo.toml",
   "Dockerfile",
+  "product/identity.json",
+  "product/design-tokens.json",
+  "scripts/generate-snowman-product.mjs",
+  "scripts/check-snowman-brand.mjs",
   "crates/buzz-relay/src/config.rs",
   "crates/buzz-relay/src/main.rs",
   "crates/buzz-relay/src/authorization.rs",
@@ -55,8 +59,13 @@ const runtimeAuthorityFiles = [
   "desktop/src/features/communities/relayProbe.ts",
   "desktop/src/features/onboarding/welcomeCanvas.ts",
   "desktop/src/features/settings/hooks/use-updater.ts",
+  "desktop/src/shared/product/identity.generated.ts",
   "web/src/shared/lib/buzz-download.ts",
   "web/src/shared/lib/relay-url.ts",
+  "web/src/shared/product/identity.generated.ts",
+  "web/src/features/invite/ui/InvitePage.tsx",
+  "admin-web/src/product/identity.generated.ts",
+  "mobile/lib/shared/product/identity.g.dart",
   "mobile/lib/features/pairing/pairing_provider.dart",
   "mobile/lib/shared/deeplink/deep_link.dart",
   ".github/workflows/release.yml",
@@ -88,7 +97,10 @@ const forbidden = [
   ["public mesh relay", /mesh-llm\.iroh\.link|default_relay_map\(\)/i],
   ["mutable main image", /image:\s*[^\n]*(?::main|:latest)\b/i],
   ["remote runtime avatar", /const\s+\w*AVATAR\w*:\s*&str\s*=\s*"https?:\/\//i],
-  ["remote installer command", /install_commands(?:_windows)?:\s*&\[[^\]]*https?:\/\//is],
+  [
+    "remote installer command",
+    /install_commands(?:_windows)?:\s*&\[[^\]]*https?:\/\//is,
+  ],
 ];
 
 const failures = [];
@@ -105,7 +117,9 @@ function requireFragment(path, fragment, reason) {
 
 const releaseSource = read("web/src/shared/lib/buzz-download.ts");
 if (/fetch\(\s*["'`]https?:\/\//i.test(releaseSource)) {
-  failures.push("web/src/shared/lib/buzz-download.ts: cross-origin release fetch");
+  failures.push(
+    "web/src/shared/lib/buzz-download.ts: cross-origin release fetch",
+  );
 }
 requireFragment(
   "desktop/src-tauri/src/commands/workspace.rs",
@@ -116,6 +130,11 @@ requireFragment(
   "web/src/shared/lib/relay-url.ts",
   "Relay URL is outside the Snowman-controlled boundary.",
   "browser relay connections must enforce the Snowman transport boundary",
+);
+requireFragment(
+  "web/src/shared/lib/relay-url.ts",
+  'import.meta.env.MODE === "e2e"',
+  "browser loopback relay access must be limited to an explicit acceptance-test build",
 );
 requireFragment(
   "mobile/lib/features/pairing/pairing_provider.dart",
@@ -229,7 +248,7 @@ requireFragment(
 );
 requireFragment(
   "web/src/shared/lib/buzz-download.ts",
-  'export const BUZZ_RELEASES_URL = "/downloads";',
+  'export const SNOWMAN_RELEASES_URL = "/downloads";',
   "release page must remain same-origin",
 );
 requireFragment(
@@ -401,7 +420,9 @@ requireFragment(
 const releaseTauri = JSON.parse(read("desktop/src-tauri/tauri.conf.json"));
 const devTauri = JSON.parse(read("desktop/src-tauri/tauri.dev.conf.json"));
 if (releaseTauri.productName !== identity.command_center_name) {
-  failures.push("desktop release product name differs from product/identity.json");
+  failures.push(
+    "desktop release product name differs from product/identity.json",
+  );
 }
 if (releaseTauri.identifier !== identity.desktop_bundle_id) {
   failures.push("desktop release bundle id differs from product/identity.json");

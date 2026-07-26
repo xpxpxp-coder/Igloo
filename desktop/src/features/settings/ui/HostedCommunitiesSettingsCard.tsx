@@ -436,8 +436,9 @@ export function HostedCommunitiesSettingsCard() {
         <div className="rounded-xl border border-border/70 p-5">
           <h3 className="font-medium">Sign in to manage hosted communities</h3>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Authentication opens in your browser and returns securely to Snowman Command Center.
-            You can use every other part of the app without signing in.
+            Authentication opens in your browser and returns securely to Snowman
+            Command Center. You can use every other part of the app without
+            signing in.
           </p>
           <Button
             className="mt-4"
@@ -481,8 +482,8 @@ export function HostedCommunitiesSettingsCard() {
               <p className="mt-2 text-sm text-muted-foreground">
                 This Snowman account isn&apos;t linked to a Snowman identity
                 yet. Connect this device&apos;s key to create and own
-                communities under it — Snowman signs a one-time challenge locally,
-                so your private key never leaves Desktop.
+                communities under it — Snowman signs a one-time challenge
+                locally, so your private key never leaves Desktop.
               </p>
               <Button
                 className="mt-4"

@@ -32,7 +32,7 @@ import {
   ONBOARDING_INK_ICON_CLASS,
   ONBOARDING_PRIMARY_CTA_CLASS,
 } from "@/features/onboarding/ui/OnboardingChrome";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
+import { SnowmanMark } from "@/shared/ui/snowman-logo/SnowmanMark";
 import {
   Dialog,
   DialogContent,
@@ -474,7 +474,7 @@ export function HostedCommunityOnboarding({
         surface="textured"
       >
         <div className="mx-auto flex w-full max-w-sm flex-col items-center py-2 text-center">
-          <BuzzMark className="mb-5 h-auto w-9 text-foreground" />
+          <SnowmanMark className="mb-5 h-auto w-9 text-foreground" />
 
           {!auth ? (
             <>
@@ -516,8 +516,8 @@ export function HostedCommunityOnboarding({
               <DialogDescription className="mt-2 text-sm leading-6 text-foreground">
                 Your Snowman account
                 {auth.email ? ` (${auth.email})` : ""} is ready. Connect this
-                device’s Snowman identity to finish setup. Your private key stays
-                on this device.
+                device’s Snowman identity to finish setup. Your private key
+                stays on this device.
               </DialogDescription>
               {errorBox ? <div className="mt-5 w-full">{errorBox}</div> : null}
               <Button

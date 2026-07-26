@@ -1,5 +1,4 @@
-import { cn } from "@/shared/lib/cn";
-import { BuzzMark } from "./BuzzMark";
+import { SnowmanPulseMark } from "@/shared/ui/snowman-logo/SnowmanPulseMark";
 
 export type FuzzyLogoProps = {
   fuzz?: boolean;
@@ -14,9 +13,5 @@ export type FuzzyLogoProps = {
 
 /** Animated Snowman mark with the legacy prop surface retained for callers. */
 export function FuzzyLogo({ className, pulse = true }: FuzzyLogoProps) {
-  return (
-    <BuzzMark
-      className={cn(pulse && "animate-pulse motion-reduce:animate-none", className)}
-    />
-  );
+  return <SnowmanPulseMark className={className} pulse={pulse} />;
 }

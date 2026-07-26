@@ -453,9 +453,10 @@ function RuntimeRow({
           <AlertDialogHeader>
             <AlertDialogTitle>Update {runtime.label} adapter?</AlertDialogTitle>
             <AlertDialogDescription>
-              This replaces the machine-wide codex-acp adapter. Older Buzz
-              releases using the legacy adapter may lose community access until
-              @zed-industries/codex-acp@0.16.0 is restored.
+              This replaces the machine-wide codex-acp adapter. Older
+              command-center releases using the legacy adapter may lose
+              community access until @zed-industries/codex-acp@0.16.0 is
+              restored.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -554,7 +555,7 @@ export function DoctorSettingsPanel() {
       <SectionHeader
         className="items-center"
         title="Agent runtimes"
-        description="Choose which agent tools Buzz can use on this device."
+        description="Choose which agent tools Snowman Command Center can use on this device."
         action={
           <Button
             disabled={isRefreshing}

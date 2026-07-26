@@ -168,7 +168,7 @@ export function useUpdater() {
             setStatus({
               state: "manual-required",
               version: update.version,
-            releaseUrl: SNOWMAN_DOWNLOADS_URL,
+              releaseUrl: SNOWMAN_DOWNLOADS_URL,
             });
           }
         } else if (shouldShowQuietResult) {

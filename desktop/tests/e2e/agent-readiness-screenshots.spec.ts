@@ -161,7 +161,7 @@ test.describe("agent readiness gate screenshots", () => {
   test("02-create-buzzagent-automatic-model", async ({ page }) => {
     await installMockBridge(page);
     await openCreateDialog(page);
-    await selectProvider(page, "Buzz shared compute");
+    await selectProvider(page, "Snowman shared compute");
 
     await expect(page.locator("#persona-model")).toContainText("Automatic");
     await expect(page.getByTestId("persona-dialog-submit")).toBeEnabled();
@@ -233,7 +233,7 @@ test.describe("agent readiness gate screenshots", () => {
       acpRuntimesCatalog: [
         {
           id: "buzz-agent",
-          label: "Buzz Agent",
+          label: "Snowman Agent",
           avatar_url: "",
           availability: "available",
           command: "buzz-agent",

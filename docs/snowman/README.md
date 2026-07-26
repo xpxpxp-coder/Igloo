@@ -13,6 +13,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Production acceptance criteria](production-acceptance-criteria.md)
 - [External dependency and data-egress register](external-dependency-register.md)
 - [Available resource and reuse inventory](resource-inventory.md)
+- [Branding and compatibility register](branding-compatibility-register.md)
 - [Governed workforce request API](workforce-request-api.md)
 - [Analyst 360 event and receipt boundary](analyst-event-boundary.md)
 

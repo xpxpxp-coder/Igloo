@@ -569,7 +569,7 @@ export function ProfileSettingsCard({
       <div>
         <SettingsSectionHeader
           title="Profile"
-          description="Update how your name, avatar, and bio appear across Buzz."
+          description="Update how your name, avatar, and bio appear across Snowman Command Center."
         />
 
         <div className="space-y-3">

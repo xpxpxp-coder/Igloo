@@ -48,7 +48,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/images/buzz-icon.png
+    - assets/images/snowman-command-center.svg
   fonts:
     - family: Inter
       fonts:

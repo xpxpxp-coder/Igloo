@@ -56,6 +56,7 @@ import {
   SYNTAX_THEMES,
   type SyntaxThemeName,
   getThemePair,
+  productThemeLabel,
 } from "@/shared/theme/theme-loader";
 import {
   BUZZ_GRADIENT_STOPS,
@@ -234,6 +235,8 @@ export const settingsSections: SettingsSectionDescriptor[] = [
 ];
 
 function formatThemeLabel(name: string): string {
+  const snowmanLabel = productThemeLabel(name);
+  if (snowmanLabel) return snowmanLabel;
   return name
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
@@ -247,6 +250,8 @@ function formatThemeLabel(name: string): string {
  * "material-theme-lighter", and "gruvbox-light-soft".
  */
 function pairedThemeLabel(lightName: string): string {
+  const snowmanLabel = productThemeLabel(lightName);
+  if (snowmanLabel) return "Snowman";
   const modeTokens = new Set([
     "light",
     "latte",
@@ -518,7 +523,7 @@ function ThemeSettingsCard() {
     >
       <SettingsSectionHeader
         title="Appearance"
-        description="Choose a theme for Buzz."
+        description="Choose a theme for Snowman Command Center."
       />
 
       {/* Mode selector: System / Light / Dark */}

@@ -23,8 +23,13 @@ function requireSnowmanRelayUrl(raw: string): string {
   if (parsed.username || parsed.password) {
     throw new Error("Snowman relay URLs must not contain credentials.");
   }
-  if (import.meta.env.DEV === true) return raw;
   const host = parsed.hostname.toLowerCase();
+  const isLoopbackAcceptanceBuild =
+    import.meta.env.MODE === "e2e" &&
+    import.meta.env.VITE_SNOWMAN_E2E_ALLOW_LOOPBACK === "true" &&
+    parsed.protocol === "ws:" &&
+    (host === "127.0.0.1" || host === "localhost" || host === "[::1]");
+  if (import.meta.env.DEV === true || isLoopbackAcceptanceBuild) return raw;
   if (
     parsed.protocol !== "wss:" ||
     (host !== "snowmanai.org" && !host.endsWith(".snowmanai.org"))

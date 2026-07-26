@@ -1,13 +1,14 @@
 import snowmanAppIcon from "@/assets/snowman-command-center.svg";
 import { claimInviteInBrowser } from "@/features/invite/invite-api";
 import {
-  BUZZ_RELEASES_URL,
-  type BuzzDownloadPlatform,
-  detectBuzzDownloadPlatform,
-  resolveBuzzDownloadUrlForPlatform,
+  SNOWMAN_RELEASES_URL,
+  type SnowmanDownloadPlatform,
+  detectSnowmanDownloadPlatform,
+  resolveSnowmanDownloadUrlForPlatform,
 } from "@/shared/lib/buzz-download";
 import { hasNip07Provider } from "@/shared/lib/nostr-signer";
 import { relayWsUrl } from "@/shared/lib/relay-url";
+import { COMMAND_CENTER_NAME } from "@/shared/product/identity.generated";
 import { Button } from "@/shared/ui/button";
 import * as React from "react";
 import Markdown from "react-markdown";
@@ -39,7 +40,7 @@ export function InvitePage({ code }: { code: string }) {
   const [browserJoinError, setBrowserJoinError] = React.useState<string | null>(
     null,
   );
-  const [downloadUrl, setDownloadUrl] = React.useState(BUZZ_RELEASES_URL);
+  const [downloadUrl, setDownloadUrl] = React.useState(SNOWMAN_RELEASES_URL);
   const [needsMacChoice, setNeedsMacChoice] = React.useState(false);
   const [showMacChoice, setShowMacChoice] = React.useState(false);
   const [choosingMacDownload, setChoosingMacDownload] = React.useState(false);
@@ -48,7 +49,7 @@ export function InvitePage({ code }: { code: string }) {
 
   React.useEffect(() => {
     let active = true;
-    detectBuzzDownloadPlatform(navigator).then(async (platform) => {
+    detectSnowmanDownloadPlatform(navigator).then(async (platform) => {
       if (!active) return;
       if (
         platform.operatingSystem === "macos" &&
@@ -57,7 +58,7 @@ export function InvitePage({ code }: { code: string }) {
         setNeedsMacChoice(true);
         return;
       }
-      const url = await resolveBuzzDownloadUrlForPlatform(platform);
+      const url = await resolveSnowmanDownloadUrlForPlatform(platform);
       if (active) setDownloadUrl(url);
     });
     return () => {
@@ -96,7 +97,7 @@ export function InvitePage({ code }: { code: string }) {
       const receipt = await acceptPolicy();
       const query = new URLSearchParams({ relay, code });
       if (receipt) query.set("policy_receipt", receipt);
-      window.location.href = `buzz://join?${query.toString()}`;
+      window.location.href = `snowman://join?${query.toString()}`;
     } finally {
       setOpening(false);
     }
@@ -143,7 +144,7 @@ export function InvitePage({ code }: { code: string }) {
   }, []);
   const chooseMacDownload = async (
     event: React.MouseEvent<HTMLAnchorElement>,
-    platform: BuzzDownloadPlatform,
+    platform: SnowmanDownloadPlatform,
   ) => {
     event.preventDefault();
     if (choosingMacDownloadRef.current) return;
@@ -153,7 +154,7 @@ export function InvitePage({ code }: { code: string }) {
     if (downloadWindow) downloadWindow.opener = null;
     setShowMacChoice(false);
     try {
-      const url = await resolveBuzzDownloadUrlForPlatform(platform);
+      const url = await resolveSnowmanDownloadUrlForPlatform(platform);
       downloadWindow?.location.replace(url);
     } finally {
       choosingMacDownloadRef.current = false;
@@ -174,7 +175,8 @@ export function InvitePage({ code }: { code: string }) {
     <div
       className="flex flex-1 flex-col items-center justify-center px-4 py-16 text-center"
       style={{
-        backgroundImage: "linear-gradient(180deg, #D7D72E 0%, #D7E7F6 100%)",
+        backgroundImage:
+          "linear-gradient(180deg, var(--snowman-color-glacier) 0%, var(--snowman-color-frost) 100%)",
       }}
     >
       <div className="w-full max-w-xl space-y-4">
@@ -183,7 +185,11 @@ export function InvitePage({ code }: { code: string }) {
             className="h-12 w-12 overflow-hidden bg-black"
             style={{ borderRadius: "22.37%" }}
           >
-            <img alt="Snowman Command Center" className="h-full w-full" src={snowmanAppIcon} />
+            <img
+              alt={COMMAND_CENTER_NAME}
+              className="h-full w-full"
+              src={snowmanAppIcon}
+            />
           </div>
           <h1 className="mt-4 text-2xl font-semibold tracking-tight text-black">
             You&apos;re invited to
@@ -233,7 +239,7 @@ export function InvitePage({ code }: { code: string }) {
                 <a
                   href={`snowman://join?relay=${encodeURIComponent(relay)}&code=${encodeURIComponent(code)}`}
                 >
-                  Accept invite in Snowman Command Center
+                  Accept invite in {COMMAND_CENTER_NAME}
                 </a>
               </Button>
             ) : (
@@ -246,7 +252,7 @@ export function InvitePage({ code }: { code: string }) {
                 disabled={disabled}
                 onClick={openInvite}
               >
-                Accept invite in Snowman Command Center
+                Accept invite in {COMMAND_CENTER_NAME}
               </Button>
             )}
             {browserJoinError ? (
@@ -310,7 +316,7 @@ export function InvitePage({ code }: { code: string }) {
               <a
                 aria-disabled={choosingMacDownload}
                 className="rounded-2xl border border-black p-5 text-black no-underline hover:bg-black hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black aria-disabled:pointer-events-none aria-disabled:opacity-50"
-                href={BUZZ_RELEASES_URL}
+                href={SNOWMAN_RELEASES_URL}
                 onClick={(event) =>
                   void chooseMacDownload(event, {
                     operatingSystem: "macos",
@@ -326,7 +332,7 @@ export function InvitePage({ code }: { code: string }) {
               <a
                 aria-disabled={choosingMacDownload}
                 className="rounded-2xl border border-black p-5 text-black no-underline hover:bg-black hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-black aria-disabled:pointer-events-none aria-disabled:opacity-50"
-                href={BUZZ_RELEASES_URL}
+                href={SNOWMAN_RELEASES_URL}
                 onClick={(event) =>
                   void chooseMacDownload(event, {
                     operatingSystem: "macos",

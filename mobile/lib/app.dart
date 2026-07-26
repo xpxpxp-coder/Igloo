@@ -14,6 +14,7 @@ import 'shared/auth/auth.dart';
 import 'shared/deeplink/pending_deep_link_provider.dart';
 import 'shared/relay/relay.dart';
 import 'shared/theme/theme.dart';
+import 'shared/product/identity.g.dart';
 
 class App extends HookConsumerWidget {
   const App({super.key});
@@ -64,7 +65,7 @@ class App extends HookConsumerWidget {
     });
 
     return MaterialApp(
-      title: 'Snowman Command Center',
+      title: SnowmanProduct.mobileName,
       theme: AppTheme.light(colorScheme: lightScheme),
       darkTheme: AppTheme.dark(colorScheme: darkScheme),
       themeMode: effectiveMode,

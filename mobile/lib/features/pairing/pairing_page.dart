@@ -1,11 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_hooks/flutter_hooks.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../shared/theme/theme.dart';
+import '../../shared/product/identity.g.dart';
 import 'pairing_provider.dart';
 import 'pairing_qr_scanner.dart';
 
@@ -89,10 +91,14 @@ class PairingPage extends HookConsumerWidget {
                     children: [
                       const Spacer(flex: 2),
 
-                      Image.asset('assets/images/buzz-icon.png', height: 64),
+                      SvgPicture.asset(
+                        'assets/images/snowman-command-center.svg',
+                        height: 64,
+                        semanticsLabel: SnowmanProduct.commandCenterName,
+                      ),
                       const SizedBox(height: Grid.xs),
                       Text(
-                        'Welcome to Snowman Command Center',
+                        'Welcome to ${SnowmanProduct.commandCenterName}',
                         style: context.textTheme.headlineSmall,
                       ),
                       const SizedBox(height: Grid.xxs),

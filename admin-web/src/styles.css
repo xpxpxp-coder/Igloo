@@ -1,8 +1,9 @@
+@import "./snowman-brand.generated.css";
+
 :root {
-  font-family:
-    "Helvetica Neue", Helvetica, Arial, ui-sans-serif, system-ui, sans-serif;
-  color: #231e1e;
-  background: #d7e7f6;
+  font-family: var(--snowman-font-sans);
+  color: var(--snowman-text);
+  background: var(--snowman-color-frost);
   font-synthesis: none;
 }
 
@@ -72,13 +73,12 @@ button {
   display: grid;
   place-items: center;
   border-radius: 0.7rem;
-  color: #d7d72e;
-  background: #231e1e;
+  color: var(--snowman-color-glacier);
+  background: transparent;
 }
 
 .brand-mark svg {
-  width: 1.7rem;
-  fill: currentColor;
+  width: 2.2rem;
 }
 
 nav {

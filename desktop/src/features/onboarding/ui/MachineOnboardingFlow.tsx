@@ -8,6 +8,11 @@ import {
 } from "@/shared/api/tauriIdentity";
 import { Button } from "@/shared/ui/button";
 import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
+import {
+  COMMAND_CENTER_NAME,
+  PRODUCT_TAGLINE,
+} from "@/shared/product/identity.generated";
+import { SnowmanMark } from "@/shared/ui/snowman-logo/SnowmanMark";
 import { BackupStep } from "./BackupStep";
 import { DefaultConfigStep } from "./DefaultConfigStep";
 import { IdentityKeyHelpDialog } from "./IdentityKeyHelpDialog";
@@ -138,14 +143,14 @@ export function MachineOnboardingFlow({
               effect="mask-reveal-up"
               transitionKey="machine-identity"
             >
-              <img
-                alt="Buzz"
-                className="w-full max-w-[600px]"
-                src="/landing/buzz-wordmark.png"
-              />
+              <div className="flex items-center justify-center gap-4">
+                <SnowmanMark className="h-20 w-20" />
+                <span className="text-left text-4xl font-semibold tracking-tight sm:text-5xl">
+                  {COMMAND_CENTER_NAME}
+                </span>
+              </div>
               <p className="mt-2 max-w-[560px] text-center text-2xl font-normal leading-none text-foreground">
-                Your people, your agents, your projects —<br />
-                all in one place.
+                {PRODUCT_TAGLINE}
               </p>
               {error ? (
                 <p className="mt-4 text-sm text-destructive">{error}</p>
@@ -187,7 +192,7 @@ export function MachineOnboardingFlow({
                 <p className="mt-5 max-w-[440px] text-sm leading-6 text-foreground/80">
                   {identityLost
                     ? "Your identity is no longer in the system keyring. Re-import your nsec to restore it."
-                    : "If you already have a Buzz account, enter your private key below to get started."}
+                    : "If you already have a Snowman account, enter your private key below to get started."}
                 </p>
               </div>
               <div className="buzz-onboarding-key-import-position w-full">

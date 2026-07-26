@@ -3,8 +3,9 @@ import { TerminalSquare } from "lucide-react";
 
 import type { AcpRuntimeCatalogEntry } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
+import { COMMAND_CENTER_NAME } from "@/shared/product/identity.generated";
 import { useTheme } from "@/shared/theme/ThemeProvider";
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
+import { SnowmanMark } from "@/shared/ui/snowman-logo/SnowmanMark";
 import chatgptLogoUrl from "../assets/harness-logos/chatgpt.png?inline";
 import claudeLogoUrl from "../assets/harness-logos/claude.png?inline";
 import gooseLogoUrl from "../assets/harness-logos/goose.png?inline";
@@ -22,7 +23,7 @@ function isBuzzRuntime(runtime: AcpRuntimeCatalogEntry): boolean {
 export function getRuntimeDisplayLabel(
   runtime: AcpRuntimeCatalogEntry,
 ): string {
-  return isBuzzRuntime(runtime) ? "Buzz" : runtime.label;
+  return isBuzzRuntime(runtime) ? COMMAND_CENTER_NAME : runtime.label;
 }
 
 function getRuntimeLogoUrl(runtime: AcpRuntimeCatalogEntry): string | null {
@@ -43,7 +44,7 @@ export function RuntimeIcon({
   const shouldForceForegroundColor = !runtimeLogoUrl && runtime.id === "goose";
 
   if (isBuzzRuntime(runtime)) {
-    return <BuzzMark className="h-7 w-10 text-foreground" />;
+    return <SnowmanMark className="h-7 w-10 text-foreground" />;
   }
 
   if (imageUrl && !imageFailed) {

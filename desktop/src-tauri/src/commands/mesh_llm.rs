@@ -43,7 +43,7 @@ fn load_mesh_sharing_config(app: &AppHandle) -> Result<Option<MeshSharingConfig>
 }
 
 const RELAY_MESH_RUNTIME_NO_TARGET: &str =
-    "Buzz shared compute requires a live serving member; start serving the selected model on a member, then try again";
+    "Snowman shared compute requires a live serving member; start serving the selected model on a member, then try again";
 
 /// Whether the Share-compute "stop sharing" path (`mesh_stop_node`) should tear
 /// down the runtime currently occupying the single slot.
@@ -251,14 +251,14 @@ fn mesh_readiness_failure_message(
 ) -> String {
     match failure {
         MeshReadinessFailure::CatalogNeverSynced => format!(
-            "Buzz shared compute connected to the serving member but could not sync \
+            "Snowman shared compute connected to the serving member but could not sync \
              the model list for \"{model_id}\" — this is a network path problem \
              between this machine and the host (the compute node is reachable for \
              pings but the model-sync stream did not establish). Try again, or have \
              the host and this machine on a more direct network. (last: {last_detail})"
         ),
         MeshReadinessFailure::RoutingNeverCompleted => format!(
-            "Buzz shared compute found \"{model_id}\" on a serving member but inference \
+            "Snowman shared compute found \"{model_id}\" on a serving member but inference \
              requests did not complete — the host is discoverable but not currently \
              reachable for requests. Try again shortly. (last: {last_detail})"
         ),
@@ -403,7 +403,7 @@ pub(crate) async fn ensure_client_node_for_model(
     };
     let mut runtime = state.mesh_llm_runtime.lock().await;
     if runtime.is_some() {
-        return Err("mesh node changed while starting Buzz shared compute client".to_string());
+        return Err("mesh node changed while starting Snowman shared compute client".to_string());
     }
     let started = mesh_llm::DesktopMeshRuntime::start(start)
         .await
@@ -510,13 +510,13 @@ pub(crate) async fn ensure_relay_mesh_for_record(
             mesh_llm::MeshRuntimeRecovery::Evicted | mesh_llm::MeshRuntimeRecovery::Absent => {}
             mesh_llm::MeshRuntimeRecovery::Debouncing => {
                 return Err(
-                    "Buzz shared compute ingress is temporarily unresponsive; recovery is already scheduled. Try again shortly."
+                    "Snowman shared compute ingress is temporarily unresponsive; recovery is already scheduled. Try again shortly."
                         .to_string(),
                 );
             }
             mesh_llm::MeshRuntimeRecovery::ReleasePending => {
                 return Err(
-                    "Buzz shared compute is still shutting down its previous local ingress. Try again shortly."
+                    "Snowman shared compute is still shutting down its previous local ingress. Try again shortly."
                         .to_string(),
                 );
             }
@@ -526,7 +526,7 @@ pub(crate) async fn ensure_relay_mesh_for_record(
             mesh_llm::MeshRuntimeRecovery::RestartRequired => {
                 app.request_restart();
                 return Err(
-                    "Buzz shared compute startup lost its local ingress before shutdown control became available. Buzz is restarting to recover it."
+                    "Snowman shared compute startup lost its local ingress before shutdown control became available. Snowman Command Center is restarting to recover it."
                         .to_string(),
                 );
             }
@@ -536,13 +536,13 @@ pub(crate) async fn ensure_relay_mesh_for_record(
         Ok(Some(target)) => target,
         Ok(None) => {
             return Err(
-                "Buzz shared compute cannot start because no live member is serving this model. Start serving it on a member, then try again."
+                "Snowman shared compute cannot start because no live member is serving this model. Start serving it on a member, then try again."
                     .to_string(),
             );
         }
         Err(error) => {
             return Err(format!(
-                "could not refresh Buzz shared compute serving members: {error}"
+                "could not refresh Snowman shared compute serving members: {error}"
             ));
         }
     };
@@ -823,7 +823,7 @@ mod tests {
     ///
     /// Before this change, `ensure_client_node_for_model` hard-errored whenever
     /// the running runtime was in `Serve` mode ("stop sharing before using
-    /// Buzz shared compute as a client"). That forbade exactly what a user should be
+    /// Snowman shared compute as a client"). That forbade exactly what a user should be
     /// able to do: host model A while pointing an agent at a different model B
     /// through the same `9337` ingress.
     ///
