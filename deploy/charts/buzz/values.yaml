@@ -116,6 +116,7 @@ relay:
   # identity has been seeded and the Snowman model gateway is deployed.
   snowmanWorkforce:
     enabled: false
+    workerApiEnabled: false
     leadServiceIdentityId: ""
     modelGatewayUrl: ""
     planningModelId: ""

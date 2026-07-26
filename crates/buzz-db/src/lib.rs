@@ -2973,6 +2973,66 @@ impl Db {
         workforce::append_work_event(&self.pool, community, event).await
     }
 
+    /// Idempotently claim the next task for one tenant-bound service identity.
+    pub async fn claim_next_work_task(
+        &self,
+        community: CommunityId,
+        worker_identity_id: Uuid,
+        claim_id: Uuid,
+        lease_token_sha256: [u8; 32],
+        lease_duration: chrono::Duration,
+    ) -> Result<Option<workforce::LeasedWorkTask>> {
+        workforce::claim_next_work_task(
+            &self.pool,
+            community,
+            worker_identity_id,
+            claim_id,
+            lease_token_sha256,
+            lease_duration,
+        )
+        .await
+    }
+
+    /// Heartbeat a live task under its exact fenced lease.
+    pub async fn heartbeat_work_task(
+        &self,
+        community: CommunityId,
+        task_id: Uuid,
+        worker_identity_id: Uuid,
+        generation: i64,
+        lease_token_sha256: [u8; 32],
+        lease_duration: chrono::Duration,
+    ) -> Result<bool> {
+        workforce::heartbeat_work_task(
+            &self.pool,
+            community,
+            task_id,
+            worker_identity_id,
+            generation,
+            lease_token_sha256,
+            lease_duration,
+        )
+        .await
+    }
+
+    /// Finish a task only while its current fenced lease remains live.
+    pub async fn finish_work_task(
+        &self,
+        community: CommunityId,
+        completion: &workforce::WorkTaskCompletion,
+    ) -> Result<bool> {
+        workforce::finish_work_task(&self.pool, community, completion).await
+    }
+
+    /// Record one provider/model operation against hard request budgets.
+    pub async fn record_work_spend(
+        &self,
+        community: CommunityId,
+        entry: &workforce::SpendEntry,
+    ) -> Result<()> {
+        workforce::record_work_spend(&self.pool, community, entry).await
+    }
+
     /// Returns all relay members of `community` ordered by `created_at` ascending.
     pub async fn list_relay_members(
         &self,

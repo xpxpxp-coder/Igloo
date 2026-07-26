@@ -140,6 +140,11 @@ pub struct Config {
     /// a tenant-bound lead service identity, and a Snowman-only model gateway.
     pub snowman_workforce: Option<SnowmanWorkforceConfig>,
 
+    /// Enable private worker claim/heartbeat/spend/finish routes. Public relay
+    /// deployments keep this false; a separately addressed private service may
+    /// enable it after network and service-identity controls are active.
+    pub snowman_workforce_worker_api_enabled: bool,
+
     /// Whether this deployment can serve huddle (voice) audio.
     ///
     /// Huddle audio frames are relayed peer-to-peer *within a single pod*
@@ -604,6 +609,14 @@ impl Config {
         } else {
             None
         };
+        let snowman_workforce_worker_api_enabled =
+            parse_bool("SNOWMAN_WORKFORCE_WORKER_API_ENABLED", false)?;
+        if snowman_workforce_worker_api_enabled && snowman_workforce.is_none() {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_WORKFORCE_WORKER_API_ENABLED=true requires SNOWMAN_WORKFORCE_API_ENABLED=true"
+                    .to_string(),
+            ));
+        }
 
         // Defaults true → single-pod (N=1) keeps today's huddle behavior. A
         // horizontally-scaled deployment sets this false; see the field doc.
@@ -1013,6 +1026,7 @@ impl Config {
             snowman_role_scopes,
             snowman_workforce_identity_required,
             snowman_workforce,
+            snowman_workforce_worker_api_enabled,
             huddle_audio_available,
             mesh,
             mesh_demo_echo,
@@ -1075,6 +1089,10 @@ mod tests {
         assert!(
             !config.require_relay_membership,
             "require_relay_membership should default to false"
+        );
+        assert!(
+            !config.snowman_workforce_worker_api_enabled,
+            "private Snowman worker API should default to false"
         );
         assert!(
             config.relay_owner_pubkey.is_none(),

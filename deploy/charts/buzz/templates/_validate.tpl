@@ -80,6 +80,9 @@ surface at template time regardless of which manifest helm renders first.
     {{- fail "relay.snowmanWorkforce.planningModelId is required when workforce intake is enabled" -}}
   {{- end -}}
 {{- end -}}
+{{- if and .Values.relay.snowmanWorkforce.workerApiEnabled (not .Values.relay.snowmanWorkforce.enabled) -}}
+  {{- fail "relay.snowmanWorkforce.workerApiEnabled=true requires relay.snowmanWorkforce.enabled=true" -}}
+{{- end -}}
 
 {{/* ownerPubkey format check */}}
 {{- if .Values.ownerPubkey -}}

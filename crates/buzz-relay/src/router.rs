@@ -80,6 +80,22 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             get(api::workforce::get_work_request),
         )
         .route(
+            "/internal/snowman/v1/workforce/tasks/claim",
+            post(api::workforce::claim_work_task),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/heartbeat",
+            post(api::workforce::heartbeat_work_task),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/spend",
+            post(api::workforce::record_work_spend),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/finish",
+            post(api::workforce::finish_work_task),
+        )
+        .route(
             "/operator/communities",
             get(api::operator::list_owned_communities).post(api::operator::provision_community),
         )

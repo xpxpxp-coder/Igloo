@@ -63,5 +63,31 @@ requires all of the following:
 - `SNOWMAN_PLANNING_MODEL_ID` from the evaluated model catalog.
 
 The Helm chart keeps intake disabled by default until that identity and gateway
-exist. AWS workers, scheduler, sandbox, private worker API, plan persistence,
-cancellation, approvals, and staged failure evidence remain open launch gates.
+exist. AWS workers, scheduler, sandbox, private worker network deployment and
+runtime proof, plan persistence, cancellation, approvals, and staged failure
+evidence remain open launch gates.
+
+## Private worker control path
+
+Source support now exists for a separately addressed private worker service:
+
+| Route | Behavior |
+| --- | --- |
+| `POST /internal/snowman/v1/workforce/tasks/claim` | Idempotently leases the next task assigned to the authenticated service identity. |
+| `POST /internal/snowman/v1/workforce/tasks/{task_id}/heartbeat` | Renews only the matching live fencing generation and bearer lease. |
+| `POST /internal/snowman/v1/workforce/tasks/{task_id}/spend` | Records an actor-, task-, request-, model-, and provider-receipt-bound ledger entry under hard caps. |
+| `POST /internal/snowman/v1/workforce/tasks/{task_id}/finish` | Atomically records a terminal result and hash-chain evidence event under the current lease. |
+
+Every route requires a live `service` workforce binding and the exact
+`workforce.tasks.execute` capability. Task claim also rechecks all task-specific
+capabilities in PostgreSQL. A worker-generated `claim_id` and a deterministic,
+domain-separated relay HMAC make lost claim responses retryable without a
+second lease. Lease tokens are stored only as SHA-256 digests. Spend and finish
+operations are idempotent and reject stale fencing generations.
+
+`SNOWMAN_WORKFORCE_WORKER_API_ENABLED` defaults false independently of public
+intake. Production public relay tasks must keep it false. Only a private
+Cloudflare/AWS-addressed service with security-group/edge restrictions may turn
+it on; signed service identity remains required even on that private network.
+The API foundation does not itself constitute the AWS worker, model gateway,
+sandbox, scheduler, or staged execution proof.

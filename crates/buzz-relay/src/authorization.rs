@@ -19,7 +19,7 @@ pub async fn require_workforce_capability(
     community: CommunityId,
     pubkey: &nostr::PublicKey,
     capability: &str,
-    human_only: bool,
+    required_identity_type: Option<&str>,
 ) -> Result<buzz_db::workforce_identity::WorkforcePrincipal, String> {
     if !state.config.snowman_workforce_identity_required {
         return Err("Snowman workforce identity enforcement is disabled".to_string());
@@ -30,8 +30,8 @@ pub async fn require_workforce_capability(
         .await
         .map_err(|error| format!("workforce identity lookup failed: {error}"))?
         .ok_or_else(|| "relay key has no active Snowman workforce binding".to_string())?;
-    if human_only && principal.identity_type != "human" {
-        return Err("this workforce operation requires a live human session".to_string());
+    if required_identity_type.is_some_and(|required| principal.identity_type != required) {
+        return Err("workforce identity type is not authorized for this operation".to_string());
     }
     if !principal
         .capabilities

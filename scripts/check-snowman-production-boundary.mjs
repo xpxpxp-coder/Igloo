@@ -28,6 +28,7 @@ const runtimeAuthorityFiles = [
   "migrations/0025_snowman_workforce.sql",
   "migrations/0026_snowman_workforce_identity.sql",
   "migrations/0027_snowman_workforce_request_contract.sql",
+  "migrations/0028_snowman_workforce_claim_idempotency.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -217,6 +218,21 @@ requireFragment(
   "crates/buzz-relay/src/api/workforce.rs",
   '"workforce.requests.create"',
   "workforce request intake must require an exact human capability",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  "snowman_workforce_worker_api_enabled",
+  "private worker routes must remain independently disabled on public relay tasks",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  '"workforce.tasks.execute"',
+  "private worker routes must require an exact service capability",
+);
+requireFragment(
+  "migrations/0028_snowman_workforce_claim_idempotency.sql",
+  "idx_snowman_task_leases_worker_claim",
+  "worker lease claims must be idempotent across lost responses",
 );
 requireFragment(
   "crates/buzz-relay/src/api/workforce.rs",

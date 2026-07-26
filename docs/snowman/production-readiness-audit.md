@@ -59,6 +59,8 @@ the highest risks without changing the production-readiness verdict:
 - a versioned human request/status API that derives tenant and actor authority
   server-side, requires exact workforce capabilities, creates only a bounded
   planning task, and exposes metadata-only hash-chain evidence;
+- independently disabled private service-identity routes for idempotent claim,
+  fenced heartbeat, lease-bound spend, and atomic terminal evidence; and
 - Snowman-only model, update, release, pairing, push, image, and workflow
   destination enforcement with an automated production-boundary scanner;
 - default-off agent shell/network access, workspace containment, ambient secret

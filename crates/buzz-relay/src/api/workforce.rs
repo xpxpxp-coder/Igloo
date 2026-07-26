@@ -12,13 +12,16 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Json,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use buzz_db::workforce::{NewWorkRequest, NewWorkTask};
+use buzz_auth::LimitType;
+use buzz_db::workforce::{NewWorkRequest, NewWorkTask, SpendEntry, WorkTaskCompletion};
 
 use crate::{authorization, state::AppState};
 
@@ -33,6 +36,10 @@ const DEFAULT_MAX_INPUT_TOKENS: i64 = 2_000_000;
 const MAX_INPUT_TOKENS: i64 = 20_000_000;
 const DEFAULT_MAX_OUTPUT_TOKENS: i64 = 500_000;
 const MAX_OUTPUT_TOKENS: i64 = 5_000_000;
+const WORKER_PATH: &str = "/internal/snowman/v1/workforce";
+const LEASE_SECONDS: i64 = 120;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Bounded, metadata-only objective accepted from an authorized human.
 #[derive(Debug, Deserialize)]
@@ -55,6 +62,49 @@ struct CreateWorkRequest {
     context_references: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClaimWorkTask {
+    claim_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LeaseProof {
+    generation: i64,
+    lease_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordSpendRequest {
+    generation: i64,
+    lease_token: String,
+    ledger_entry_id: Uuid,
+    request_id: Uuid,
+    model_id: String,
+    input_tokens: i64,
+    output_tokens: i64,
+    cost_microusd: i64,
+    provider_receipt_sha256: String,
+    recorded_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FinishWorkTaskRequest {
+    generation: i64,
+    lease_token: String,
+    completion_id: Uuid,
+    succeeded: bool,
+    result_sha256: String,
+    #[serde(default)]
+    artifact_references: Vec<String>,
+    #[serde(default)]
+    failure_code: Option<String>,
+    occurred_at: DateTime<Utc>,
+}
+
 fn default_classification() -> String {
     "confidential".to_string()
 }
@@ -75,13 +125,14 @@ const fn default_true() -> bool {
     true
 }
 
-async fn authenticate_human(
+async fn authenticate_principal(
     state: &Arc<AppState>,
     headers: &HeaderMap,
     method: &str,
     path: &str,
     body: Option<&[u8]>,
     capability: &str,
+    required_identity_type: &str,
 ) -> Result<
     (
         buzz_core::TenantContext,
@@ -109,7 +160,6 @@ async fn authenticate_human(
         body.is_some(),
     )?;
     bridge::check_nip98_replay(state, &tenant, event_id).await?;
-    bridge::enforce_http_admission(state, &tenant, &pubkey).await?;
     relay_members::enforce_relay_membership(state, tenant.community(), pubkey.as_bytes(), None)
         .await?;
     let principal = authorization::require_workforce_capability(
@@ -117,14 +167,49 @@ async fn authenticate_human(
         tenant.community(),
         &pubkey,
         capability,
-        true,
+        Some(required_identity_type),
     )
     .await
     .map_err(|error| {
         tracing::warn!(community = %tenant.community(), %error, "workforce API authorization denied");
         api_error(StatusCode::FORBIDDEN, "workforce operation is not authorized")
     })?;
+    enforce_workforce_admission(state, &tenant, &pubkey, &principal.identity_type).await?;
     Ok((tenant, principal))
+}
+
+async fn enforce_workforce_admission(
+    state: &AppState,
+    tenant: &buzz_core::TenantContext,
+    pubkey: &nostr::PublicKey,
+    identity_type: &str,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let limits = &state.auth.config().rate_limits;
+    let limit = if identity_type == "service" {
+        limits.agent_standard_api_calls_per_min
+    } else {
+        limits.human_api_calls_per_min
+    };
+    match crate::admission::check_principal(
+        state.admission_rate_limiter.as_ref(),
+        tenant,
+        pubkey,
+        LimitType::ApiCalls,
+        60,
+        limit,
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(crate::admission::AdmissionError::Exceeded { reset_in_secs }) => Err(api_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            &format!("workforce API quota exceeded; retry in {reset_in_secs}s"),
+        )),
+        Err(crate::admission::AdmissionError::Unavailable) => Err(api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "workforce admission control is unavailable",
+        )),
+    }
 }
 
 /// Accept one idempotent user objective and enqueue its governed planning task.
@@ -133,13 +218,14 @@ pub async fn create_work_request(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let (tenant, principal) = authenticate_human(
+    let (tenant, principal) = authenticate_principal(
         &state,
         &headers,
         "POST",
         CREATE_PATH,
         Some(&body),
         "workforce.requests.create",
+        "human",
     )
     .await?;
     let mut input: CreateWorkRequest = serde_json::from_slice(&body)
@@ -296,13 +382,14 @@ pub async fn get_work_request(
     headers: HeaderMap,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let path = format!("{CREATE_PATH}/{request_id}");
-    let (tenant, _) = authenticate_human(
+    let (tenant, _) = authenticate_principal(
         &state,
         &headers,
         "GET",
         &path,
         None,
         "workforce.requests.read",
+        "human",
     )
     .await?;
     let status = state
@@ -315,6 +402,350 @@ pub async fn get_work_request(
         "schema_version": "snowman.work.request.status.v1",
         "request": status,
     })))
+}
+
+/// Idempotently lease the next task assigned to the authenticated service identity.
+pub async fn claim_work_task(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/tasks/claim");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.tasks.execute",
+        "service",
+    )
+    .await?;
+    let input: ClaimWorkTask = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid task claim JSON"))?;
+    if input.claim_id.is_nil() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "claim_id must be non-nil",
+        ));
+    }
+    let lease_token = derive_lease_token(
+        &state.relay_keypair,
+        tenant.community().as_uuid(),
+        principal.identity_id,
+        input.claim_id,
+    );
+    let lease_token_sha256: [u8; 32] = Sha256::digest(lease_token).into();
+    let task = state
+        .db
+        .claim_next_work_task(
+            tenant.community(),
+            principal.identity_id,
+            input.claim_id,
+            lease_token_sha256,
+            Duration::seconds(LEASE_SECONDS),
+        )
+        .await
+        .map_err(|_| internal_error("workforce task claim failed"))?;
+    let Some(task) = task else {
+        return Ok(Json(json!({
+            "schema_version": "snowman.work.lease.v1",
+            "task": null,
+            "retry_after_seconds": 15,
+        })));
+    };
+    metrics::counter!("snowman_workforce_task_claims_total", "outcome" => "leased").increment(1);
+    Ok(Json(json!({
+        "schema_version": "snowman.work.lease.v1",
+        "lease_token": URL_SAFE_NO_PAD.encode(lease_token),
+        "lease_generation": task.lease_generation,
+        "lease_expires_at": task.lease_expires_at,
+        "task": {
+            "request_id": task.request_id,
+            "task_id": task.task_id,
+            "claim_id": task.claim_id,
+            "objective": task.objective,
+            "request_contract_sha256": hex::encode(task.request_contract_sha256),
+            "classification": task.classification,
+            "request_deadline_at": task.request_deadline_at,
+            "max_cost_microusd": task.max_cost_microusd,
+            "max_input_tokens": task.max_input_tokens,
+            "max_output_tokens": task.max_output_tokens,
+            "specialist_role": task.specialist_role,
+            "required_capabilities": task.required_capabilities,
+            "model_gateway_route": task.model_gateway_route,
+            "model_id": task.model_id,
+            "execution_snapshot_sha256": hex::encode(task.execution_snapshot_sha256),
+            "expected_artifact_contract": task.expected_artifact_contract,
+            "context_packet_id": task.context_packet_id,
+            "risk_tier": task.risk_tier,
+            "reversible": task.reversible,
+            "approval_required": task.approval_required,
+        }
+    })))
+}
+
+/// Renew one live lease without changing its fencing generation.
+pub async fn heartbeat_work_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/tasks/{task_id}/heartbeat");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.tasks.execute",
+        "service",
+    )
+    .await?;
+    let proof: LeaseProof = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid lease heartbeat JSON"))?;
+    let token_sha256 = decode_lease_token(&proof.lease_token)?;
+    let renewed = state
+        .db
+        .heartbeat_work_task(
+            tenant.community(),
+            task_id,
+            principal.identity_id,
+            proof.generation,
+            token_sha256,
+            Duration::seconds(LEASE_SECONDS),
+        )
+        .await
+        .map_err(|_| internal_error("workforce heartbeat failed"))?;
+    if !renewed {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "task lease is stale, expired, or owned by another worker",
+        ));
+    }
+    Ok(Json(json!({
+        "schema_version": "snowman.work.heartbeat.v1",
+        "task_id": task_id,
+        "lease_generation": proof.generation,
+        "lease_expires_in_seconds": LEASE_SECONDS,
+    })))
+}
+
+/// Charge one idempotent model operation to the request's hard spend ledger.
+pub async fn record_work_spend(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/tasks/{task_id}/spend");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.tasks.execute",
+        "service",
+    )
+    .await?;
+    let input: RecordSpendRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid spend receipt JSON"))?;
+    if input.generation <= 0
+        || input.ledger_entry_id.is_nil()
+        || input.request_id.is_nil()
+        || input.model_id.trim().is_empty()
+        || input.model_id.len() > 256
+        || input.input_tokens < 0
+        || input.output_tokens < 0
+        || input.cost_microusd < 0
+        || !is_recent_worker_time(input.recorded_at)
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "spend receipt has invalid identity, usage, model, or time fields",
+        ));
+    }
+    let token_sha256 = decode_lease_token(&input.lease_token)?;
+    let receipt = parse_sha256(&input.provider_receipt_sha256, "provider_receipt_sha256")?;
+    let entry = SpendEntry {
+        ledger_entry_id: input.ledger_entry_id,
+        request_id: input.request_id,
+        task_id,
+        worker_identity_id: principal.identity_id,
+        lease_generation: input.generation,
+        lease_token_sha256: token_sha256,
+        model_id: input.model_id,
+        input_tokens: input.input_tokens,
+        output_tokens: input.output_tokens,
+        cost_microusd: input.cost_microusd,
+        provider_receipt_sha256: receipt,
+        recorded_at: input.recorded_at,
+    };
+    state
+        .db
+        .record_work_spend(tenant.community(), &entry)
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "spend receipt violates task or budget policy",
+            ),
+            _ => internal_error("workforce spend persistence failed"),
+        })?;
+    Ok(Json(json!({
+        "schema_version": "snowman.work.spend-recorded.v1",
+        "ledger_entry_id": entry.ledger_entry_id,
+        "task_id": task_id,
+    })))
+}
+
+/// Atomically finish a task and append its terminal hash-chain evidence event.
+pub async fn finish_work_task(
+    State(state): State<Arc<AppState>>,
+    Path(task_id): Path<Uuid>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_worker_api(&state)?;
+    let path = format!("{WORKER_PATH}/tasks/{task_id}/finish");
+    let (tenant, principal) = authenticate_principal(
+        &state,
+        &headers,
+        "POST",
+        &path,
+        Some(&body),
+        "workforce.tasks.execute",
+        "service",
+    )
+    .await?;
+    let input: FinishWorkTaskRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid task completion JSON"))?;
+    if task_id.is_nil()
+        || input.completion_id.is_nil()
+        || input.generation <= 0
+        || !is_recent_worker_time(input.occurred_at)
+        || input.artifact_references.len() > MAX_CONTEXT_REFS
+        || input
+            .artifact_references
+            .iter()
+            .any(|reference| !is_context_reference(reference))
+        || input.failure_code.as_ref().is_some_and(|code| {
+            code.is_empty()
+                || code.len() > 128
+                || !code.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+                })
+        })
+        || (input.succeeded && input.failure_code.is_some())
+        || (input.succeeded && input.artifact_references.is_empty())
+        || (!input.succeeded && input.failure_code.is_none())
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "task result contains invalid evidence references or failure code",
+        ));
+    }
+    let completion = WorkTaskCompletion {
+        completion_id: input.completion_id,
+        task_id,
+        worker_identity_id: principal.identity_id,
+        generation: input.generation,
+        lease_token_sha256: decode_lease_token(&input.lease_token)?,
+        succeeded: input.succeeded,
+        result_payload: json!({
+            "result_sha256": hex::encode(parse_sha256(&input.result_sha256, "result_sha256")?),
+            "artifact_references": input.artifact_references,
+            "failure_code": input.failure_code,
+        }),
+        occurred_at: input.occurred_at,
+    };
+    let finished = state
+        .db
+        .finish_work_task(tenant.community(), &completion)
+        .await
+        .map_err(|error| match error {
+            buzz_db::DbError::AccessDenied(_) | buzz_db::DbError::InvalidData(_) => api_error(
+                StatusCode::CONFLICT,
+                "task completion violates evidence policy",
+            ),
+            _ => internal_error("workforce completion persistence failed"),
+        })?;
+    if !finished {
+        return Err(api_error(
+            StatusCode::CONFLICT,
+            "task lease is stale, expired, or owned by another worker",
+        ));
+    }
+    Ok(Json(json!({
+        "schema_version": "snowman.work.completed.v1",
+        "task_id": task_id,
+        "completion_id": completion.completion_id,
+        "status": if completion.succeeded { "succeeded" } else { "failed" },
+    })))
+}
+
+fn require_worker_api(state: &AppState) -> Result<(), (StatusCode, Json<Value>)> {
+    if state.config.snowman_workforce_worker_api_enabled {
+        Ok(())
+    } else {
+        Err(api_error(StatusCode::NOT_FOUND, "not found"))
+    }
+}
+
+fn derive_lease_token(
+    relay_keys: &nostr::Keys,
+    community_id: &Uuid,
+    worker_identity_id: Uuid,
+    claim_id: Uuid,
+) -> [u8; 32] {
+    let mut key_hasher = Sha256::new();
+    key_hasher.update(relay_keys.secret_key().as_secret_bytes());
+    key_hasher.update(b"snowman.work.lease-key.v1\0");
+    let key: [u8; 32] = key_hasher.finalize().into();
+    let mut mac = HmacSha256::new_from_slice(&key).expect("HMAC accepts a 32-byte key");
+    mac.update(b"snowman.work.lease-token.v1\0");
+    mac.update(community_id.as_bytes());
+    mac.update(worker_identity_id.as_bytes());
+    mac.update(claim_id.as_bytes());
+    mac.finalize().into_bytes().into()
+}
+
+fn decode_lease_token(token: &str) -> Result<[u8; 32], (StatusCode, Json<Value>)> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid lease token"))?;
+    let raw: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid lease token"))?;
+    Ok(Sha256::digest(raw).into())
+}
+
+fn parse_sha256(value: &str, field: &str) -> Result<[u8; 32], (StatusCode, Json<Value>)> {
+    if value.len() != 64
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_digit() || matches!(character, 'a'..='f'))
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            &format!("{field} must be a lowercase SHA-256 digest"),
+        ));
+    }
+    let bytes = hex::decode(value)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid SHA-256 digest"))?;
+    bytes
+        .try_into()
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid SHA-256 digest"))
+}
+
+fn is_recent_worker_time(value: DateTime<Utc>) -> bool {
+    let now = Utc::now();
+    value >= now - Duration::days(30) && value <= now + Duration::minutes(5)
 }
 
 fn validate_input(input: &CreateWorkRequest) -> Result<(), (StatusCode, Json<Value>)> {
@@ -511,5 +942,24 @@ mod tests {
             "planner-v1",
         );
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn lease_tokens_are_deterministic_and_claim_bound() {
+        let keys = nostr::Keys::generate();
+        let tenant = Uuid::new_v4();
+        let worker = Uuid::new_v4();
+        let claim = Uuid::new_v4();
+        let first = derive_lease_token(&keys, &tenant, worker, claim);
+        let replay = derive_lease_token(&keys, &tenant, worker, claim);
+        let different = derive_lease_token(&keys, &tenant, worker, Uuid::new_v4());
+        assert_eq!(first, replay);
+        assert_ne!(first, different);
+    }
+
+    #[test]
+    fn evidence_digests_are_canonical_lowercase() {
+        assert!(parse_sha256(&"a".repeat(64), "digest").is_ok());
+        assert!(parse_sha256(&"A".repeat(64), "digest").is_err());
     }
 }
