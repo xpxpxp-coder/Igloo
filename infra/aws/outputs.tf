@@ -19,6 +19,9 @@ output "production_boundary" {
     workforce_private_hostnames           = sort(tolist(var.workforce_private_hostnames))
     workforce_api_enabled                 = var.workforce_api_enabled
     workforce_worker_api_enabled          = var.workforce_worker_api_enabled
+    workforce_community_id                = var.workforce_community_id
+    workforce_community_host              = var.workforce_community_host
+    workforce_model_route_count           = length(var.workforce_model_routes)
     analyst_event_api_enabled             = var.analyst_event_api_enabled
     model_gateway_desired_count           = var.model_gateway_desired_count
     model_gateway_private_ingress_enabled = var.model_gateway_private_ingress_enabled

@@ -200,6 +200,18 @@ data "aws_iam_policy_document" "bootstrap_task" {
     ]
     resources = [aws_secretsmanager_secret.relay_runtime.arn]
   }
+  dynamic "statement" {
+    for_each = local.workforce_bootstrap_enabled ? [1] : []
+    content {
+      sid    = "ReconcileExactWorkforceIdentitySecrets"
+      effect = "Allow"
+      actions = [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+      ]
+      resources = local.workforce_identity_secret_arns
+    }
+  }
   statement {
     sid    = "SecretEncryptionOnlyThroughSecretsManager"
     effect = "Allow"
@@ -259,6 +271,7 @@ resource "aws_ecs_task_definition" "bootstrap" {
         { name = "SNOWMAN_RDS_MASTER_SECRET_ARN", value = aws_db_instance.postgres.master_user_secret[0].secret_arn },
         { name = "SNOWMAN_RELAY_RUNTIME_SECRET_ARN", value = aws_secretsmanager_secret.relay_runtime.arn },
         { name = "SNOWMAN_RUNTIME_DB_ROLE", value = "snowman_relay_runtime" },
+        { name = "SNOWMAN_WORKFORCE_BOOTSTRAP_MANIFEST", value = local.workforce_bootstrap_manifest },
       ]
       logConfiguration = {
         logDriver = "awslogs"

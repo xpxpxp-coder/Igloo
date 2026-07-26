@@ -79,9 +79,11 @@ record, not a client-side API key or direct vendor CLI.
   service, and exact roles now exist but are hard-dormant under layered zero-count
   preconditions. A separate one-shot
   bootstrap task now runs embedded migrations, reconciles a no-DDL/DML-only
-  serving role, generates relay/HMAC material outside Terraform, verifies the
-  serving identity, and writes only the exact KMS-encrypted runtime JSON secret.
-  Its execution still requires an enrolled Snowman owner public key and live
+  serving role, generates relay/HMAC material outside Terraform, and applies a
+  strict tenant service-workforce/model manifest. It generates each agent key
+  only in its exact Secrets Manager container, stores only public bindings and
+  fixed role grants in PostgreSQL, and records a secret-free manifest digest.
+  Its execution still requires a Snowman-controlled owner public key and live
   staging evidence. A default-off Cloudflare-CIDR plus Snowman-specific mTLS,
   exact-host WAF, governed-log ALB edge now exists in source and passes dormant,
   enabled-edge, and production-HA mock plans; its Cloudflare certificate/DNS and
@@ -130,9 +132,10 @@ record, not a client-side API key or direct vendor CLI.
   per role, and fences spend/completion. An identity-isolated durable worker now
   claims and heartbeats tasks, commits the default specialist/reviewer DAG,
   dispatches exact model-bound Analyst commands, polls verified status, publishes
-  context manifests, and completes from immutable artifact evidence. Provisioned
-  identities/catalog rows, capability-specific Analyst executors, AWS execution,
-  and staged proof are still required end to end.
+  context manifests, and completes from immutable artifact evidence. The
+  one-shot provisioning path for identities, exact grants, team secrets, and
+  evaluated catalog rows now exists; capability-specific Analyst executors,
+  live AWS execution, and staged proof are still required end to end.
 - A default-off, tenant-bound Analyst event ingress now verifies strict
   asymmetric KMS service assertions, rejects unknown or scope-mismatched fields,
   consumes replay nonces transactionally, stores only minimized lifecycle

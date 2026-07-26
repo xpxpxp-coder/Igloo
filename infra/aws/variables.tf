@@ -203,12 +203,32 @@ variable "workforce_lead_identity_id" {
   }
 }
 
+variable "workforce_community_id" {
+  type        = string
+  description = "Exact Command Center community receiving the governed service identities and model catalog."
+  default     = ""
+  validation {
+    condition     = var.workforce_community_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", var.workforce_community_id))
+    error_message = "workforce_community_id must be empty or a lowercase non-nil UUID."
+  }
+}
+
+variable "workforce_community_host" {
+  type        = string
+  description = "Exact lower-case Snowman host bound to the governed workforce community."
+  default     = ""
+  validation {
+    condition     = var.workforce_community_host == "" || can(regex("^(([a-z0-9]|[a-z0-9][a-z0-9-]{0,61}[a-z0-9])\\.)*snowmanai\\.org$", var.workforce_community_host))
+    error_message = "workforce_community_host must be empty or an exact lower-case Snowman hostname."
+  }
+}
+
 variable "workforce_model_gateway_url" {
   type        = string
   description = "Snowman-only model gateway used for governed workforce model selection."
   default     = ""
   validation {
-    condition     = var.workforce_model_gateway_url == "" || can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?(/[^?#]*)?$", var.workforce_model_gateway_url))
+    condition     = var.workforce_model_gateway_url == "" || (var.workforce_model_gateway_url == lower(var.workforce_model_gateway_url) && can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?(/[^?#]*)?$", var.workforce_model_gateway_url)))
     error_message = "workforce_model_gateway_url must be empty or an exact Snowman HTTPS URL."
   }
 }
@@ -268,6 +288,9 @@ variable "workforce_profiles" {
   type = map(object({
     desired_count             = number
     identity_id               = string
+    display_name              = string
+    specialist_role           = string
+    model_override            = optional(string)
     relay_url                 = string
     analyst_endpoint          = string
     analyst_service_principal = string
@@ -283,6 +306,9 @@ variable "workforce_profiles" {
       can(regex("^[a-z][a-z0-9-]{2,19}$", name)) &&
       profile.desired_count >= 0 && profile.desired_count <= 20 &&
       can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", profile.identity_id)) &&
+      length(trimspace(profile.display_name)) >= 1 && length(profile.display_name) <= 256 &&
+      contains(["lead", "governed_analyst", "client_delivery", "quality_risk_reviewer", "research_evidence"], profile.specialist_role) &&
+      (profile.model_override == null || (length(profile.model_override) >= 1 && length(profile.model_override) <= 256 && !strcontains(profile.model_override, "://"))) &&
       can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org$", profile.relay_url)) &&
       can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org$", profile.analyst_endpoint)) &&
       can(regex("^[A-Za-z0-9][A-Za-z0-9._:/-]{2,199}$", profile.analyst_service_principal)) &&
@@ -290,6 +316,38 @@ variable "workforce_profiles" {
       profile.tenant_id == profile.client_id
     ])
     error_message = "Every workforce profile must be a bounded, tenant-consistent Snowman HTTPS identity definition."
+  }
+}
+
+variable "workforce_model_routes" {
+  description = "Evaluated tenant model catalog. Map keys are model IDs; all traffic stays behind the Snowman model gateway."
+  type = map(object({
+    suited_roles                         = set(string)
+    allowed_classifications              = set(string)
+    quality_score                        = number
+    latency_score                        = number
+    max_cost_microusd_per_million_tokens = number
+    max_context_tokens                   = number
+    evaluation_evidence_sha256           = string
+    evaluated_at                         = string
+  }))
+  default = {}
+  validation {
+    condition = alltrue([
+      for model_id, route in var.workforce_model_routes :
+      length(model_id) >= 1 && length(model_id) <= 256 && !strcontains(model_id, "://") &&
+      length(route.suited_roles) >= 1 && length(route.suited_roles) <= 16 &&
+      alltrue([for role in route.suited_roles : contains(["lead", "client_delivery", "research_evidence", "governed_analyst", "quality_risk_reviewer", "deadline_operations"], role)]) &&
+      length(route.allowed_classifications) >= 1 && length(route.allowed_classifications) <= 3 &&
+      alltrue([for value in route.allowed_classifications : contains(["internal", "confidential", "restricted"], value)]) &&
+      route.quality_score >= 0 && route.quality_score <= 1000 &&
+      route.latency_score >= 0 && route.latency_score <= 1000 &&
+      route.max_cost_microusd_per_million_tokens >= 0 &&
+      route.max_context_tokens >= 1 && route.max_context_tokens <= 10000000 &&
+      can(regex("^[0-9a-f]{64}$", route.evaluation_evidence_sha256)) &&
+      can(formatdate("YYYY-MM-DD'T'hh:mm:ssZ", route.evaluated_at))
+    ])
+    error_message = "Every workforce model route must have a bounded ID, roles, classifications, scores, cost/context limits, evidence digest, and RFC3339 evaluation time."
   }
 }
 

@@ -40,6 +40,14 @@ Terraform-managed values.
 Staging uses one interface-endpoint ENI, one RDS instance, and one Valkey node;
 production expands endpoints and managed state across availability zones.
 
+The one-shot bootstrap now receives a Terraform-generated, non-secret workforce
+manifest. It creates or verifies the exact Snowman community, generates and
+preserves one service key per identity only in that identity's Secrets Manager
+container, writes the shared team map into worker secrets, reconciles exact
+role-derived grants and evaluated Snowman model routes, and records only a
+manifest digest in PostgreSQL/logs. Terraform and task definitions never contain
+private keys. A live staging bootstrap/rerun/revocation test is still required.
+
 When the workforce APIs are deliberately activated, Terraform requires the
 lead identity to match a configured worker profile plus an exact Snowman model
 gateway URL and planning-model catalog ID. Automatic capabilities remain an
@@ -66,8 +74,8 @@ root is deployable:
 
 1. ALB mutual origin authentication/WAF and proof that the Cloudflare-restricted
    origin security group has no alternate ingress path;
-2. governed database-role/key bootstrap that populates the relay runtime secret,
-   AWS Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
+2. live proof of the implemented database/runtime/workforce bootstrap; AWS
+   Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
    delivery, and tested recovery;
 3. staged recurring-trigger lost-response/restart proof and agent sandbox; pinned specialist model
    images/weights and staged activation of the separate `aws-inference`

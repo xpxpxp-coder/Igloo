@@ -132,12 +132,33 @@ class AwsFoundationContractTests(unittest.TestCase):
             'entryPoint             = ["/usr/local/bin/snowman-bootstrap"]',
             'aws_db_instance.postgres.master_user_secret[0].secret_arn',
             '"secretsmanager:PutSecretValue"',
+            'sid    = "ReconcileExactWorkforceIdentitySecrets"',
+            'resources = local.workforce_identity_secret_arns',
+            'SNOWMAN_WORKFORCE_BOOTSTRAP_MANIFEST", value = local.workforce_bootstrap_manifest',
             'SNOWMAN_PARTITION_MAINTENANCE_MODE", value = "external"',
             'RELAY_OWNER_PUBKEY", valueFrom =',
         ):
             self.assertIn(fragment, source)
         self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
         self.assertNotIn('SNOWMAN_RELAY_OWNER_PUBKEY", value =', source)
+
+    def test_workforce_bootstrap_manifest_is_role_derived_and_secret_free(self) -> None:
+        source = (ROOT / "workforce.tf").read_text(encoding="utf-8")
+        variables = (ROOT / "variables.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'schema_version = "snowman.workforce.bootstrap.v1"',
+            "workforce_role_capabilities",
+            'deadline_operations   = ["deadline.remind", "workforce.tasks.execute"]',
+            "workforce_identity_secret_arns",
+            "evaluation_evidence_sha256",
+            'secret_kind     = "worker"',
+            'secret_kind     = "reminder"',
+            "Every team model override must name an evaluated route",
+        ):
+            self.assertIn(fragment, source)
+        self.assertIn('variable "workforce_model_routes"', variables)
+        self.assertIn('variable "workforce_community_host"', variables)
+        self.assertNotIn("private_key =", source.lower())
 
     def test_workforce_is_per_identity_private_and_hard_dormant(self) -> None:
         source = (ROOT / "workforce.tf").read_text(encoding="utf-8")

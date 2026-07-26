@@ -1,4 +1,26 @@
 locals {
+  workforce_role_capabilities = {
+    lead                  = ["workforce.plan", "workforce.tasks.execute"]
+    governed_analyst      = ["analytics.query", "workforce.context.write", "workforce.tasks.execute"]
+    client_delivery       = ["artifact.build", "workforce.context.read", "workforce.context.write", "workforce.tasks.execute"]
+    quality_risk_reviewer = ["artifact.build", "artifact.review", "workforce.context.read", "workforce.context.write", "workforce.tasks.execute"]
+    research_evidence     = ["evidence.manifest.read", "workforce.context.write", "workforce.tasks.execute"]
+    scheduler             = ["workforce.maintenance"]
+    trigger               = ["workforce.proactive.propose", "workforce.schedules.trigger"]
+    deadline_operations   = ["deadline.remind", "workforce.tasks.execute"]
+  }
+  workforce_team_identity_ids = {
+    lead                  = try(one([for profile in values(var.workforce_profiles) : profile.identity_id if profile.specialist_role == "lead"]), "")
+    governed_analyst      = try(one([for profile in values(var.workforce_profiles) : profile.identity_id if profile.specialist_role == "governed_analyst"]), "")
+    client_delivery       = try(one([for profile in values(var.workforce_profiles) : profile.identity_id if profile.specialist_role == "client_delivery"]), "")
+    quality_risk_reviewer = try(one([for profile in values(var.workforce_profiles) : profile.identity_id if profile.specialist_role == "quality_risk_reviewer"]), "")
+  }
+  workforce_team_model_overrides = {
+    governed_analyst      = try(one([for profile in values(var.workforce_profiles) : profile.model_override if profile.specialist_role == "governed_analyst"]), null)
+    client_delivery       = try(one([for profile in values(var.workforce_profiles) : profile.model_override if profile.specialist_role == "client_delivery"]), null)
+    quality_risk_reviewer = try(one([for profile in values(var.workforce_profiles) : profile.model_override if profile.specialist_role == "quality_risk_reviewer"]), null)
+  }
+  workforce_bootstrap_enabled = var.workforce_community_id != ""
   configured_worker_desired_count = sum(concat(
     [0], [for profile in values(var.workforce_profiles) : profile.desired_count]
   ))
@@ -11,12 +33,126 @@ locals {
   configured_reminder_desired_count = sum(concat(
     [0], [for profile in values(var.reminder_profiles) : profile.desired_count]
   ))
+  workforce_identity_secret_arns = concat(
+    [for secret in values(aws_secretsmanager_secret.workforce_identity) : secret.arn],
+    [for secret in values(aws_secretsmanager_secret.workforce_scheduler_identity) : secret.arn],
+    [for secret in values(aws_secretsmanager_secret.workforce_trigger_identity) : secret.arn],
+    [for secret in values(aws_secretsmanager_secret.workforce_reminder_identity) : secret.arn],
+  )
+  workforce_bootstrap_manifest = local.workforce_bootstrap_enabled ? jsonencode({
+    schema_version = "snowman.workforce.bootstrap.v1"
+    community_id   = var.workforce_community_id
+    community_host = var.workforce_community_host
+    identities = concat(
+      [for name in sort(keys(var.workforce_profiles)) : {
+        identity_id     = var.workforce_profiles[name].identity_id
+        display_name    = var.workforce_profiles[name].display_name
+        specialist_role = var.workforce_profiles[name].specialist_role
+        capabilities    = local.workforce_role_capabilities[var.workforce_profiles[name].specialist_role]
+        secret_arn      = aws_secretsmanager_secret.workforce_identity[name].arn
+        secret_kind     = "worker"
+      }],
+      [for name in sort(keys(var.scheduler_profiles)) : {
+        identity_id     = var.scheduler_profiles[name].identity_id
+        display_name    = "Snowman ${title(replace(name, "-", " "))} Scheduler"
+        specialist_role = "scheduler"
+        capabilities    = local.workforce_role_capabilities.scheduler
+        secret_arn      = aws_secretsmanager_secret.workforce_scheduler_identity[name].arn
+        secret_kind     = "scheduler"
+      }],
+      [for name in sort(keys(var.trigger_profiles)) : {
+        identity_id     = var.trigger_profiles[name].identity_id
+        display_name    = "Snowman ${title(replace(name, "-", " "))} Trigger"
+        specialist_role = "trigger"
+        capabilities    = local.workforce_role_capabilities.trigger
+        secret_arn      = aws_secretsmanager_secret.workforce_trigger_identity[name].arn
+        secret_kind     = "trigger"
+      }],
+      [for name in sort(keys(var.reminder_profiles)) : {
+        identity_id     = var.reminder_profiles[name].identity_id
+        display_name    = "Snowman ${title(replace(name, "-", " "))} Reminder"
+        specialist_role = "deadline_operations"
+        capabilities    = local.workforce_role_capabilities.deadline_operations
+        secret_arn      = aws_secretsmanager_secret.workforce_reminder_identity[name].arn
+        secret_kind     = "reminder"
+      }],
+    )
+    model_routes = [for model_id in sort(keys(var.workforce_model_routes)) : {
+      model_id                             = model_id
+      gateway_url                          = var.workforce_model_gateway_url
+      suited_roles                         = sort(tolist(var.workforce_model_routes[model_id].suited_roles))
+      allowed_classifications              = sort(tolist(var.workforce_model_routes[model_id].allowed_classifications))
+      quality_score                        = var.workforce_model_routes[model_id].quality_score
+      latency_score                        = var.workforce_model_routes[model_id].latency_score
+      max_cost_microusd_per_million_tokens = var.workforce_model_routes[model_id].max_cost_microusd_per_million_tokens
+      max_context_tokens                   = var.workforce_model_routes[model_id].max_context_tokens
+      evaluation_evidence_sha256           = var.workforce_model_routes[model_id].evaluation_evidence_sha256
+      evaluated_at                         = var.workforce_model_routes[model_id].evaluated_at
+    }]
+    team = {
+      lead                  = local.workforce_team_identity_ids.lead
+      governed_analyst      = local.workforce_team_identity_ids.governed_analyst
+      client_delivery       = local.workforce_team_identity_ids.client_delivery
+      quality_risk_reviewer = local.workforce_team_identity_ids.quality_risk_reviewer
+      model_overrides       = local.workforce_team_model_overrides
+    }
+  }) : ""
 }
 
 check "workforce_profile_boundary" {
   assert {
     condition     = local.configured_worker_desired_count == var.worker_desired_count
     error_message = "worker_desired_count must exactly equal the sum of per-identity workforce profile counts."
+  }
+  assert {
+    condition = local.workforce_bootstrap_enabled == (
+      length(var.workforce_profiles) > 0 ||
+      length(var.scheduler_profiles) > 0 ||
+      length(var.trigger_profiles) > 0 ||
+      length(var.reminder_profiles) > 0 ||
+      length(var.workforce_model_routes) > 0 ||
+      var.workforce_community_host != ""
+    )
+    error_message = "The workforce community and its service/model manifest must be configured together."
+  }
+  assert {
+    condition = !local.workforce_bootstrap_enabled || (
+      alltrue([for identity_id in values(local.workforce_team_identity_ids) : identity_id != ""]) &&
+      length([for profile in values(var.workforce_profiles) : profile if profile.specialist_role == "lead"]) == 1 &&
+      length([for profile in values(var.workforce_profiles) : profile if profile.specialist_role == "governed_analyst"]) == 1 &&
+      length([for profile in values(var.workforce_profiles) : profile if profile.specialist_role == "client_delivery"]) == 1 &&
+      length([for profile in values(var.workforce_profiles) : profile if profile.specialist_role == "quality_risk_reviewer"]) == 1 &&
+      length(var.scheduler_profiles) >= 1 &&
+      length(var.trigger_profiles) >= 1 &&
+      length(var.reminder_profiles) >= 1 &&
+      length(var.workforce_model_routes) >= 1 &&
+      var.workforce_model_gateway_url != "" &&
+      var.workforce_community_host != "" &&
+      var.workforce_lead_identity_id == local.workforce_team_identity_ids.lead
+    )
+    error_message = "A workforce bootstrap requires one lead/analyst/delivery/reviewer, plus scheduler, trigger, reminder, evaluated model route, Snowman gateway, and matching lead identity."
+  }
+  assert {
+    condition = !local.workforce_bootstrap_enabled || alltrue([
+      for role, model_id in local.workforce_team_model_overrides :
+      model_id == null || try(contains(var.workforce_model_routes[model_id].suited_roles, role), false)
+    ])
+    error_message = "Every team model override must name an evaluated route suited to that exact specialist role."
+  }
+  assert {
+    condition = !local.workforce_bootstrap_enabled || (
+      try(contains(var.workforce_model_routes[var.workforce_planning_model_id].suited_roles, "lead"), false) &&
+      alltrue(flatten([
+        for role in ["lead", "governed_analyst", "client_delivery", "quality_risk_reviewer", "deadline_operations"] : [
+          for classification in ["internal", "confidential", "restricted"] :
+          anytrue([
+            for route in values(var.workforce_model_routes) :
+            contains(route.suited_roles, role) && contains(route.allowed_classifications, classification)
+          ])
+        ]
+      ]))
+    )
+    error_message = "The planning route must serve lead work, and every required team/reminder role needs an evaluated route for every classification."
   }
   assert {
     condition     = local.configured_scheduler_desired_count == var.scheduler_desired_count

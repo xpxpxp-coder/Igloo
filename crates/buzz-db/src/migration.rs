@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 39);
+        assert_eq!(migrations.len(), 40);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1033,6 +1033,14 @@ mod tests {
         assert!(reminders.contains("nostr_event_id"));
         assert!(!reminders.contains("message_body"));
         assert!(!reminders.contains("raw_client_data"));
+
+        assert_eq!(migrations[39].version, 40);
+        let bootstrap = migrations[39].sql.as_str();
+        assert!(bootstrap.contains("snowman_workforce_bootstrap_receipts"));
+        assert!(bootstrap.contains("manifest_sha256"));
+        assert!(bootstrap.contains("provisioning_authority"));
+        assert!(!bootstrap.contains("private_key"));
+        assert!(!bootstrap.contains("raw_client_data"));
     }
 
     #[test]

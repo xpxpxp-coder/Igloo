@@ -43,6 +43,26 @@ mock_provider "aws" {
     target = data.aws_iam_policy_document.relay_task
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
+  override_data {
+    target = data.aws_iam_policy_document.workforce_execution
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.workforce_task
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.workforce_scheduler_execution
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.workforce_trigger_execution
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.workforce_reminder_execution
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
 }
 
 variables {
@@ -101,6 +121,67 @@ run "dormant_staging_foundation" {
   assert {
     condition     = length(aws_lb.edge) == 0 && length(aws_wafv2_web_acl.edge) == 0
     error_message = "Dormant staging must not incur ALB/WAF edge cost."
+  }
+}
+
+run "governed_workforce_bootstrap_manifest" {
+  command = plan
+
+  variables {
+    workforce_community_id      = "10000000-0000-4000-8000-000000000001"
+    workforce_community_host    = "aptive.staging.snowmanai.org"
+    workforce_lead_identity_id  = "10000000-0000-4000-8000-000000000010"
+    workforce_model_gateway_url = "https://models.staging.internal.snowmanai.org/v1"
+    workforce_planning_model_id = "snowman-local-general-v1"
+    workforce_private_hostnames = ["workforce.aptive.staging.snowmanai.org"]
+    workforce_model_routes = {
+      snowman-local-general-v1 = {
+        suited_roles                         = ["lead", "governed_analyst", "client_delivery", "quality_risk_reviewer", "deadline_operations"]
+        allowed_classifications              = ["internal", "confidential", "restricted"]
+        quality_score                        = 900
+        latency_score                        = 700
+        max_cost_microusd_per_million_tokens = 0
+        max_context_tokens                   = 32768
+        evaluation_evidence_sha256           = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        evaluated_at                         = "2026-07-26T00:00:00Z"
+      }
+    }
+    workforce_profiles = {
+      lead = {
+        desired_count = 0, identity_id = "10000000-0000-4000-8000-000000000010", display_name = "Snowman Lead", specialist_role = "lead",
+        relay_url     = "https://workforce.aptive.staging.snowmanai.org", analyst_endpoint = "https://analyst.aptive.staging.snowmanai.org", analyst_service_principal = "snowman-workforce-lead", analyst_signing_key_arn = "arn:aws:kms:us-west-2:333333333333:key/00000000-0000-4000-8000-000000000010", tenant_id = "aptive", client_id = "aptive", project_id = "default"
+      }
+      analyst = {
+        desired_count = 0, identity_id = "10000000-0000-4000-8000-000000000011", display_name = "Snowman Governed Analyst", specialist_role = "governed_analyst",
+        relay_url     = "https://workforce.aptive.staging.snowmanai.org", analyst_endpoint = "https://analyst.aptive.staging.snowmanai.org", analyst_service_principal = "snowman-workforce-analyst", analyst_signing_key_arn = "arn:aws:kms:us-west-2:333333333333:key/00000000-0000-4000-8000-000000000011", tenant_id = "aptive", client_id = "aptive", project_id = "default"
+      }
+      delivery = {
+        desired_count = 0, identity_id = "10000000-0000-4000-8000-000000000012", display_name = "Snowman Client Delivery", specialist_role = "client_delivery",
+        relay_url     = "https://workforce.aptive.staging.snowmanai.org", analyst_endpoint = "https://analyst.aptive.staging.snowmanai.org", analyst_service_principal = "snowman-workforce-delivery", analyst_signing_key_arn = "arn:aws:kms:us-west-2:333333333333:key/00000000-0000-4000-8000-000000000012", tenant_id = "aptive", client_id = "aptive", project_id = "default"
+      }
+      reviewer = {
+        desired_count = 0, identity_id = "10000000-0000-4000-8000-000000000013", display_name = "Snowman Quality and Risk Reviewer", specialist_role = "quality_risk_reviewer",
+        relay_url     = "https://workforce.aptive.staging.snowmanai.org", analyst_endpoint = "https://analyst.aptive.staging.snowmanai.org", analyst_service_principal = "snowman-workforce-reviewer", analyst_signing_key_arn = "arn:aws:kms:us-west-2:333333333333:key/00000000-0000-4000-8000-000000000013", tenant_id = "aptive", client_id = "aptive", project_id = "default"
+      }
+    }
+    scheduler_profiles = {
+      aptive = { desired_count = 0, identity_id = "10000000-0000-4000-8000-000000000020", relay_url = "https://workforce.aptive.staging.snowmanai.org" }
+    }
+    trigger_profiles = {
+      aptive = { desired_count = 0, identity_id = "10000000-0000-4000-8000-000000000021", relay_url = "https://workforce.aptive.staging.snowmanai.org" }
+    }
+    reminder_profiles = {
+      aptive = { desired_count = 0, identity_id = "10000000-0000-4000-8000-000000000022", relay_url = "https://workforce.aptive.staging.snowmanai.org" }
+    }
+  }
+
+  assert {
+    condition     = length(aws_secretsmanager_secret.workforce_identity) == 4 && length(local.workforce_identity_secret_arns) == 7
+    error_message = "The governed team must create one exact secret container per service identity."
+  }
+  assert {
+    condition     = local.workforce_team_identity_ids.lead == var.workforce_lead_identity_id && local.workforce_role_capabilities.quality_risk_reviewer == ["artifact.build", "artifact.review", "workforce.context.read", "workforce.context.write", "workforce.tasks.execute"]
+    error_message = "Team identity and reviewer capabilities must remain exact."
   }
 }
 

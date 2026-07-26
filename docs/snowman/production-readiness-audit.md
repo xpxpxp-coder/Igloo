@@ -87,6 +87,9 @@ the highest risks without changing the production-readiness verdict:
 - a one-shot, no-service database/key bootstrap task that reads only the
   RDS-managed master secret, runs migrations, provisions and verifies a
   DML-only serving identity, generates relay/HMAC keys outside Terraform, and
+  now generates/preserves per-service workforce keys only in exact secret
+  containers, reconciles fixed role grants and evaluated model routes, records
+  a secret-free manifest receipt, and
   writes only the exact KMS-encrypted runtime secret. Relay startup no longer
   performs partition DDL in the AWS contract.
 

@@ -48,7 +48,7 @@ job. No objective or artifact body is written to worker logs.
 | `SNOWMAN_WORKFORCE_RELAY_URL` | Exact tenant Snowman private relay HTTPS origin. |
 | `SNOWMAN_WORKFORCE_NOSTR_PRIVATE_KEY` | Per-worker service key, injected from Snowman AWS Secrets Manager. |
 | `SNOWMAN_WORKFORCE_IDENTITY_ID` | Exact tenant-local workforce identity UUID bound to that public key. |
-| `SNOWMAN_WORKFORCE_TEAM_IDENTITIES_JSON` | Distinct analyst/delivery/reviewer identity UUIDs and optional model overrides. |
+| `SNOWMAN_WORKFORCE_TEAM_IDENTITIES_JSON` | Bootstrap-generated distinct analyst/delivery/reviewer identity UUIDs and optional evaluated model overrides. |
 | `SNOWMAN_ANALYST_ENDPOINT` | Exact private Analyst 360 Snowman HTTPS origin. |
 | `SNOWMAN_ANALYST_SERVICE_PRINCIPAL` | Analyst-bound service principal. |
 | `SNOWMAN_ANALYST_SIGNING_KEY_ARN` | Asymmetric KMS request-signing key. |
@@ -80,9 +80,9 @@ exact model but never bypasses the evaluated catalog.
   Snowman model gateway with the cross-account KMS bindings, private ingress,
   and a pinned Snowman-hosted inference fleet. Reconcile the gateway usage
   receipt back into the Command Center spend ledger before task completion.
-- Activate the now-defined per-identity ECS task/services only after their
-  Secrets Manager values, private Analyst route, provisioned workforce
-  identities/catalog, and zero-internet-egress plan have passed review.
+- Run and verify the now-defined one-shot workforce bootstrap, then activate the
+  per-identity ECS services only after their private Analyst route and
+  zero-internet-egress plan have passed staged review.
 - Deploy and prove the separately implemented maintenance scheduler, private TLS
   relay origin, recovery/dead-letter evidence, runtime metrics and alarms,
   graceful draining, and bounded concurrency.
