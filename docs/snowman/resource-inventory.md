@@ -27,6 +27,13 @@ identities remains owner-held. Every active release/canary repository guard is
 now Snowman-owned, and macOS jobs fail closed before signing until the Snowman
 mechanism exists; no Block action or registry remains in deployment workflows.
 
+The desktop webview now enforces a Snowman-only production CSP. MediaPipe avatar
+segmentation no longer falls back to public CDNs: releases resolve the WASM and
+model only from packaged same-origin paths. The pinned model has not yet been
+mirrored into Snowman's artifact pipeline, so background removal currently
+fails locally to the normal unsegmented recording path rather than making an
+undeclared network request.
+
 ## Snowman-controlled platform resources
 
 | Platform | Approved use | Verification before mutation |

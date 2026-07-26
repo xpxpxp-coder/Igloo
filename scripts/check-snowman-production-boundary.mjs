@@ -57,6 +57,7 @@ const runtimeAuthorityFiles = [
   "desktop/src-tauri/src/mesh_llm/transport_policy.rs",
   "desktop/src-tauri/tauri.conf.json",
   "desktop/src-tauri/tauri.dev.conf.json",
+  "desktop/src/features/profile/lib/animatedAvatarCapture.ts",
   "desktop/src/features/communities/hostedCommunityApi.ts",
   "desktop/src/features/communities/relayProbe.ts",
   "desktop/src/features/onboarding/welcomeCanvas.ts",
@@ -136,6 +137,21 @@ requireFragment(
   "desktop/src-tauri/src/commands/workspace.rs",
   "validate_snowman_relay_url(&relay_url)?;",
   "workspace relay changes must enforce the Snowman transport boundary",
+);
+requireFragment(
+  "desktop/src-tauri/tauri.conf.json",
+  "default-src 'self'; connect-src 'self'",
+  "desktop webview must enforce a production egress CSP",
+);
+requireFragment(
+  "desktop/src-tauri/tauri.conf.json",
+  "frame-src 'none'; object-src 'none'",
+  "desktop webview must prohibit embedded remote browsing surfaces",
+);
+requireFragment(
+  "desktop/src/features/profile/lib/animatedAvatarCapture.ts",
+  'const MEDIAPIPE_WASM_BASE = "/runtime/mediapipe/wasm";',
+  "avatar processing must use same-origin governed runtime assets",
 );
 requireFragment(
   "web/src/shared/lib/relay-url.ts",

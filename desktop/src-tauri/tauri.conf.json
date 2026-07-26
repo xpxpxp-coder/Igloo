@@ -36,7 +36,7 @@
     ],
     "macOSPrivateApi": true,
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://snowmanai.org https://*.snowmanai.org wss://snowmanai.org wss://*.snowmanai.org; img-src 'self' asset: http://asset.localhost blob: data: https://snowmanai.org https://*.snowmanai.org; media-src 'self' asset: http://asset.localhost blob: data: https://snowmanai.org https://*.snowmanai.org; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; frame-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self' https://snowmanai.org https://*.snowmanai.org"
     }
   },
   "plugins": {
