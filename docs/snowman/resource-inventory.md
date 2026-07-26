@@ -103,8 +103,12 @@ record, not a client-side API key or direct vendor CLI.
   `/api/snowman/v1/work-requests`. The endpoint deliberately creates only a
   lead planning task. The private source boundary now leases that task, validates
   and atomically persists its specialist DAG, selects a best-fit approved model
-  per role, and fences spend/completion. Provisioned private worker identities,
-  catalog rows, AWS execution, and staged proof are still required end to end.
+  per role, and fences spend/completion. An identity-isolated durable worker now
+  claims and heartbeats tasks, commits the default specialist/reviewer DAG,
+  dispatches exact model-bound Analyst commands, polls verified status, publishes
+  context manifests, and completes from immutable artifact evidence. Provisioned
+  identities/catalog rows, capability-specific Analyst executors, AWS execution,
+  and staged proof are still required end to end.
 - A default-off, tenant-bound Analyst event ingress now verifies strict
   asymmetric KMS service assertions, rejects unknown or scope-mismatched fields,
   consumes replay nonces transactionally, stores only minimized lifecycle

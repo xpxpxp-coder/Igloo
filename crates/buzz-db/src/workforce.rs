@@ -116,6 +116,8 @@ pub struct LeasedWorkTask {
     pub request_contract_sha256: [u8; 32],
     /// Request data classification.
     pub classification: String,
+    /// Stable request creation time used for idempotent downstream commands.
+    pub request_created_at: DateTime<Utc>,
     /// Request deadline.
     pub request_deadline_at: Option<DateTime<Utc>>,
     /// Hard request cost ceiling.
@@ -2065,6 +2067,7 @@ pub async fn claim_next_work_task(
     let existing = sqlx::query(
         r#"
         SELECT t.*, r.objective, r.request_contract_sha256, r.classification,
+               r.created_at AS request_created_at,
                r.deadline_at AS request_deadline_at,
                r.max_cost_microusd AS request_max_cost_microusd,
                r.max_input_tokens AS request_max_input_tokens,
@@ -2147,6 +2150,7 @@ pub async fn claim_next_work_task(
     let candidate = sqlx::query(
         r#"
         SELECT t.*, r.objective, r.request_contract_sha256, r.classification,
+               r.created_at AS request_created_at,
                r.deadline_at AS request_deadline_at,
                r.max_cost_microusd AS request_max_cost_microusd,
                r.max_input_tokens AS request_max_input_tokens,
@@ -2287,6 +2291,7 @@ pub async fn claim_next_work_task(
         objective: task.try_get("objective")?,
         request_contract_sha256: vec_to_sha256(task.try_get("request_contract_sha256")?)?,
         classification: task.try_get("classification")?,
+        request_created_at: task.try_get("request_created_at")?,
         request_deadline_at: task.try_get("request_deadline_at")?,
         max_cost_microusd: task.try_get("request_max_cost_microusd")?,
         max_input_tokens: task.try_get("request_max_input_tokens")?,
@@ -2320,6 +2325,7 @@ fn leased_work_task_from_row(row: &sqlx::postgres::PgRow) -> Result<LeasedWorkTa
         objective: row.try_get("objective")?,
         request_contract_sha256: vec_to_sha256(row.try_get("request_contract_sha256")?)?,
         classification: row.try_get("classification")?,
+        request_created_at: row.try_get("request_created_at")?,
         request_deadline_at: row.try_get("request_deadline_at")?,
         max_cost_microusd: row.try_get("request_max_cost_microusd")?,
         max_input_tokens: row.try_get("request_max_input_tokens")?,

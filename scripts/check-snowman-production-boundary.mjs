@@ -36,6 +36,8 @@ const runtimeAuthorityFiles = [
   "crates/snowman-workforce/src/lib.rs",
   "crates/snowman-aws-auth/src/lib.rs",
   "crates/snowman-analyst-client/src/lib.rs",
+  "crates/snowman-workforce-worker/src/lib.rs",
+  "crates/snowman-workforce-worker/src/main.rs",
   "crates/snowman-bootstrap/src/main.rs",
   "crates/buzz-db/src/runtime_security.rs",
   "crates/buzz-pubsub/src/connection.rs",
@@ -168,6 +170,31 @@ requireFragment(
   "mobile/lib/features/pairing/pairing_provider.dart",
   "Relay URL is outside the Snowman-controlled boundary",
   "mobile pairing must enforce the Snowman transport boundary",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  ".no_proxy()",
+  "workforce workers must not inherit ambient proxy routes",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  "sign_nip98",
+  "workforce workers must authenticate every relay operation",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  "lease.task.model_id.clone()",
+  "the selected per-agent model must cross the governed Analyst contract",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  '"snowman.workforce.context.publish.v1"',
+  "successful specialists must publish a bounded successor context manifest",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  "quality_risk_reviewer",
+  "client-ready work must include an independently identified reviewer",
 );
 requireFragment(
   "crates/snowman-analyst-client/src/lib.rs",

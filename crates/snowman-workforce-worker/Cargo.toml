@@ -1,0 +1,29 @@
+[package]
+name = "snowman-workforce-worker"
+description = "Durable governed specialist worker for the Snowman Command Center"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+nostr = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+snowman-analyst-client = { path = "../snowman-analyst-client" }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[[bin]]
+name = "snowman-workforce-worker"
+path = "src/main.rs"

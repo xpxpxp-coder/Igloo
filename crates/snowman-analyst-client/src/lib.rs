@@ -23,6 +23,7 @@ use url::Url;
 use uuid::Uuid;
 
 const COMMAND_PATH: &str = "/api/v1/snowman-command-center/commands";
+const STATUS_PATH: &str = "/api/v1/snowman-command-center/status";
 const CONTRACT_VERSION: &str = "snowman.command-center.v1";
 const ASSERTION_VERSION: &str = "snowman.service-request.v1";
 const MAX_RESPONSE_BYTES: usize = 256 * 1024;
@@ -119,6 +120,9 @@ pub struct Command {
     pub idempotency_key: String,
     /// Capability requested from Analyst 360.
     pub capability: Capability,
+    /// Exact evaluated Snowman model identifier selected for this specialist.
+    /// The command deliberately carries no gateway or provider endpoint.
+    pub model_id: String,
     /// Bounded instruction; never raw rows, transcripts, or model output.
     pub instruction: String,
     /// Authorized immutable Analyst references.
@@ -127,6 +131,9 @@ pub struct Command {
     pub delegated_agent_id: Option<String>,
     /// Command classification.
     pub classification: Classification,
+    /// Stable request-derived submission time. It must not change across lease
+    /// recovery, otherwise an idempotent retry would become a different command.
+    pub submitted_at: DateTime<Utc>,
     /// Command expiry.
     pub expires_at: DateTime<Utc>,
 }
@@ -251,6 +258,7 @@ struct UnsignedCommandRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     delegated_agent_id: Option<&'a str>,
     capability: Capability,
+    model_id: &'a str,
     instruction: &'a str,
     input_refs: &'a [ArtifactReference],
 }
@@ -259,11 +267,11 @@ struct UnsignedCommandRequest<'a> {
 struct ServiceAssertion<'a> {
     body_sha256: &'a str,
     key_id: &'a str,
-    method: &'static str,
+    method: &'a str,
     nonce: &'a str,
-    operation: &'static str,
+    operation: &'a str,
     principal_id: &'a str,
-    request_target: &'static str,
+    request_target: &'a str,
     signed_at: &'a str,
     version: &'static str,
 }
@@ -298,38 +306,12 @@ impl AnalystClient {
     /// Submit one exact minimized command and verify its acceptance evidence.
     pub async fn submit(&self, command: &Command) -> Result<AcceptedCommand, Error> {
         validate_command(command, Utc::now())?;
-        let request = build_command_request(&self.config, command, Utc::now())?;
+        let request = build_command_request(&self.config, command)?;
         let body = canonical_json_bytes(&request)?;
         let body_sha256 = sha256_hex(&body);
-        let signed_at = rfc3339(Utc::now());
-        let nonce = Uuid::new_v4().to_string();
-        let assertion = ServiceAssertion {
-            body_sha256: &body_sha256,
-            key_id: &self.config.signing_key_arn,
-            method: "POST",
-            nonce: &nonce,
-            operation: "commands.submit",
-            principal_id: &self.config.service_principal,
-            request_target: COMMAND_PATH,
-            signed_at: &signed_at,
-            version: ASSERTION_VERSION,
-        };
-        let assertion_bytes = canonical_json_bytes(&assertion)?;
-        let signature = self
-            .kms
-            .sign()
-            .key_id(&self.config.signing_key_arn)
-            .message(Blob::new(assertion_bytes))
-            .message_type(MessageType::Raw)
-            .signing_algorithm(SigningAlgorithmSpec::RsassaPssSha256)
-            .send()
-            .await
-            .map_err(|_| Error::Signing)?
-            .signature
-            .ok_or(Error::Signing)?;
-        if !(128..=1024).contains(&signature.as_ref().len()) {
-            return Err(Error::Signing);
-        }
+        let assertion = self
+            .sign_assertion("POST", "commands.submit", COMMAND_PATH, &body_sha256)
+            .await?;
         let url = self
             .config
             .endpoint
@@ -346,9 +328,9 @@ impl AnalystClient {
                 &self.config.service_principal,
             )
             .header("X-Snowman-Key-Id", &self.config.signing_key_arn)
-            .header("X-Snowman-Nonce", nonce)
-            .header("X-Snowman-Signed-At", signed_at)
-            .header("X-Snowman-Signature", STANDARD.encode(signature.as_ref()))
+            .header("X-Snowman-Nonce", assertion.nonce)
+            .header("X-Snowman-Signed-At", assertion.signed_at)
+            .header("X-Snowman-Signature", assertion.signature)
             .body(body)
             .send()
             .await
@@ -373,13 +355,116 @@ impl AnalystClient {
         validate_acceptance(&accepted, &request, &self.config)?;
         Ok(accepted)
     }
+
+    /// Read the current minimized lifecycle event for an accepted Analyst job.
+    /// The query string is included in the one-time KMS assertion, preventing a
+    /// valid signature for one job from being replayed against another.
+    pub async fn read_status(
+        &self,
+        job_id: &str,
+        expected_command_id: &str,
+        expected_correlation_id: &str,
+    ) -> Result<JobStatusEvent, Error> {
+        if !valid_job_id(job_id)
+            || !valid_identifier(expected_command_id)
+            || !valid_identifier(expected_correlation_id)
+        {
+            return Err(Error::InvalidCommand("status identifiers are invalid"));
+        }
+        let request_target = format!("{STATUS_PATH}?job_id={job_id}");
+        let empty_sha256 = sha256_hex(&[]);
+        let assertion = self
+            .sign_assertion("GET", "status.read", &request_target, &empty_sha256)
+            .await?;
+        let mut url = self
+            .config
+            .endpoint
+            .join(STATUS_PATH)
+            .map_err(|_| Error::InvalidConfiguration("status URL could not be built"))?;
+        url.query_pairs_mut().append_pair("job_id", job_id);
+        let response = self
+            .http
+            .get(url)
+            .header(header::ACCEPT, "application/json")
+            .header("X-Snowman-Assertion-Version", ASSERTION_VERSION)
+            .header(
+                "X-Snowman-Service-Principal",
+                &self.config.service_principal,
+            )
+            .header("X-Snowman-Key-Id", &self.config.signing_key_arn)
+            .header("X-Snowman-Nonce", assertion.nonce)
+            .header("X-Snowman-Signed-At", assertion.signed_at)
+            .header("X-Snowman-Signature", assertion.signature)
+            .send()
+            .await
+            .map_err(|_| Error::Transport)?;
+        if response.status() != StatusCode::OK {
+            return Err(Error::Rejected(response.status().as_u16()));
+        }
+        require_json_content_type(&response)?;
+        let bytes = read_bounded(response).await?;
+        let event: JobStatusEvent = serde_json::from_slice(&bytes)
+            .map_err(|_| Error::InvalidResponse("status JSON violates the contract"))?;
+        validate_status_event(
+            &event,
+            expected_command_id,
+            expected_correlation_id,
+            &self.config,
+        )?;
+        Ok(event)
+    }
+
+    async fn sign_assertion(
+        &self,
+        method: &str,
+        operation: &str,
+        request_target: &str,
+        body_sha256: &str,
+    ) -> Result<SignedAssertion, Error> {
+        let signed_at = rfc3339(Utc::now());
+        let nonce = Uuid::new_v4().to_string();
+        let assertion = ServiceAssertion {
+            body_sha256,
+            key_id: &self.config.signing_key_arn,
+            method,
+            nonce: &nonce,
+            operation,
+            principal_id: &self.config.service_principal,
+            request_target,
+            signed_at: &signed_at,
+            version: ASSERTION_VERSION,
+        };
+        let assertion_bytes = canonical_json_bytes(&assertion)?;
+        let signature = self
+            .kms
+            .sign()
+            .key_id(&self.config.signing_key_arn)
+            .message(Blob::new(assertion_bytes))
+            .message_type(MessageType::Raw)
+            .signing_algorithm(SigningAlgorithmSpec::RsassaPssSha256)
+            .send()
+            .await
+            .map_err(|_| Error::Signing)?
+            .signature
+            .ok_or(Error::Signing)?;
+        if !(128..=1024).contains(&signature.as_ref().len()) {
+            return Err(Error::Signing);
+        }
+        Ok(SignedAssertion {
+            nonce,
+            signed_at,
+            signature: STANDARD.encode(signature.as_ref()),
+        })
+    }
 }
 
-fn build_command_request(
-    config: &Config,
-    command: &Command,
-    submitted_at: DateTime<Utc>,
-) -> Result<Value, Error> {
+struct SignedAssertion {
+    nonce: String,
+    signed_at: String,
+    signature: String,
+}
+
+fn build_command_request(config: &Config, command: &Command) -> Result<Value, Error> {
     let unsigned = UnsignedCommandRequest {
         schema_version: CONTRACT_VERSION,
         command_id: &command.command_id,
@@ -388,7 +473,7 @@ fn build_command_request(
         tenant_id: &config.tenant_id,
         client_id: &config.client_id,
         project_id: &config.project_id,
-        submitted_at: rfc3339(submitted_at),
+        submitted_at: rfc3339(command.submitted_at),
         expires_at: rfc3339(command.expires_at),
         classification: command.classification,
         actor: Actor {
@@ -397,6 +482,7 @@ fn build_command_request(
         },
         delegated_agent_id: command.delegated_agent_id.as_deref(),
         capability: command.capability,
+        model_id: &command.model_id,
         instruction: &command.instruction,
         input_refs: &command.input_refs,
     };
@@ -458,15 +544,20 @@ fn validate_command(command: &Command, now: DateTime<Utc>) -> Result<(), Error> 
     {
         return Err(Error::InvalidCommand("identifiers are invalid"));
     }
-    if command.instruction.is_empty()
-        || command.instruction.len() > MAX_INSTRUCTION_BYTES
-        || contains_forbidden_key(&command.instruction)
+    if command.model_id.is_empty()
+        || command.model_id.len() > 256
+        || command.model_id.contains("://")
+        || command.model_id.chars().any(char::is_control)
     {
-        return Err(Error::InvalidCommand(
-            "instruction is empty, oversized, or contains a forbidden content key",
-        ));
+        return Err(Error::InvalidCommand("model identifier is invalid"));
     }
-    if command.input_refs.len() > 50 || command.expires_at <= now {
+    if command.instruction.is_empty() || command.instruction.len() > MAX_INSTRUCTION_BYTES {
+        return Err(Error::InvalidCommand("instruction is empty or oversized"));
+    }
+    if command.input_refs.len() > 50
+        || command.expires_at <= command.submitted_at
+        || command.expires_at <= now
+    {
         return Err(Error::InvalidCommand(
             "references exceed the limit or command is expired",
         ));
@@ -577,6 +668,21 @@ async fn read_bounded(mut response: reqwest::Response) -> Result<Vec<u8>, Error>
     Ok(body)
 }
 
+fn require_json_content_type(response: &reqwest::Response) -> Result<(), Error> {
+    let content_type = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap_or("");
+    if content_type != "application/json" {
+        return Err(Error::InvalidResponse(
+            "content type is not application/json",
+        ));
+    }
+    Ok(())
+}
+
 fn take_digest(value: &mut Value, field: &str) -> Result<String, Error> {
     value
         .as_object_mut()
@@ -623,6 +729,14 @@ fn valid_kms_key_arn(value: &str) -> bool {
         && Uuid::parse_str(&parts[5][4..]).is_ok()
 }
 
+fn valid_job_id(value: &str) -> bool {
+    value.len() == 47
+        && value.starts_with("cc_job_")
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn is_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -639,29 +753,6 @@ fn valid_artifact_reference(reference: &ArtifactReference) -> bool {
         && !reference.version_id.is_empty()
         && reference.version_id.len() <= 300
         && DateTime::parse_from_rfc3339(&reference.created_at).is_ok()
-}
-
-fn contains_forbidden_key(value: &str) -> bool {
-    const FORBIDDEN: &[&str] = &[
-        "api_key",
-        "authorization",
-        "connection_string",
-        "credentials",
-        "database_url",
-        "password",
-        "private_key",
-        "raw_client_data",
-        "raw_model_output",
-        "raw_prompt",
-        "raw_rows",
-        "raw_thread_history",
-        "raw_transcript",
-        "secret",
-        "session_token",
-        "transcript",
-    ];
-    let lower = value.to_ascii_lowercase();
-    FORBIDDEN.iter().any(|key| lower.contains(key))
 }
 
 #[cfg(test)]
@@ -722,6 +813,30 @@ mod tests {
     }
 
     #[test]
+    fn status_assertion_binds_the_exact_job_query() {
+        let request_target = concat!(
+            "/api/v1/snowman-command-center/status?job_id=cc_job_",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        let assertion = ServiceAssertion {
+            body_sha256: &sha256_hex(&[]),
+            key_id: "arn:aws:kms:us-west-2:123456789012:key/12345678-1234-1234-1234-123456789abc",
+            method: "GET",
+            nonce: "abcdefghijklmnopqrstuvwxyz123456",
+            operation: "status.read",
+            principal_id: "snowman-command-gateway",
+            request_target,
+            signed_at: "2026-07-26T18:00:00.000Z",
+            version: ASSERTION_VERSION,
+        };
+        let encoded = String::from_utf8(canonical_json_bytes(&assertion).unwrap()).unwrap();
+        assert!(encoded.contains(&format!("\"request_target\":\"{request_target}\"")));
+        assert!(encoded.contains("\"operation\":\"status.read\""));
+        assert!(valid_job_id(&format!("cc_job_{}", "a".repeat(40))));
+        assert!(!valid_job_id(&format!("cc_job_{}", "A".repeat(40))));
+    }
+
+    #[test]
     fn request_is_scoped_to_service_and_delegated_agent() {
         let client_config = config();
         let command = Command {
@@ -729,18 +844,15 @@ mod tests {
             correlation_id: "request-123".to_string(),
             idempotency_key: "task-123-generation-1".to_string(),
             capability: Capability::ArtifactBuild,
+            model_id: "snowman-artifact-best".to_string(),
             instruction: "Build the authorized client-ready work product.".to_string(),
             input_refs: Vec::new(),
             delegated_agent_id: Some("agent-artifact-builder".to_string()),
             classification: Classification::Confidential,
+            submitted_at: "2026-07-26T18:00:00Z".parse().unwrap(),
             expires_at: "2026-07-26T19:00:00Z".parse().unwrap(),
         };
-        let value = build_command_request(
-            &client_config,
-            &command,
-            "2026-07-26T18:00:00Z".parse().unwrap(),
-        )
-        .unwrap();
+        let value = build_command_request(&client_config, &command).unwrap();
         assert_eq!(value["tenant_id"], "aptive");
         assert_eq!(value["actor"]["subject_id"], "snowman-command-gateway");
         assert_eq!(value["actor"]["actor_type"], "service");
@@ -758,16 +870,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_raw_boundary_keys_in_instructions() {
+    fn rejects_empty_instructions() {
         let command = Command {
             command_id: "command-123".into(),
             correlation_id: "request-123".into(),
             idempotency_key: "task-123-generation-1".into(),
             capability: Capability::AnalyticsQuery,
-            instruction: "Use raw_rows from this payload".into(),
+            model_id: "snowman-analytics-best".to_string(),
+            instruction: String::new(),
             input_refs: Vec::new(),
             delegated_agent_id: None,
             classification: Classification::Restricted,
+            submitted_at: Utc::now(),
             expires_at: Utc::now() + chrono::Duration::minutes(5),
         };
         assert!(matches!(

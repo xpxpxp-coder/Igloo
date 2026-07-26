@@ -16,6 +16,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Branding and compatibility register](branding-compatibility-register.md)
 - [Governed workforce request API](workforce-request-api.md)
 - [Analyst 360 event and receipt boundary](analyst-event-boundary.md)
+- [Durable workforce worker](workforce-worker.md)
 
 These documents distinguish three states:
 

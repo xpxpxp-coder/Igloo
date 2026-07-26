@@ -138,8 +138,11 @@ points. A private scheduler deployment may explicitly set
 `SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD`, and
 `SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS`; the relay records the exact
 policy digest used for every decision.
-The API foundation does not itself constitute the AWS worker, model gateway,
-sandbox, scheduler, or staged execution proof.
+The identity-isolated `snowman-workforce-worker` now implements claim, planning,
+heartbeat, governed Analyst dispatch/status, context publication, and terminal
+completion in source. Capability-specific Analyst job executors, AWS task/service
+deployment, model gateway/inference, scheduler/recovery, sandbox boundaries, and
+staged execution proof remain open.
 
 ## Analyst lifecycle events
 

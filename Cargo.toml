@@ -30,6 +30,7 @@ members = [
     "crates/snowman-aws-auth",
     "crates/snowman-bootstrap",
     "crates/snowman-analyst-client",
+    "crates/snowman-workforce-worker",
     "examples/countdown-bot",
 ]
 exclude = ["desktop/src-tauri"]
