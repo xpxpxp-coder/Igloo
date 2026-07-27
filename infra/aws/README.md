@@ -35,7 +35,12 @@ endpoints, managed PostgreSQL and IAM-authenticated TLS Valkey, object-locked
 KMS-encrypted artifact/audit buckets, versioned deletable media storage,
 asymmetric audit-signing KMS key,
 enhanced ECS telemetry, encrypted service log groups, alarms, an SNS operations
-topic, and an account-tag budget. The digest-pinned relay task definition runs
+topic, an account-tag budget, a redacted service-error dashboard, an immutable
+KMS-encrypted Snowman ECR repository, and a dedicated asymmetric release-signing
+key. A separate fail-closed launch-evidence preflight binds any future runtime
+activation to the exact image and current immutable restore, audit, telemetry,
+alert, rollback, cost, isolation, vulnerability, and final-acceptance evidence.
+The digest-pinned relay task definition runs
 as non-root with a read-only root filesystem, dropped Linux capabilities,
 writable scratch mounts, separate execution/task roles, exact ECR/log/secret,
 Valkey, media-S3, and S3-via-KMS grants. Its ECS service is fixed at zero by both
@@ -89,19 +94,21 @@ root is deployable:
 
 1. ALB mutual origin authentication/WAF and proof that the Cloudflare-restricted
    origin security group has no alternate ingress path;
-2. live proof of the implemented database/runtime/workforce bootstrap; AWS
-   Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
-   delivery, and tested recovery;
+2. live proof of the implemented database/runtime/workforce bootstrap;
+   clean-target RDS PITR, Valkey snapshot, S3 version, KMS checkpoint, and
+   object-lock recovery drills using the checked-in recovery runbook;
 3. staged recurring-trigger lost-response/restart proof; the agent runtime
    image, broker action catalog, model-token path, worker/coordinator completion wiring, and live sandbox
    adversarial proof; pinned specialist model images/weights and staged
    activation of the separate `aws-inference`
    endpoint/component root; private ingress for the now-defined model-gateway
    service; plus staged activation of relay, workforce, and scheduler services;
-4. WAF, centralized encrypted logs/metrics/traces, alarms, synthetic probes,
-   budgets, autoscaling, dormant staging controls, and evidence export; and
-5. CI plan/policy tests, SBOM/provenance/signature enforcement, staged apply,
-   recovery drills, UAT, rollback, and immutable launch evidence.
+4. staged proof of the configured WAF, encrypted logs/metrics, alarms,
+   Snowman-only trace export, private synthetic probes, budgets, autoscaling,
+   dormant controls, redaction, and evidence retention; and
+5. the Snowman OIDC-to-ECR production builder, generated SBOM/provenance/KMS
+   signatures, staged apply, recovery drills, UAT, rollback, and a passing
+   version-bound `snowman.launch-evidence.v1` manifest.
 
 Terraform is pinned to the same exact tool/provider versions already governed
 in Analyst 360. Do not run `apply` from a management profile or with example

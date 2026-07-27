@@ -9,9 +9,11 @@ revisions, stores source content under Analyst 360 evidence/retention authority,
 and passes the command center only bounded digest-bound references.
 
 The checked-in `snowman-meeting-control` crate and migration 0048 are the
-first executable control-plane foundation for ADR 0006. They do not activate a
-provider or claim that the Gmail, Calendar, telephony, speech, or media adapters
-are deployed.
+first executable control-plane foundation for ADR 0006. The separate
+[`snowman-meeting-media-gateway`](meeting-media-gateway.md) contract and
+migration 0050 now implement the provider-neutral media authority and lifecycle
+foundation. They do not activate a provider or claim that Gmail, Calendar,
+telephony, speech, or native huddle adapters are deployed.
 
 ## Authority split
 
@@ -94,8 +96,9 @@ unless activation is enabled and the meeting route is not disabled.
   isolation.
 - Implement the private meeting-control repository/service transaction layer
   over migration 0048, including row locks and audit receipts.
-- Implement the Snowman media gateway, native huddle audio bridge, provider
-  adapters, circuit breakers, and exact egress policy.
+- Implement the media gateway repository/service plus native huddle, Twilio,
+  OpenAI Realtime, and optional output-only ElevenLabs adapters behind the
+  checked-in default-off contract; add circuit breakers and exact egress policy.
 - Integrate the four safe intents with the workforce policy gateway and the
   post-meeting Command Center thread projection.
 - Prove adversarial cross-tenant isolation, spoofed organizers, prompt-injected

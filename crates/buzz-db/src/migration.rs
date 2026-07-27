@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 49);
+        assert_eq!(migrations.len(), 50);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1110,6 +1110,37 @@ mod tests {
         assert!(!meetings.contains("phone_number"));
         assert!(!meetings.contains("conference_url"));
         assert!(!meetings.contains("provider_credential"));
+
+        assert_eq!(migrations[48].version, 49);
+        let tool_authority = migrations[48].sql.as_str();
+        assert!(tool_authority.contains("CREATE TABLE snowman_agent_tool_approvals"));
+        assert!(tool_authority.contains("CREATE TABLE snowman_agent_tool_actions"));
+        assert!(tool_authority.contains("CREATE TABLE snowman_agent_tool_receipts"));
+
+        assert_eq!(migrations[49].version, 50);
+        let meeting_media = migrations[49].sql.as_str();
+        for table in [
+            "snowman_meeting_media_routes",
+            "snowman_meeting_media_sessions",
+            "snowman_meeting_media_provider_sessions",
+            "snowman_meeting_media_commands",
+            "snowman_meeting_media_webhook_receipts",
+            "snowman_meeting_media_usage_receipts",
+            "snowman_meeting_media_turn_receipts",
+        ] {
+            assert!(
+                meeting_media.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(meeting_media.contains("raw_audio_retention = 'none'"));
+        assert!(meeting_media.contains(
+            "PRIMARY KEY (community_id, provider, delivery_id_sha256)"
+        ));
+        assert!(!meeting_media.contains("phone_number"));
+        assert!(!meeting_media.contains("conference_url"));
+        assert!(!meeting_media.contains("provider_credential"));
+        assert!(!meeting_media.contains("transcript_text"));
     }
 
     #[test]

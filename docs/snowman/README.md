@@ -14,6 +14,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [ADR 0005: ACP execution arm and optional runtime adapters](adr/0005-acp-execution-arm.md)
 - [ADR 0006: governed live meeting and huddle agent](adr/0006-governed-live-meeting-agent.md)
 - [Governed meeting control and mailbox intake](meeting-control.md)
+- [Governed live meeting media gateway](meeting-media-gateway.md)
 - [Tenant-isolation proof and staging gate](tenant-isolation-proof.md)
 - [One-shot agent executor boundary](agent-executor-boundary.md)
 - [Production acceptance criteria](production-acceptance-criteria.md)

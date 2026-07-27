@@ -49,6 +49,7 @@ const runtimeAuthorityFiles = [
   "crates/snowman-agent-coordinator/src/main.rs",
   "crates/snowman-agent-executor/src/main.rs",
   "crates/snowman-meeting-control/src/lib.rs",
+  "crates/snowman-meeting-media-gateway/src/lib.rs",
   "crates/snowman-tool-broker/src/lib.rs",
   "crates/snowman-bootstrap/src/main.rs",
   "crates/buzz-db/src/runtime_security.rs",
@@ -65,6 +66,7 @@ const runtimeAuthorityFiles = [
   "migrations/0044_snowman_agent_launches.sql",
   "migrations/0048_snowman_governed_meetings.sql",
   "migrations/0049_snowman_agent_tool_authority.sql",
+  "migrations/0050_snowman_meeting_media_gateway.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -117,7 +119,11 @@ const runtimeAuthorityFiles = [
   "infra/aws/agent_broker.tf",
   "infra/aws/agent_coordinator.tf",
   "infra/aws/operations.tf",
+  "infra/aws/reliability.tf",
+  "infra/aws/launch_evidence.tf",
+  "infra/aws/supply_chain.tf",
   "infra/aws/outputs.tf",
+  ".github/workflows/snowman-production-evidence.yml",
 ];
 
 const forbidden = [
@@ -444,6 +450,31 @@ requireFragment(
   "crates/snowman-meeting-control/src/lib.rs",
   "VoiceRoute::Disabled",
   "meeting media must retain an explicit default-off route",
+);
+requireFragment(
+  "crates/snowman-meeting-media-gateway/src/lib.rs",
+  "MediaExecutionGrant::from_active_meeting",
+  "meeting media authority must derive from active consent-complete meeting control",
+);
+requireFragment(
+  "crates/snowman-meeting-media-gateway/src/lib.rs",
+  "pub trait WebhookAuthenticator",
+  "provider callbacks must cross an explicit authenticity boundary",
+);
+requireFragment(
+  "crates/snowman-meeting-media-gateway/src/lib.rs",
+  "pub struct TransientAudioFrame<'a>",
+  "raw meeting audio must remain borrowed and non-persistable",
+);
+requireFragment(
+  "migrations/0050_snowman_meeting_media_gateway.sql",
+  "raw_audio_retention = 'none'",
+  "meeting media persistence must prohibit raw-audio retention",
+);
+requireFragment(
+  "migrations/0050_snowman_meeting_media_gateway.sql",
+  "PRIMARY KEY (community_id, provider, delivery_id_sha256)",
+  "provider callback replay fences must lead with the tenant boundary",
 );
 requireFragment(
   "migrations/0048_snowman_governed_meetings.sql",
@@ -774,6 +805,51 @@ requireFragment(
   "infra/aws/preflight.tf",
   "var.relay_desired_count == 0 && var.worker_desired_count == 0",
   "baseline staging must remain dormant",
+);
+requireFragment(
+  "infra/aws/launch_evidence.tf",
+  "local.runtime_activation_requested || local.launch_evidence_valid",
+  "any future runtime activation must require current immutable launch evidence",
+);
+requireFragment(
+  "infra/aws/launch_evidence.tf",
+  "try(var.launch_evidence.container_image, \"\") == var.container_image",
+  "launch evidence must bind the exact deployed image digest",
+);
+requireFragment(
+  "infra/aws/launch_evidence.tf",
+  "try(var.launch_evidence.alert_subscription_confirmed, false)",
+  "launch evidence must prove the monitored alert path is confirmed",
+);
+requireFragment(
+  "infra/aws/launch_evidence.tf",
+  "try(var.launch_evidence.unresolved_high_findings, -1) == 0",
+  "launch evidence must fail on unresolved high-severity image findings",
+);
+requireFragment(
+  "infra/aws/supply_chain.tf",
+  'image_tag_mutability = "IMMUTABLE"',
+  "the Snowman production ECR repository must reject mutable tags",
+);
+requireFragment(
+  "infra/aws/supply_chain.tf",
+  'customer_master_key_spec = "ECC_NIST_P256"',
+  "release signatures must use a dedicated asymmetric Snowman KMS key",
+);
+requireFragment(
+  "scripts/verify-snowman-launch-evidence.mjs",
+  '"postgres-pitr-restore"',
+  "the immutable launch bundle must include PostgreSQL PITR restore proof",
+);
+requireFragment(
+  "scripts/verify-snowman-launch-evidence.mjs",
+  '"audit-checkpoint-recovery"',
+  "the immutable launch bundle must include audit-checkpoint recovery proof",
+);
+requireFragment(
+  "scripts/verify-snowman-launch-evidence.mjs",
+  "outside the Snowman boundary",
+  "launch telemetry exporters must remain inside Snowman-owned surfaces",
 );
 requireFragment(
   "crates/buzz-workflow/src/schema.rs",

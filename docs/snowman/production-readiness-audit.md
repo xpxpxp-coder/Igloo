@@ -114,6 +114,14 @@ the highest risks without changing the production-readiness verdict:
   alarms, and budgets; plus a tested streaming SigV4 provider, automatic Valkey
   reauthentication/resubscription, password-free runtime contract, and a
   key/channel/command-bounded Valkey IAM user. It remains unapplied.
+- a machine-verifiable, secret-free launch-evidence contract now requires the
+  exact ECR image, SBOM, provenance, KMS signature, vulnerability report,
+  Snowman-only telemetry sinks, confirmed alert delivery, tenant-isolation,
+  RDS/Valkey/S3 restore, audit-checkpoint recovery, rollback, cost, freshness,
+  and version-bound Object Lock evidence before any future activation; and
+- an immutable KMS-encrypted Snowman ECR repository, dedicated asymmetric
+  release-signing key, encrypted operational dashboard/error alarms, SLO
+  contract, and clean-target recovery/rollback runbook now exist in source.
 - a hard-zero, digest-pinned dormant relay task and ECS service with non-root,
   read-only execution, dropped capabilities, exact task/execution roles, an
   empty governed runtime-secret shell, and layered zero-count preconditions;
@@ -134,9 +142,11 @@ These are implementation foundations, not staged proof. OIDC assertion exchange,
 private integration routing, live database/bootstrap evidence, recurring
 partition rotation and authenticated-edge bypass tests,
 proactive execution, applied broker staging/action tools/model-token path, adapter images, and live sandbox proof,
-KMS audit checkpoints, staged
-recovery/load/isolation exercises, comprehensive branding, accessibility, UAT,
-and launch evidence remain open gates.
+The periodic KMS audit-checkpoint publisher/verifier, Snowman OIDC-to-ECR
+production builder, generated SBOM/provenance/signature bundle, and staged
+recovery/load/isolation/alert/redaction exercises remain open gates. So do
+comprehensive branding, accessibility, UAT, and an actually passing immutable
+launch bundle; source-level gates are not launch evidence.
 
 ## Data classification and boundary
 

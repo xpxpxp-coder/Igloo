@@ -131,6 +131,21 @@ output "operations_posture" {
   }
 }
 
+output "release_trust_posture" {
+  description = "Snowman-owned immutable release repository, signing authority, and digest-only activation evidence binding."
+  value = {
+    repository_url                  = aws_ecr_repository.command_center.repository_url
+    repository_arn                  = aws_ecr_repository.command_center.arn
+    image_tag_mutability            = aws_ecr_repository.command_center.image_tag_mutability
+    release_signing_key_arn         = aws_kms_key.release_signing.arn
+    activation_requested            = local.runtime_activation_requested
+    staging_verification_enabled    = var.staging_verification_window_enabled
+    production_activation_enabled   = var.production_activation_enabled
+    launch_evidence_manifest_sha256 = try(var.launch_evidence.manifest_sha256, null)
+    launch_evidence_expires_at      = try(var.launch_evidence.expires_at, null)
+  }
+}
+
 output "dormant_compute_posture" {
   description = "Relay task and roles are defined but no service or desired runtime is activated."
   value = {
