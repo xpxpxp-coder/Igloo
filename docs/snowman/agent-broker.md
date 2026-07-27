@@ -1,16 +1,28 @@
 # Snowman private agent job broker
 
 Status: source service, shared contracts, durable schema, issuance function,
-dedicated database-role bootstrap, KMS-encrypted runtime-secret substrate, and
-local contract/IaC tests implemented; AWS service deployment, coordinator,
-action tools, model authorization, and staged proof remain.
+dedicated database-role bootstrap, KMS-encrypted runtime-secret substrate,
+hard-dormant private TLS ECS/NLB deployment definition, and local contract/IaC
+tests implemented; coordinator, action tools, model authorization, applied AWS
+deployment, and staged proof remain.
 
 ## Boundary
 
 `snowman-agent-broker` is a separate private service, not a relay route. It has
 no Nostr, collaboration, browser, connector, arbitrary object-store, Analyst
-dataset, or model-provider API. The agent sandbox can reach it only through the
-dedicated broker security group already defined in `infra/aws`.
+dataset, or model-provider API. The agent sandbox reaches an internal TLS NLB
+on port 443; its ingress security group accepts only the one-shot executor
+security group and forwards only to the broker task on port 8080. The task can
+reach only its RDS security group, private ECR/log/secret/KMS endpoints, and VPC
+DNS. It has no AWS task role, public IP, NAT route, relay, Analyst, model,
+object-store, connector, or public destination.
+
+The digest-pinned Snowman Command Center image now packages the broker binary.
+Its ECS execution role can pull only that exact Snowman ECR repository, write
+only the broker log group, and read only the `database_url` field from the
+separate KMS-encrypted broker runtime secret. TLS terminates on a protected
+internal NLB with exact stage-specific split-horizon DNS and ACM certificate.
+Readiness checks accept the broker's deliberate HTTP 204 response.
 
 The shared `snowman-agent-contract` crate binds every snapshot and receipt to:
 
@@ -54,9 +66,8 @@ job authority.
 
 ## Remaining activation gates
 
-- Run and prove the now-defined broker-role/secret bootstrap, provision the
-  separate coordinator role, and add the dormant broker ECS service/internal
-  TLS listener with its exact security groups.
+- Run and prove the now-defined broker-role/secret bootstrap and dormant private
+  TLS service plan, then provision the separate coordinator role.
 - Implement the coordinator's exact ECS `RunTask`/`StopTask` authority, random
   token generation, crash reconciliation, cancellation, expiration, and purge.
 - Add capability-specific action endpoints and MCP tools. Every action must

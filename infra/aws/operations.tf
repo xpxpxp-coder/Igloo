@@ -6,6 +6,7 @@ locals {
     "workforce-trigger",
     "workforce-reminder",
     "agent-executor",
+    "agent-broker",
     "model-gateway",
     "inference",
     "migration",

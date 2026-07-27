@@ -107,6 +107,7 @@ const runtimeAuthorityFiles = [
   "infra/aws/data_plane.tf",
   "infra/aws/compute.tf",
   "infra/aws/agent_executor.tf",
+  "infra/aws/agent_broker.tf",
   "infra/aws/operations.tf",
   "infra/aws/outputs.tf",
 ];
@@ -483,6 +484,32 @@ if (/^\s*task_role_arn\s*=/m.test(agentExecutorTerraform)) {
     "infra/aws/agent_executor.tf: untrusted agent tasks must not receive an ECS task role",
   );
 }
+const agentBrokerTerraform = read("infra/aws/agent_broker.tf");
+if (/^\s*task_role_arn\s*=/m.test(agentBrokerTerraform)) {
+  failures.push(
+    "infra/aws/agent_broker.tf: the serving broker must not receive an AWS task role",
+  );
+}
+if (/cidr_ipv4\s*=\s*"0\.0\.0\.0\/0"|assign_public_ip\s*=\s*true/m.test(agentBrokerTerraform)) {
+  failures.push(
+    "infra/aws/agent_broker.tf: the broker must not receive a public network path",
+  );
+}
+requireFragment(
+  "infra/aws/agent_broker.tf",
+  'condition     = var.agent_broker_desired_count == 0',
+  "the agent broker must remain hard dormant pending staging evidence",
+);
+requireFragment(
+  "infra/aws/agent_broker.tf",
+  'entryPoint             = ["/usr/local/bin/snowman-agent-broker"]',
+  "the broker task must use the governed Snowman entry point",
+);
+requireFragment(
+  "infra/aws/agent_broker.tf",
+  'valueFrom = "${aws_secretsmanager_secret.agent_broker_runtime.arn}:database_url::"',
+  "the broker must receive only its exact database secret field",
+);
 if (/resource\s+"aws_ecs_service"/m.test(agentExecutorTerraform)) {
   failures.push(
     "infra/aws/agent_executor.tf: agent execution must remain one-shot instead of an ambient service",

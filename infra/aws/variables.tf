@@ -119,8 +119,50 @@ variable "agent_broker_url" {
   description = "Private Snowman action-broker origin used by one-shot agent sandboxes."
   default     = ""
   validation {
-    condition     = var.agent_broker_url == "" || (var.agent_broker_url == lower(var.agent_broker_url) && can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?(/[^?#]*)?$", var.agent_broker_url)))
-    error_message = "agent_broker_url must be empty or an exact lower-case Snowman HTTPS URL."
+    condition     = var.agent_broker_url == "" || (var.agent_broker_url == lower(var.agent_broker_url) && can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?/?$", var.agent_broker_url)))
+    error_message = "agent_broker_url must be empty or an exact lower-case Snowman HTTPS origin without a path."
+  }
+}
+
+variable "agent_broker_desired_count" {
+  type        = number
+  description = "Desired private agent-broker tasks. The baseline remains dormant."
+  default     = 0
+  validation {
+    condition     = var.agent_broker_desired_count >= 0 && var.agent_broker_desired_count <= 20
+    error_message = "agent_broker_desired_count must be between 0 and 20."
+  }
+}
+
+variable "agent_broker_private_ingress_enabled" {
+  type        = bool
+  description = "Create the cost-bearing internal TLS NLB and split-horizon DNS for the agent broker."
+  default     = false
+}
+
+variable "agent_broker_tls_certificate_arn" {
+  type        = string
+  description = "Exact Command Center account ACM certificate for the private agent-broker hostname."
+  default     = ""
+  validation {
+    condition = (
+      !var.agent_broker_private_ingress_enabled ||
+      can(regex("^arn:aws(?:-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/[0-9a-fA-F-]{36}$", var.agent_broker_tls_certificate_arn))
+    )
+    error_message = "Private agent-broker ingress requires an exact ACM certificate ARN."
+  }
+}
+
+variable "agent_broker_private_dns_name" {
+  type        = string
+  description = "Exact Snowman split-horizon hostname for the private agent broker."
+  default     = ""
+  validation {
+    condition = (
+      var.agent_broker_private_dns_name == "" ||
+      can(regex("^agents(?:[.]staging)?[.]internal[.]snowmanai[.]org$", lower(var.agent_broker_private_dns_name)))
+    )
+    error_message = "agent_broker_private_dns_name must be empty or the exact staging or production Snowman private agent hostname."
   }
 }
 
@@ -129,8 +171,8 @@ variable "agent_model_gateway_url" {
   description = "Private Snowman model-gateway origin used by one-shot agent sandboxes."
   default     = ""
   validation {
-    condition     = var.agent_model_gateway_url == "" || (var.agent_model_gateway_url == lower(var.agent_model_gateway_url) && can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?(/[^?#]*)?$", var.agent_model_gateway_url)))
-    error_message = "agent_model_gateway_url must be empty or an exact lower-case Snowman HTTPS URL."
+    condition     = var.agent_model_gateway_url == "" || (var.agent_model_gateway_url == lower(var.agent_model_gateway_url) && can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?/?$", var.agent_model_gateway_url)))
+    error_message = "agent_model_gateway_url must be empty or an exact lower-case Snowman HTTPS origin without a path."
   }
 }
 

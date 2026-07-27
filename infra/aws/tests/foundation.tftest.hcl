@@ -67,6 +67,10 @@ mock_provider "aws" {
     target = data.aws_iam_policy_document.agent_executor_execution
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
+  override_data {
+    target = data.aws_iam_policy_document.agent_broker_execution
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
 }
 
 variables {
@@ -237,8 +241,8 @@ run "credentialless_one_shot_agent_executor" {
   command = plan
 
   variables {
-    agent_broker_url        = "https://agents.staging.internal.snowmanai.org:443/v1"
-    agent_model_gateway_url = "https://models.staging.internal.snowmanai.org:443/v1"
+    agent_broker_url        = "https://agents.staging.internal.snowmanai.org:443/"
+    agent_model_gateway_url = "https://models.staging.internal.snowmanai.org:443/"
     agent_runtime_profiles = {
       native-acp = {
         image                      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/snowman-agent-runtime-native@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -266,6 +270,38 @@ run "credentialless_one_shot_agent_executor" {
   assert {
     condition     = aws_ecs_task_definition.agent_executor["native-acp"].cpu == "1024" && aws_ecs_task_definition.agent_executor["native-acp"].memory == "4096"
     error_message = "The evaluated runtime profile must preserve its resource ceiling."
+  }
+}
+
+run "private_dormant_agent_broker" {
+  command = plan
+
+  variables {
+    agent_broker_url                     = "https://agents.staging.internal.snowmanai.org/"
+    agent_broker_private_ingress_enabled = true
+    agent_broker_private_dns_name        = "agents.staging.internal.snowmanai.org"
+    agent_broker_tls_certificate_arn     = "arn:aws:acm:us-west-2:111111111111:certificate/10000000-0000-4000-8000-000000000001"
+  }
+
+  assert {
+    condition     = length(aws_lb.agent_broker_private) == 1 && aws_lb.agent_broker_private[0].internal && aws_lb.agent_broker_private[0].enable_deletion_protection
+    error_message = "The agent broker must use one protected internal load balancer."
+  }
+  assert {
+    condition     = aws_lb_listener.agent_broker_private[0].protocol == "TLS" && aws_lb_listener.agent_broker_private[0].port == 443
+    error_message = "The agent broker must expose only its private TLS listener."
+  }
+  assert {
+    condition     = aws_lb_target_group.agent_broker_private[0].health_check[0].matcher == "200-299"
+    error_message = "The broker readiness probe must accept its deliberate 204 response."
+  }
+  assert {
+    condition     = aws_ecs_task_definition.agent_broker.task_role_arn == null && aws_ecs_service.agent_broker.desired_count == 0
+    error_message = "The broker must remain dormant and receive no AWS task role."
+  }
+  assert {
+    condition     = aws_route53_record.agent_broker_private[0].name == "agents.staging.internal.snowmanai.org"
+    error_message = "The broker must use the exact split-horizon Snowman hostname."
   }
 }
 

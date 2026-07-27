@@ -93,6 +93,10 @@ the highest risks without changing the production-readiness verdict:
 - the governed one-shot bootstrap now creates and verifies the broker's exact
   read/update-only database role and writes only its TLS RDS URL to a separate
   KMS-encrypted secret that the relay execution role cannot read;
+- the broker is now packaged in the digest-pinned Snowman image and has a
+  hard-dormant private ECS service definition behind an executor-only TLS NLB
+  and split-horizon Snowman DNS; it receives no AWS task role or public IP and
+  can reach only RDS, VPC DNS, and exact private AWS execution endpoints;
 - definition-time rejection of unimplemented workflow actions and unsafe
   webhook destinations/credential headers; and
 - a default-off Analyst lifecycle-event ingress with host-derived community
@@ -123,7 +127,7 @@ the highest risks without changing the production-readiness verdict:
 These are implementation foundations, not staged proof. OIDC assertion exchange,
 private integration routing, live database/bootstrap evidence, recurring
 partition rotation and authenticated-edge bypass tests,
-proactive execution, broker deployment/action tools/model-token path, adapter images, and live sandbox proof,
+proactive execution, applied broker staging/action tools/model-token path, adapter images, and live sandbox proof,
 KMS audit checkpoints, staged
 recovery/load/isolation exercises, comprehensive branding, accessibility, UAT,
 and launch evidence remain open gates.

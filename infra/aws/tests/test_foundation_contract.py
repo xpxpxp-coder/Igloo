@@ -224,6 +224,7 @@ class AwsFoundationContractTests(unittest.TestCase):
         self.assertNotIn('SNOWMAN_ANALYST', source)
         self.assertIn('resource "aws_security_group" "agent_executor"', network)
         self.assertIn('resource "aws_security_group" "agent_broker"', network)
+        self.assertIn('resource "aws_security_group" "agent_broker_ingress"', network)
         self.assertIn('resource "aws_security_group" "agent_endpoints"', network)
         self.assertIn('description                  = "No direct relay, Analyst, artifact-store, or connector route"', network)
         self.assertIn('["ecr.api", "ecr.dkr", "logs"]', network)
@@ -234,12 +235,43 @@ class AwsFoundationContractTests(unittest.TestCase):
         source = (ROOT.parent.parent / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("-p snowman-workforce-worker --bins", source)
         for binary in (
+            "snowman-agent-broker",
             "snowman-workforce-worker",
             "snowman-workforce-scheduler",
             "snowman-workforce-trigger",
             "snowman-workforce-reminder",
         ):
             self.assertIn(f"/usr/local/bin/{binary}", source)
+
+    def test_agent_broker_is_private_task_role_free_and_hard_dormant(self) -> None:
+        source = (ROOT / "agent_broker.tf").read_text(encoding="utf-8")
+        network = (ROOT / "network.tf").read_text(encoding="utf-8")
+        preflight = (ROOT / "preflight.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'resource "aws_lb" "agent_broker_private"',
+            'internal                         = true',
+            'protocol          = "TLS"',
+            'ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"',
+            'matcher             = "200-299"',
+            'entryPoint             = ["/usr/local/bin/snowman-agent-broker"]',
+            'readonlyRootFilesystem = true',
+            'privileged             = false',
+            'capabilities       = { drop = ["ALL"] }',
+            'SNOWMAN_AGENT_BROKER_DATABASE_URL',
+            ':database_url::',
+            'SNOWMAN_AGENT_BROKER_NETWORK_POLICY", value = "private-snowman-only"',
+            'enable_execute_command = false',
+            'assign_public_ip = false',
+            'condition     = var.agent_broker_desired_count == 0',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, source)
+        self.assertNotRegex(source, r"(?m)^\s*task_role_arn\s*=")
+        self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
+        self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
+        self.assertIn('resource "aws_vpc_security_group_ingress_rule" "database_from_agent_broker"', network)
+        self.assertIn('description                  = "No relay, Analyst, model, object, connector, or public route"', network)
+        self.assertIn('var.agent_broker_desired_count == 0', preflight)
 
     def test_public_edge_blocks_private_internal_api_paths(self) -> None:
         source = (ROOT / "edge.tf").read_text(encoding="utf-8")

@@ -72,6 +72,9 @@ evidence for a runtime, recovery, accessibility, or operational claim.
 - Any enabled execution runs inside a proven sandbox with scoped mounts,
   resource/time limits, process isolation, deny-by-default egress, no ambient AWS
   credentials, brokered secrets, and a complete command/tool receipt.
+- The job broker is reachable only through executor-identity private TLS,
+  receives no AWS task role, reads only its dedicated database secret, and has
+  no relay, Analyst, model, object-store, connector, or public network route.
 - High-impact file, network, deployment, identity, secret, billing, data export,
   and destructive operations require an expiring, identity-bound approval.
 - Prompt injection, confused-deputy, capability escalation, secret exfiltration,

@@ -159,6 +159,12 @@ resource "aws_security_group" "agent_broker" {
   vpc_id      = aws_vpc.command_center.id
 }
 
+resource "aws_security_group" "agent_broker_ingress" {
+  name        = "${local.workload_name}-agent-broker-ingress"
+  description = "Internal TLS ingress reachable only by one-shot Snowman agent tasks"
+  vpc_id      = aws_vpc.command_center.id
+}
+
 resource "aws_security_group" "scheduler" {
   name        = "${local.workload_name}-scheduler"
   description = "Deadline and lease maintenance only; no Analyst or model route"
@@ -344,21 +350,57 @@ resource "aws_vpc_security_group_egress_rule" "agent_executor_to_model_gateway" 
 }
 
 resource "aws_vpc_security_group_ingress_rule" "agent_broker_from_executor" {
-  security_group_id            = aws_security_group.agent_broker.id
+  security_group_id            = aws_security_group.agent_broker_ingress.id
   referenced_security_group_id = aws_security_group.agent_executor.id
-  from_port                    = 8444
-  to_port                      = 8444
+  from_port                    = 443
+  to_port                      = 443
   ip_protocol                  = "tcp"
-  description                  = "Purpose-bound job context, action, and result API only"
+  description                  = "TLS access to the purpose-bound job and result API only"
 }
 
 resource "aws_vpc_security_group_egress_rule" "agent_executor_to_broker" {
   security_group_id            = aws_security_group.agent_executor.id
-  referenced_security_group_id = aws_security_group.agent_broker.id
-  from_port                    = 8444
-  to_port                      = 8444
+  referenced_security_group_id = aws_security_group.agent_broker_ingress.id
+  from_port                    = 443
+  to_port                      = 443
   ip_protocol                  = "tcp"
   description                  = "No direct relay, Analyst, artifact-store, or connector route"
+}
+
+resource "aws_vpc_security_group_egress_rule" "agent_broker_ingress_to_task" {
+  security_group_id            = aws_security_group.agent_broker_ingress.id
+  referenced_security_group_id = aws_security_group.agent_broker.id
+  from_port                    = 8080
+  to_port                      = 8080
+  ip_protocol                  = "tcp"
+  description                  = "TLS-terminating NLB to the private broker task only"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "agent_broker_from_ingress" {
+  security_group_id            = aws_security_group.agent_broker.id
+  referenced_security_group_id = aws_security_group.agent_broker_ingress.id
+  from_port                    = 8080
+  to_port                      = 8080
+  ip_protocol                  = "tcp"
+  description                  = "Private NLB traffic and readiness probes only"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "database_from_agent_broker" {
+  security_group_id            = aws_security_group.database.id
+  referenced_security_group_id = aws_security_group.agent_broker.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "Read/update-only agent job ledger identity"
+}
+
+resource "aws_vpc_security_group_egress_rule" "agent_broker_to_database" {
+  security_group_id            = aws_security_group.agent_broker.id
+  referenced_security_group_id = aws_security_group.database.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "No relay, Analyst, model, object, connector, or public route"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "inference_from_model_gateway" {
@@ -432,6 +474,7 @@ resource "aws_vpc_security_group_ingress_rule" "endpoints_from_services" {
     scheduler     = aws_security_group.scheduler.id
     trigger       = aws_security_group.trigger.id
     reminder      = aws_security_group.reminder.id
+    agent_broker  = aws_security_group.agent_broker.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -468,6 +511,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_endpoints" {
     scheduler     = aws_security_group.scheduler.id
     trigger       = aws_security_group.trigger.id
     reminder      = aws_security_group.reminder.id
+    agent_broker  = aws_security_group.agent_broker.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -486,6 +530,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_udp" {
     scheduler     = aws_security_group.scheduler.id
     trigger       = aws_security_group.trigger.id
     reminder      = aws_security_group.reminder.id
+    agent_broker  = aws_security_group.agent_broker.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -504,6 +549,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_tcp" {
     scheduler     = aws_security_group.scheduler.id
     trigger       = aws_security_group.trigger.id
     reminder      = aws_security_group.reminder.id
+    agent_broker  = aws_security_group.agent_broker.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }

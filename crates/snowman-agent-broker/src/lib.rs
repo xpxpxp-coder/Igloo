@@ -881,7 +881,7 @@ mod tests {
         for invalid in [
             format!("postgresql://broker:{password}@database.attacker.test/snowman?sslmode=require"),
             format!("postgresql://broker:{password}@snowman.cluster.us-west-2.rds.amazonaws.com/snowman?sslmode=disable"),
-            format!("postgresql://broker:short@snowman.cluster.us-west-2.rds.amazonaws.com/snowman?sslmode=require"),
+            "postgresql://broker:short@snowman.cluster.us-west-2.rds.amazonaws.com/snowman?sslmode=require".to_owned(),
         ] {
             assert!(!valid_database_url(&invalid));
         }
