@@ -39,8 +39,11 @@ The provider-neutral media crate now packages the private
 `snowman-meeting-media-gateway` executable. It exposes authenticated join,
 stop, usage, and bounded intent routes on its private control listener and a
 different callback/WebSocket router for provider ingress. The shipped runtime
-injects fail-closed provider and callback implementations, so it cannot dial,
-stream, or accept a callback. Terraform still creates no media task definition,
+remains activation-fail-closed, so it cannot dial, stream, or accept a callback.
+A KMS-authenticated provider-proxy client and exact callback-verification
+contract are packaged for staging, but the required Snowman-owned media
+execution/session service (Twilio call control plus Twilio/OpenAI Realtime
+WebSocket ownership) is not yet implemented. Terraform still creates no media task definition,
 service, Cloud Map namespace, IAM execution role, or autoscaling target unless
 both of these immutable inputs are present:
 
@@ -65,8 +68,10 @@ allow `0.0.0.0/0`; the private service subnets have no NAT/default internet
 route. The proxy contract accepts only exact `api.twilio.com`,
 `api.openai.com`, and `api.elevenlabs.io` destinations and must independently
 enforce DNS/TLS pinning, Snowman provider-account binding, tenant/data-class
-policy, spend/duration limits, and redacted receipts. Provider callbacks and
-media WebSocket ingress are intentionally not present in this slice.
+policy, spend/duration limits, and redacted receipts. Provider callback
+verification is implemented at the private proxy boundary; public callback/WAF
+routing and media WebSocket session ownership remain absent and hard-disabled
+in this slice.
 
 ## Activation gates
 

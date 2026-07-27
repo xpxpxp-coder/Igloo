@@ -24,11 +24,14 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
+use subtle::ConstantTimeEq;
 use tower_http::limit::RequestBodyLimitLayer;
 use url::Url;
 use uuid::Uuid;
@@ -42,6 +45,8 @@ use crate::{
 
 const MAX_WIRE_BYTES: usize = 12 * 1024 * 1024;
 const CANCEL_SCHEMA: &str = "snowman.provider-egress.cancel.v1";
+const CALLBACK_VERIFY_SCHEMA: &str = "snowman.provider-callback.verify.v1";
+const MAX_CALLBACK_BODY_BYTES: usize = 1024 * 1024;
 
 /// Runtime configuration loaded from non-secret task metadata and dedicated secrets.
 pub struct Config {
@@ -59,6 +64,27 @@ struct RuntimePolicy {
     max_concurrency: usize,
     principals: Vec<PrincipalPolicy>,
     routes: Vec<RouteConfig>,
+    #[serde(default)]
+    callback_bindings: Vec<CallbackBindingConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CallbackBindingConfig {
+    callback_binding_id: Uuid,
+    provider: Provider,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    meeting_id: Uuid,
+    service_identity_id: Uuid,
+    exact_public_url: String,
+    secret_arn: String,
+    secret_json_key: String,
+    secret_version_sha256: String,
+    principal_ids: BTreeSet<String>,
+    classification: String,
+    websocket_upgrade_allowed: bool,
+    max_age_seconds: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -144,6 +170,8 @@ pub struct AppState {
     pool: PgPool,
     bind_addr: SocketAddr,
     metrics: Arc<Metrics>,
+    callback_bindings: Arc<BTreeMap<Uuid, CallbackBindingConfig>>,
+    callback_secrets: aws_sdk_secretsmanager::Client,
 }
 
 impl AppState {
@@ -172,6 +200,16 @@ impl AppState {
             .into_iter()
             .map(|route| route.into_policy(&config.aws_account_id))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut callback_bindings = BTreeMap::new();
+        for binding in config.policy.callback_bindings {
+            binding.validate(&config.aws_account_id, &verifier)?;
+            if callback_bindings
+                .insert(binding.callback_binding_id, binding)
+                .is_some()
+            {
+                return Err(ConfigError::Invalid);
+            }
+        }
         if routes.iter().any(|route| {
             route.principal_ids.iter().any(|principal| {
                 route.tenant_ids.iter().any(|tenant| {
@@ -203,6 +241,8 @@ impl AppState {
             pool,
             bind_addr: config.bind_addr,
             metrics: Arc::new(Metrics::default()),
+            callback_bindings: Arc::new(callback_bindings),
+            callback_secrets: aws_sdk_secretsmanager::Client::new(&sdk),
         })
     }
 
@@ -210,6 +250,65 @@ impl AppState {
     pub fn bind_addr(&self) -> SocketAddr {
         self.bind_addr
     }
+}
+
+impl CallbackBindingConfig {
+    fn validate(
+        &self,
+        account_id: &str,
+        verifier: &KmsWorkloadVerifier,
+    ) -> Result<(), ConfigError> {
+        let url = Url::parse(&self.exact_public_url).map_err(|_| ConfigError::Invalid)?;
+        let host = url.host_str().unwrap_or_default();
+        if !matches!(self.provider, Provider::Twilio | Provider::OpenAi)
+            || !matches!(url.scheme(), "https" | "wss")
+            || !(host == "meetings.snowmanai.org" || host.ends_with(".meetings.snowmanai.org"))
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !valid_callback_path(
+                &url,
+                self.provider,
+                self.callback_binding_id,
+                self.websocket_upgrade_allowed,
+            )
+            || !same_account_secret_arn(&self.secret_arn, account_id)
+            || self.secret_json_key.is_empty()
+            || self.secret_json_key.len() > 128
+            || !is_sha256(&self.secret_version_sha256)
+            || self.principal_ids.is_empty()
+            || !matches!(self.classification.as_str(), "internal" | "confidential")
+            || !(30..=300).contains(&self.max_age_seconds)
+            || (self.websocket_upgrade_allowed && self.provider != Provider::Twilio)
+            || (self.websocket_upgrade_allowed != (url.scheme() == "wss"))
+            || self.principal_ids.iter().any(|principal| {
+                !verifier.authorizes(principal, self.tenant_id, "provider_egress.callback.verify")
+            })
+        {
+            return Err(ConfigError::Invalid);
+        }
+        Ok(())
+    }
+}
+
+fn valid_callback_path(
+    url: &Url,
+    provider: Provider,
+    binding_id: Uuid,
+    websocket_upgrade: bool,
+) -> bool {
+    let provider_path = match provider {
+        Provider::Twilio => "twilio",
+        Provider::OpenAi => "open_ai_realtime",
+        Provider::ElevenLabs => return false,
+    };
+    let route = if websocket_upgrade {
+        "provider-streams"
+    } else {
+        "provider-callbacks"
+    };
+    url.path() == format!("/v1/{route}/{provider_path}/{binding_id}")
 }
 
 impl RouteConfig {
@@ -257,8 +356,283 @@ pub fn router(state: AppState) -> Router {
             "/v1/tenants/{tenant_id}/sessions/{session_id}/generations/{generation}/cancel",
             post(cancel),
         )
+        .route(
+            "/v1/callback-bindings/{binding_id}/verify",
+            post(verify_callback),
+        )
         .layer(RequestBodyLimitLayer::new(MAX_WIRE_BYTES))
         .with_state(state)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CallbackVerifyEnvelope {
+    schema_version: String,
+    request_id: Uuid,
+    principal_id: String,
+    callback_binding_id: Uuid,
+    method: String,
+    exact_public_url: String,
+    headers: BTreeMap<String, String>,
+    body_sha256: String,
+    websocket_upgrade: bool,
+    issued_at: DateTime<Utc>,
+    deadline: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CallbackVerifyRequest {
+    envelope: CallbackVerifyEnvelope,
+    body_base64: String,
+    signature_base64: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CallbackVerifyResponse {
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    meeting_id: Uuid,
+    service_identity_id: Uuid,
+    provider: Provider,
+    classification: String,
+    delivery_id_sha256: String,
+    request_sha256: String,
+    authentication_key_version_sha256: String,
+}
+
+async fn verify_callback(
+    State(state): State<AppState>,
+    Path(binding_id): Path<Uuid>,
+    Json(request): Json<CallbackVerifyRequest>,
+) -> Result<Json<CallbackVerifyResponse>, ApiError> {
+    let now = Utc::now();
+    let envelope = &request.envelope;
+    let binding = state
+        .callback_bindings
+        .get(&binding_id)
+        .ok_or(ApiError(ProxyError::PolicyDenied))?;
+    if envelope.schema_version != CALLBACK_VERIFY_SCHEMA
+        || envelope.callback_binding_id != binding_id
+        || !binding.principal_ids.contains(&envelope.principal_id)
+        || !state.verifier.authorizes(
+            &envelope.principal_id,
+            binding.tenant_id,
+            "provider_egress.callback.verify",
+        )
+        || envelope.exact_public_url != binding.exact_public_url
+        || !matches!(envelope.method.as_str(), "GET" | "POST")
+        || envelope.websocket_upgrade != binding.websocket_upgrade_allowed
+        || (envelope.websocket_upgrade && envelope.method != "GET")
+        || (!envelope.websocket_upgrade && envelope.method != "POST")
+        || !is_sha256(&envelope.body_sha256)
+        || envelope.headers.is_empty()
+        || envelope.headers.len() > 64
+        || envelope.headers.iter().any(|(name, value)| {
+            name != &name.to_ascii_lowercase()
+                || !valid_header_name(name)
+                || value.is_empty()
+                || value.len() > 8192
+                || value.contains(['\r', '\n'])
+        })
+        || envelope.issued_at < now - chrono::Duration::seconds(60)
+        || envelope.issued_at > now + chrono::Duration::seconds(10)
+        || envelope.deadline <= now
+        || envelope.deadline > now + chrono::Duration::seconds(60)
+        || request.body_base64.len() > encoded_limit(MAX_CALLBACK_BODY_BYTES)
+        || request.signature_base64.len() > 2048
+    {
+        return Err(ApiError(ProxyError::InvalidRequest));
+    }
+    let body = STANDARD
+        .decode(&request.body_base64)
+        .map_err(|_| ApiError(ProxyError::InvalidRequest))?;
+    if hex::encode(Sha256::digest(&body)) != envelope.body_sha256 {
+        return Err(ApiError(ProxyError::Authentication));
+    }
+    let canonical =
+        serde_json::to_vec(envelope).map_err(|_| ApiError(ProxyError::InvalidRequest))?;
+    let signature = STANDARD
+        .decode(&request.signature_base64)
+        .map_err(|_| ApiError(ProxyError::Authentication))?;
+    state
+        .verifier
+        .verify(&envelope.principal_id, &canonical, &signature)
+        .await
+        .map_err(ApiError)?;
+
+    let output = state
+        .callback_secrets
+        .get_secret_value()
+        .secret_id(&binding.secret_arn)
+        .send()
+        .await
+        .map_err(|_| ApiError(ProxyError::AuthorityUnavailable))?;
+    let version_id = output
+        .version_id()
+        .ok_or(ApiError(ProxyError::AuthorityUnavailable))?;
+    let version_sha256 = hex::encode(Sha256::digest(version_id.as_bytes()));
+    if version_sha256 != binding.secret_version_sha256 {
+        return Err(ApiError(ProxyError::AuthorityUnavailable));
+    }
+    let document = output
+        .secret_string()
+        .ok_or(ApiError(ProxyError::AuthorityUnavailable))?;
+    let mut parsed: Value =
+        serde_json::from_str(document).map_err(|_| ApiError(ProxyError::AuthorityUnavailable))?;
+    let secret = parsed
+        .get(&binding.secret_json_key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 8192)
+        .map(|value| Zeroizing::new(value.to_owned()))
+        .ok_or(ApiError(ProxyError::AuthorityUnavailable))?;
+    scrub_json_strings(&mut parsed);
+    drop(output);
+
+    let request_sha256 = callback_request_digest(envelope, &body)?;
+    let delivery_id = match binding.provider {
+        Provider::Twilio => verify_twilio_callback(envelope, &body, secret.as_bytes())?,
+        Provider::OpenAi => verify_openai_callback(
+            envelope,
+            &body,
+            secret.as_bytes(),
+            now,
+            binding.max_age_seconds,
+        )?,
+        Provider::ElevenLabs => return Err(ApiError(ProxyError::PolicyDenied)),
+    };
+    Ok(Json(CallbackVerifyResponse {
+        tenant_id: binding.tenant_id,
+        workspace_id: binding.workspace_id,
+        meeting_id: binding.meeting_id,
+        service_identity_id: binding.service_identity_id,
+        provider: binding.provider,
+        classification: binding.classification.clone(),
+        delivery_id_sha256: hex::encode(Sha256::digest(delivery_id.as_bytes())),
+        request_sha256,
+        authentication_key_version_sha256: version_sha256,
+    }))
+}
+
+fn callback_request_digest(
+    envelope: &CallbackVerifyEnvelope,
+    body: &[u8],
+) -> Result<String, ApiError> {
+    let canonical = serde_json::to_vec(&(
+        &envelope.method,
+        &envelope.exact_public_url,
+        &envelope.headers,
+        hex::encode(Sha256::digest(body)),
+    ))
+    .map_err(|_| ApiError(ProxyError::InvalidRequest))?;
+    Ok(hex::encode(Sha256::digest(canonical)))
+}
+
+fn verify_twilio_callback(
+    envelope: &CallbackVerifyEnvelope,
+    body: &[u8],
+    secret: &[u8],
+) -> Result<String, ApiError> {
+    let supplied = envelope
+        .headers
+        .get("x-twilio-signature")
+        .and_then(|value| STANDARD.decode(value).ok())
+        .ok_or(ApiError(ProxyError::Authentication))?;
+    let mut signed = envelope.exact_public_url.as_bytes().to_vec();
+    if envelope.method == "POST" {
+        let mut parameters = url::form_urlencoded::parse(body)
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        parameters.sort();
+        for (key, value) in &parameters {
+            signed.extend_from_slice(key.as_bytes());
+            signed.extend_from_slice(value.as_bytes());
+        }
+    } else if !body.is_empty() {
+        return Err(ApiError(ProxyError::InvalidRequest));
+    }
+    let mut mac = <Hmac<Sha1> as KeyInit>::new_from_slice(secret)
+        .map_err(|_| ApiError(ProxyError::AuthorityUnavailable))?;
+    mac.update(&signed);
+    let expected = mac.finalize().into_bytes();
+    if supplied.len() != expected.len() || supplied.ct_eq(expected.as_slice()).unwrap_u8() != 1 {
+        return Err(ApiError(ProxyError::Authentication));
+    }
+    Ok(envelope
+        .headers
+        .get("i-twilio-idempotency-token")
+        .cloned()
+        .unwrap_or_else(|| hex::encode(Sha256::digest(&signed))))
+}
+
+fn verify_openai_callback(
+    envelope: &CallbackVerifyEnvelope,
+    body: &[u8],
+    secret: &[u8],
+    now: DateTime<Utc>,
+    max_age_seconds: u64,
+) -> Result<String, ApiError> {
+    let delivery_id = envelope
+        .headers
+        .get("webhook-id")
+        .filter(|value| valid_identifier(value))
+        .ok_or(ApiError(ProxyError::Authentication))?;
+    let timestamp_raw = envelope
+        .headers
+        .get("webhook-timestamp")
+        .ok_or(ApiError(ProxyError::Authentication))?;
+    let timestamp = timestamp_raw
+        .parse::<i64>()
+        .ok()
+        .and_then(DateTime::from_timestamp_secs)
+        .ok_or(ApiError(ProxyError::Authentication))?;
+    if timestamp < now - chrono::Duration::seconds(max_age_seconds as i64)
+        || timestamp > now + chrono::Duration::seconds(30)
+    {
+        return Err(ApiError(ProxyError::Authentication));
+    }
+    let encoded_secret = std::str::from_utf8(secret)
+        .ok()
+        .and_then(|value| value.strip_prefix("whsec_"))
+        .ok_or(ApiError(ProxyError::AuthorityUnavailable))?;
+    let key = Zeroizing::new(
+        STANDARD
+            .decode(encoded_secret)
+            .map_err(|_| ApiError(ProxyError::AuthorityUnavailable))?,
+    );
+    let mut signed = Vec::with_capacity(delivery_id.len() + timestamp_raw.len() + body.len() + 2);
+    signed.extend_from_slice(delivery_id.as_bytes());
+    signed.push(b'.');
+    signed.extend_from_slice(timestamp_raw.as_bytes());
+    signed.push(b'.');
+    signed.extend_from_slice(body);
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key.as_slice())
+        .map_err(|_| ApiError(ProxyError::AuthorityUnavailable))?;
+    mac.update(&signed);
+    let expected = mac.finalize().into_bytes();
+    let valid = envelope
+        .headers
+        .get("webhook-signature")
+        .into_iter()
+        .flat_map(|value| value.split_ascii_whitespace())
+        .filter_map(|value| value.strip_prefix("v1,"))
+        .filter_map(|value| STANDARD.decode(value).ok())
+        .any(|candidate| {
+            candidate.len() == expected.len()
+                && candidate.ct_eq(expected.as_slice()).unwrap_u8() == 1
+        });
+    if !valid {
+        return Err(ApiError(ProxyError::Authentication));
+    }
+    Ok(delivery_id.clone())
+}
+
+fn valid_header_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 async fn readiness(State(state): State<AppState>) -> StatusCode {
@@ -1136,5 +1510,144 @@ mod tests {
         assert_eq!(encoded_limit(1), 4);
         assert_eq!(encoded_limit(3), 4);
         assert_eq!(encoded_limit(4), 8);
+    }
+
+    #[test]
+    fn callback_path_is_exact_to_provider_binding_and_transport() {
+        let binding_id = Uuid::new_v4();
+        let callback = Url::parse(&format!(
+            "https://meetings.snowmanai.org/v1/provider-callbacks/twilio/{binding_id}"
+        ))
+        .unwrap();
+        let stream = Url::parse(&format!(
+            "wss://meetings.snowmanai.org/v1/provider-streams/twilio/{binding_id}"
+        ))
+        .unwrap();
+        assert!(valid_callback_path(
+            &callback,
+            Provider::Twilio,
+            binding_id,
+            false
+        ));
+        assert!(valid_callback_path(
+            &stream,
+            Provider::Twilio,
+            binding_id,
+            true
+        ));
+        assert!(!valid_callback_path(
+            &callback,
+            Provider::OpenAi,
+            binding_id,
+            false
+        ));
+        assert!(!valid_callback_path(
+            &Url::parse("https://meetings.snowmanai.org/catch-all").unwrap(),
+            Provider::Twilio,
+            binding_id,
+            false
+        ));
+    }
+
+    fn callback_envelope(
+        method: &str,
+        url: &str,
+        headers: BTreeMap<String, String>,
+        body: &[u8],
+        now: DateTime<Utc>,
+    ) -> CallbackVerifyEnvelope {
+        CallbackVerifyEnvelope {
+            schema_version: CALLBACK_VERIFY_SCHEMA.into(),
+            request_id: Uuid::new_v4(),
+            principal_id: "snowman-meeting-media".into(),
+            callback_binding_id: Uuid::new_v4(),
+            method: method.into(),
+            exact_public_url: url.into(),
+            headers,
+            body_sha256: hex::encode(Sha256::digest(body)),
+            websocket_upgrade: method == "GET",
+            issued_at: now,
+            deadline: now + chrono::Duration::seconds(30),
+        }
+    }
+
+    #[test]
+    fn twilio_callback_uses_exact_url_all_form_fields_and_constant_time_mac() {
+        let now = Utc::now();
+        let body = b"CallSid=CA123&SequenceNumber=4&FutureParameter=kept";
+        let url = "https://meetings.snowmanai.org/v1/provider-callbacks/twilio/binding";
+        let secret = b"twilio-test-secret";
+        let mut signed = url.as_bytes().to_vec();
+        let mut parameters = url::form_urlencoded::parse(body)
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        parameters.sort();
+        for (key, value) in parameters {
+            signed.extend_from_slice(key.as_bytes());
+            signed.extend_from_slice(value.as_bytes());
+        }
+        let mut mac = <Hmac<Sha1> as KeyInit>::new_from_slice(secret).unwrap();
+        mac.update(&signed);
+        let signature = STANDARD.encode(mac.finalize().into_bytes());
+        let envelope = callback_envelope(
+            "POST",
+            url,
+            BTreeMap::from([
+                ("x-twilio-signature".into(), signature),
+                ("i-twilio-idempotency-token".into(), "retry-1".into()),
+            ]),
+            body,
+            now,
+        );
+        assert_eq!(
+            verify_twilio_callback(&envelope, body, secret)
+                .ok()
+                .as_deref(),
+            Some("retry-1")
+        );
+        assert!(verify_twilio_callback(&envelope, b"CallSid=changed", secret).is_err());
+    }
+
+    #[test]
+    fn openai_callback_rejects_stale_changed_body_and_wrong_signature() {
+        let now = Utc::now();
+        let body = br#"{"type":"realtime.call.incoming"}"#;
+        let raw_key = b"openai-webhook-key";
+        let secret = format!("whsec_{}", STANDARD.encode(raw_key));
+        let delivery = "wh_test_123";
+        let timestamp = now.timestamp().to_string();
+        let mut signed = format!("{delivery}.{timestamp}.").into_bytes();
+        signed.extend_from_slice(body);
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(raw_key).unwrap();
+        mac.update(&signed);
+        let signature = format!("v1,{}", STANDARD.encode(mac.finalize().into_bytes()));
+        let envelope = callback_envelope(
+            "POST",
+            "https://meetings.snowmanai.org/v1/provider-callbacks/open_ai_realtime/binding",
+            BTreeMap::from([
+                ("webhook-id".into(), delivery.into()),
+                ("webhook-timestamp".into(), timestamp),
+                ("webhook-signature".into(), signature),
+            ]),
+            body,
+            now,
+        );
+        assert_eq!(
+            verify_openai_callback(&envelope, body, secret.as_bytes(), now, 300)
+                .ok()
+                .as_deref(),
+            Some(delivery)
+        );
+        assert!(
+            verify_openai_callback(&envelope, b"changed", secret.as_bytes(), now, 300).is_err()
+        );
+        assert!(verify_openai_callback(
+            &envelope,
+            body,
+            secret.as_bytes(),
+            now + chrono::Duration::minutes(6),
+            300
+        )
+        .is_err());
     }
 }

@@ -106,7 +106,7 @@ thiserror = "2"
 anyhow    = "1"
 
 # Utilities
-uuid    = { version = "1", features = ["v4", "serde"] }
+uuid    = { version = "1", features = ["v4", "v5", "serde"] }
 chrono  = { version = "0.4", features = ["serde"] }
 chrono-tz = "=0.10.4"
 
@@ -117,6 +117,7 @@ reqwest = { version = "0.13", features = ["json", "rustls"], default-features = 
 sha2      = "0.11"
 hex       = "0.4"
 hmac      = "0.13"
+sha1      = "0.11"
 aws-config = "1.10.1"
 aws-sdk-kms = "1.114.0"
 aws-sdk-s3 = "=1.140.0"

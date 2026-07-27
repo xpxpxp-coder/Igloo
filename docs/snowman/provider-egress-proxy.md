@@ -101,6 +101,12 @@ only, digest-only evidence and cannot represent provider content.
   content exists only in the live response; replay returns the receipt alone.
 - `POST /v1/tenants/{tenant_id}/sessions/{session_id}/generations/{generation}/cancel`
   writes the signed generation fence.
+- `POST /v1/callback-bindings/{binding_id}/verify` accepts a KMS-signed,
+  short-lived verification envelope from an allowlisted Snowman workload. The
+  policy fixes provider, tenant, workspace, meeting, service identity, exact
+  public Snowman URL, classification, WebSocket mode, secret ARN/key, and
+  secret-version digest. It verifies the provider signature and returns only
+  exact scope plus evidence digests.
 - `/_liveness`, `/_readiness`, and `/metrics` expose no tenant, provider body,
   URL, credential, prompt, transcript, or audio labels.
 
@@ -109,8 +115,16 @@ It maps exact principals to same-account asymmetric KMS key ARNs and exact
 dispatch/cancel capabilities and tenant grants. It maps
 destination IDs to provider URLs, methods, tenant/purpose/classification and
 budget bounds, response/request content types, and Snowman-named same-account
-Secrets Manager ARNs. Provider credentials are never accepted through an
+Secrets Manager ARNs. `callback_bindings` additionally maps an exact callback
+binding to an allowlisted verification principal and pinned credential version.
+Provider credentials are never accepted through an
 environment variable or caller field.
+
+The generic HTTP relay is not a media session owner. A Snowman-owned media
+execution/session service is still required to translate admitted operations
+into Twilio call control and maintain Twilio/OpenAI Realtime WebSocket
+lifecycles. Until that service is packaged and staged, the meeting gateway
+leaves its live provider and callback switches disabled.
 
 Terraform packaging lives in `infra/aws/provider_egress_proxy.tf`. The encrypted
 database runtime-secret container exists independently so the governed one-shot

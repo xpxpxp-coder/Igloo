@@ -171,6 +171,12 @@ pub struct CallbackRequest<'a> {
 pub struct VerifiedCallback {
     /// Exact tenant bound by the operations registration.
     pub tenant_id: Uuid,
+    /// Exact workspace bound by the operations registration.
+    pub workspace_id: Uuid,
+    /// Exact governed meeting bound by the operations registration.
+    pub meeting_id: Uuid,
+    /// Exact Snowman workload identity allowed to consume the callback.
+    pub service_identity_id: Uuid,
     /// Digest of the stable provider delivery identifier.
     pub delivery_id_sha256: String,
     /// Digest of exact URL and raw request bytes.
@@ -1269,15 +1275,27 @@ async fn persist_callback(
     }
     let inserted = sqlx::query(
         "INSERT INTO snowman_meeting_media_webhook_receipts \
-         (community_id,provider,delivery_id_sha256,request_sha256, \
-          authentication_key_version_sha256,media_session_id,session_generation,received_at) \
-         SELECT $1,$2,$3,$4,$5,$6,$7,$8 \
+         (community_id,workspace_id,meeting_id,gateway_service_identity_id,callback_binding_id, \
+          provider,delivery_id_sha256,request_sha256,authentication_key_version_sha256, \
+          media_session_id,session_generation,received_at) \
+         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12 \
          FROM snowman_meeting_media_callback_bindings b \
-         WHERE b.community_id=$1 AND b.callback_binding_id=$9 AND b.provider=$2 \
-           AND b.status='active' \
+         JOIN snowman_meetings m ON m.community_id=b.community_id AND m.meeting_id=b.meeting_id \
+         LEFT JOIN snowman_meeting_media_sessions s \
+           ON s.community_id=b.community_id AND s.media_session_id=$10 \
+         WHERE b.community_id=$1 AND b.workspace_id=$2 AND b.meeting_id=$3 \
+           AND b.gateway_service_identity_id=$4 AND b.callback_binding_id=$5 AND b.provider=$6 \
+           AND m.workspace_id=$2 AND b.status='active' \
+           AND ($10::uuid IS NULL OR (s.workspace_id=$2 AND s.meeting_id=$3 \
+                AND s.gateway_service_identity_id=$4 AND s.session_generation=$11 \
+                AND s.status IN ('joining','active','stopping'))) \
          ON CONFLICT (community_id,provider,delivery_id_sha256) DO NOTHING",
     )
     .bind(verified.tenant_id)
+    .bind(verified.workspace_id)
+    .bind(verified.meeting_id)
+    .bind(verified.service_identity_id)
+    .bind(binding_id)
     .bind(provider(provider_value))
     .bind(hex::decode(&verified.delivery_id_sha256).map_err(|_| ApiError::Unauthorized)?)
     .bind(hex::decode(&verified.request_sha256).map_err(|_| ApiError::Unauthorized)?)
@@ -1288,7 +1306,6 @@ async fn persist_callback(
     .bind(verified.session_id)
     .bind(verified.session_generation.map(i64::from))
     .bind(Utc::now())
-    .bind(binding_id)
     .execute(pool)
     .await
     .map_err(db)?;
@@ -1296,12 +1313,18 @@ async fn persist_callback(
         let exact: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM snowman_meeting_media_webhook_receipts \
              WHERE community_id=$1 AND provider=$2 AND delivery_id_sha256=$3 \
-               AND request_sha256=$4)",
+               AND request_sha256=$4 AND callback_binding_id=$5 \
+               AND workspace_id=$6 AND meeting_id=$7 \
+               AND gateway_service_identity_id=$8)",
         )
         .bind(verified.tenant_id)
         .bind(provider(provider_value))
         .bind(hex::decode(&verified.delivery_id_sha256).map_err(|_| ApiError::Unauthorized)?)
         .bind(hex::decode(&verified.request_sha256).map_err(|_| ApiError::Unauthorized)?)
+        .bind(binding_id)
+        .bind(verified.workspace_id)
+        .bind(verified.meeting_id)
+        .bind(verified.service_identity_id)
         .fetch_one(pool)
         .await
         .map_err(db)?;

@@ -779,6 +779,9 @@ resource "aws_ecs_service" "provider_egress" {
   desired_count   = var.provider_egress_desired_count
   launch_type     = "FARGATE"
 
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
+
   enable_execute_command = false
 
   deployment_circuit_breaker {

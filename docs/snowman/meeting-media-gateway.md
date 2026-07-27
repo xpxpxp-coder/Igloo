@@ -1,7 +1,8 @@
 # Governed live meeting media gateway
 
-Status: **executable control contract, persistence schema, and transport-injected
-provider adapters; no live provider traffic is activated or staging-proven**.
+Status: **executable control contract, persistence schema, transport-injected
+provider adapters, and a KMS-authenticated provider-proxy client; no live
+provider traffic is activated or staging-proven**.
 
 The `snowman-meeting-media-gateway` crate and migrations 0050/0056 define the media
 boundary between the consent-complete meeting-control service, native Snowman
@@ -19,8 +20,10 @@ applied through serializable transactions. Join authority moves to
 `indeterminate` before any injected provider call, so a lost response cannot
 cause exact replay to dial twice. Provider callbacks and WebSocket upgrades are
 on a separate router and require a separately injected callback authenticator.
-The packaged executable injects disabled implementations for both boundaries;
-provider egress, callback ingress, and ECS desired count remain zero.
+The packaged executable still injects disabled implementations for both
+boundaries. The reviewed client exists, but provider egress, callback ingress,
+and ECS desired count remain zero until the media execution/session service
+described below is complete and staged.
 
 ## Authority and data boundary
 
@@ -142,21 +145,46 @@ cancel/clear behavior.
 
 ## Persistence
 
-Migration 0050 adds tenant-leading keys for disabled route registrations,
+Migrations 0050/0056/0060 add tenant-leading keys for disabled route registrations,
 fenced media sessions, append-only command receipts, authenticated callback
-receipts, provider usage receipts, and digest-only turn receipts. It has no
+receipts, provider usage receipts, and digest-only turn receipts. Callback
+authority is exact to tenant, workspace, meeting, gateway workload identity,
+provider, and binding; a verified callback can persist only when all six values
+match the active registration. The schema has no
 column capable of storing a raw target, provider credential, audio payload, or
 transcript body. A dedicated media-gateway database identity still needs to be
 provisioned before deployment; the general relay and meeting model must not
 receive these write privileges.
 
+## KMS-authenticated proxy bridge and remaining execution gate
+
+`provider_proxy.rs` implements the concrete private client for the existing
+gateway traits. It signs dispatch, cancellation, and callback-verification
+envelopes with the exact same-account KMS workload key; binds tenant,
+workspace, meeting, service identity, session/generation, classification,
+budget, sealed coordinate, and evidence digests; disables ambient proxies and
+redirects; and accepts only an exact `*.internal.snowmanai.org:8443` authority.
+The callback path forwards the original bounded headers/body only to that
+private Snowman service and validates the exact scope and digest-only response.
+It holds no provider secret and has no raw Aptive/client data authority.
+
+This client is deliberately not activated by the executable yet. The current
+generic provider-egress relay forwards one bounded HTTP request; it cannot
+translate a Snowman meeting operation into Twilio call/TwiML lifecycle calls,
+own the bidirectional Twilio Media Stream, or maintain an OpenAI Realtime
+WebSocket through reconnect/cancel/usage teardown. Production therefore needs
+one additional **Snowman-owned media execution/session service** behind the
+private provider boundary. That service is an internal Snowman component, not
+a Block/upstream surface. Until it is implemented and staged, activation fails
+closed rather than sending the metadata operation document to a provider API.
+
 ## Activation gates
 
 Before any route can be called production-ready:
 
-1. Implement and review the private repository/service transaction layer over
-   migration 0050 with row locking, append-only audit receipts, and a dedicated
-   least-privilege database role.
+1. Implement and review the Snowman-owned media execution/session service that
+   converts admitted operations into Twilio call control and owns Twilio/OpenAI
+   Realtime WebSocket lifecycle, cancellation, usage, and recovery.
 2. Package the transport-injected native huddle, Twilio, OpenAI Realtime, and
    optional ElevenLabs adapters as private Snowman services; activate external
    routes only for classifications and tenants whose external-processing policy

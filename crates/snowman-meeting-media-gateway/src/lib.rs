@@ -21,6 +21,8 @@ use uuid::Uuid;
 
 /// Executable, transport-injected provider adapters for governed live media.
 pub mod adapters;
+/// KMS-authenticated private client for the Snowman provider-egress boundary.
+pub mod provider_proxy;
 /// Private server, transactional repository, and separately authenticated
 /// provider-ingress boundaries.
 pub mod server;
