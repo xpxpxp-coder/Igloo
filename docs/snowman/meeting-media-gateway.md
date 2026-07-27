@@ -1,13 +1,16 @@
 # Governed live meeting media gateway
 
-Status: **executable control contract and persistence schema; provider network
-adapters are not activated or staging-proven**.
+Status: **executable control contract, persistence schema, and transport-injected
+provider adapters; no live provider traffic is activated or staging-proven**.
 
 The `snowman-meeting-media-gateway` crate and migration 0050 define the media
 boundary between the consent-complete meeting-control service, native Snowman
-huddles, and explicitly approved phone/speech providers. They do not place a
-call, connect a WebSocket, resolve a conference coordinate, or claim a live
-Twilio/OpenAI/ElevenLabs integration.
+huddles, and explicitly approved phone/speech providers. The `adapters` module
+now builds and parses the provider protocols behind injected transport,
+signature-verifier, sealed-target-resolver, egress-policy, and Secrets Manager
+reference traits. Its tests use only mocks: it does not place a live call,
+connect a live WebSocket, resolve a real conference coordinate, or claim a
+staging-proven Twilio/OpenAI/ElevenLabs integration.
 
 ## Authority and data boundary
 
@@ -54,10 +57,19 @@ The reference state machine implements:
 
 ## Current provider contracts
 
+All exact HTTPS/WSS endpoints are operations bindings checked against a
+provider-scoped default-deny egress policy before the transport runs. The
+adapters reject Block/Square endpoints, credentials outside purpose-specific
+AWS Secrets Manager references, endpoint changes outside an approved path,
+userinfo, fragments, expired fences, exhausted budgets, and account/project
+binding mismatches. The private transport contract additionally requires proxy
+disablement and redirect rejection. Provider identifiers are held only long
+enough to hash; audio remains transient.
+
 ### Native Snowman huddles
 
-The native adapter must bridge only the admitted Snowman huddle seal and exact
-session generation through private Snowman infrastructure. It must not fall
+The native adapter bridges only the admitted Snowman huddle seal and exact
+session generation through its private transport. It must not fall
 back to a public Nostr relay, Block endpoint, arbitrary WebSocket origin, or
 model-supplied URL.
 
@@ -71,10 +83,11 @@ bidirectional output is `audio/x-mulaw` at 8 kHz, buffered in order, with
 `mark`/`clear` controls in its
 [WebSocket message reference](https://www.twilio.com/docs/voice/media-streams/websocket-messages).
 
-The public edge must validate the lowercase `x-twilio-signature` for Media
+The Twilio authenticator requires the lowercase `x-twilio-signature` for Media
 Stream upgrades and `X-Twilio-Signature` for HTTP callbacks using Twilio's
-supported request-validation library, the exact externally visible URL, and
-the original parameters or raw JSON body. Twilio warns that callback parameters
+supported request-validation library boundary, the exact externally visible
+URL, every original header/parameter, and the original raw body. Twilio warns
+that callback parameters
 can be added over time, so adapters must not validate a hard-coded subset; see
 [Twilio webhook security](https://www.twilio.com/docs/usage/webhooks/webhooks-security).
 Phone/SIP coordinates stay inside the sealed-coordinate resolver. Outbound
@@ -94,7 +107,9 @@ official [Realtime SIP flow](https://developers.openai.com/api/docs/guides/realt
 uses a signed `realtime.call.incoming` webhook, a server-side accept/reject
 decision, and a sideband WebSocket keyed by the exact `call_id`.
 
-Only the trusted Snowman server maintains tools and business logic. The
+Only the trusted Snowman server maintains tools and business logic. The adapter
+reduces function-call output to one of the four proposal-only meeting intents;
+unknown tools fail closed and no provider event directly executes a tool. The
 [server-side controls guide](https://developers.openai.com/api/docs/guides/realtime-server-controls)
 documents that sideband pattern. `response.done` usage receipts, explicit
 duration/token ceilings, and a Snowman kill switch are mandatory because
@@ -103,10 +118,11 @@ Realtime cost grows with conversation context; see
 
 ### ElevenLabs output renderer
 
-ElevenLabs is optional and output-only. It receives approved response text,
-never inbound audio, raw transcript, Analyst evidence, provider coordinates, or
-tool context. Its current API supports scope restrictions, credit quotas, and
-IP allowlisting on keys; see
+ElevenLabs is optional and output-only. Its adapter receives only a
+`SpeechRenderRequest` already validated against the active session: approved
+response text, never inbound audio, raw transcript, Analyst evidence, provider
+coordinates, or tool context. Its current API supports scope restrictions,
+credit quotas, and IP allowlisting on keys; see
 [ElevenLabs API authentication](https://elevenlabs.io/docs/api-reference/authentication).
 Streaming TTS uses the documented
 [text-to-speech WebSocket](https://elevenlabs.io/docs/api-reference/text-to-speech/v-1-text-to-speech-voice-id-stream-input).
@@ -131,9 +147,10 @@ Before any route can be called production-ready:
 1. Implement and review the private repository/service transaction layer over
    migration 0050 with row locking, append-only audit receipts, and a dedicated
    least-privilege database role.
-2. Implement native huddle and Twilio adapters behind private Snowman services;
-   implement OpenAI Realtime and ElevenLabs only for classifications and tenants
-   whose external-processing policy explicitly permits them.
+2. Package the transport-injected native huddle, Twilio, OpenAI Realtime, and
+   optional ElevenLabs adapters as private Snowman services; activate external
+   routes only for classifications and tenants whose external-processing policy
+   explicitly permits them.
 3. Store provider secrets in purpose-specific AWS Secrets Manager entries;
    enforce exact DNS/TLS egress, no ambient proxy, WAF/rate limits on public
    callback edges, secret rotation, and provider account/project binding.

@@ -1,8 +1,8 @@
 # Snowman 24/7 specialist-team orchestration boundary
 
-Status: production foundation and bounded private API implemented; activation,
-dispatch materialization, worker delivery, completion ingestion, and staged
-verification remain gated.
+Status: production-oriented execution lifecycle implemented in source; a
+long-running worker, dedicated database role, private AWS packaging, live
+PostgreSQL race tests, and staged verification remain gated.
 
 The Snowman orchestration layer turns a governed user request, project,
 deadline, recurring analysis, or next-best-action proposal into a bounded
@@ -69,29 +69,39 @@ have accepted successful receipts.
 
 ## Bounded private service
 
-`snowman-orchestration-service` implements signed, tenant-scoped create-plan,
-cancel-plan, and crash-fenced dispatch-claim operations. Plan persistence is
-serializable and writes all task rows before dependency edges, so a valid DAG
-does not depend on caller ordering. Recurrence records remain disabled by
-default. DST gap/fold, weekday, catch-up, and local-minute resolution use the
-pinned `chrono-tz/0.10.4` implementation; this is recorded as the compiled
-timezone implementation and does not claim an independently attested IANA data
-release.
+`snowman-orchestration-service` implements signed, tenant-scoped create,
+activate, pause, cancel, supersede, bounded scheduler-cycle, crash-fenced
+dispatch claim, coordinator delivery-result, and terminal-receipt operations.
+Plan persistence and lifecycle transitions are serializable. Cancellation and
+supersession fence dispatches before returning, append cancellation commands
+for already-submitted jobs, and reject late terminal receipts. Stable
+coordinator job references plus delivery-attempt generations make duplicates
+and lost responses recoverable without creating a second job.
 
-The service does not yet activate a plan, materialize due recurrences into
-dispatch rows, deliver coordinator commands, or ingest terminal receipts.
-Those absences are fail-closed rather than simulated by the UI.
+Migration 0055 adds occurrence-scoped execution, task capability/artifact
+contracts, terminal receipts, deterministic progress digests, dependency
+unlock, dead letters, and reminder/cancellation control outbox records. A
+scheduler cycle advances each due recurrence at most once, applies the explicit
+one-occurrence catch-up rule, materializes only safe automatic DAG nodes, and
+recovers expired leases or submitted-without-receipt attempts. Recurrence
+records and automatic execution remain disabled by default. DST gap/fold,
+weekday, catch-up, and local-minute resolution use the pinned
+`chrono-tz/0.10.4` implementation; this is recorded as the compiled timezone
+implementation and does not claim an independently attested IANA data release.
 
 ## Remaining launch gates
 
-- implement activation, recurrence materialization, coordinator delivery,
-  terminal-receipt ingestion, and the long-running scheduler loop;
+- add the authenticated claim/delivery surface for the durable reminder and
+  cancellation control outbox, then package a long-running scheduler/delivery
+  worker that invokes the bounded cycle, dispatch claim/delivery, control, and
+  receipt surfaces;
+- provision and verify a dedicated least-privilege orchestration database role;
 - independently attest the IANA data release used by the pinned timezone build;
 - connect the default-off team-operations UI to the private API and complete
   keyboard, screen-reader, zoom, reduced-motion, and mobile verification;
-- add crash/lost-response, cancellation race, supersession, duplicate receipt,
-  cross-tenant, budget exhaustion, and Analyst-reference authorization tests
-  against Postgres/Redis/private AWS staging;
+- run the implemented duplicate/crash/cancellation/supersession/budget/DST
+  invariants against live PostgreSQL and add adversarial cross-tenant and
+  Analyst-reference authorization tests in private AWS staging;
 - add dashboards and alerts for overdue tasks, lease churn, approval age,
   scheduler lag, dead letters, cost, and failed handoffs; and
 - complete backup/PITR restore drills, dormant-to-active scaling tests, UAT,

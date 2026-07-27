@@ -8,7 +8,12 @@
 //! transactions for plan generations, cancellation fences, budget reservations, and dispatch
 //! outbox records. It never accepts raw client data, prompts, provider endpoints, or keys.
 
-use std::{collections::BTreeSet, net::SocketAddr, str::FromStr, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::SocketAddr,
+    str::FromStr,
+    time::Duration,
+};
 
 use axum::{
     body::Bytes,
@@ -41,6 +46,12 @@ pub const COMMAND_SCHEMA: &str = "snowman.orchestration.command.v1";
 pub const CLAIM_SCHEMA: &str = "snowman.orchestration.scheduler-claim.v1";
 /// Exact API receipt schema.
 pub const API_RECEIPT_SCHEMA: &str = "snowman.orchestration.api-receipt.v1";
+/// Exact activation, pause, supersession, and scheduler-cycle request schema.
+pub const LIFECYCLE_SCHEMA: &str = "snowman.orchestration.lifecycle.v1";
+/// Exact coordinator delivery result schema.
+pub const DELIVERY_SCHEMA: &str = "snowman.orchestration.delivery-result.v1";
+/// Exact terminal execution receipt schema.
+pub const TERMINAL_RECEIPT_SCHEMA: &str = "snowman.orchestration.terminal-receipt.v1";
 /// Pinned timezone data release compiled into the scheduler binary.
 /// Pinned scheduler timezone implementation. This identifies the compiled
 /// crate release; it does not claim an independently verified IANA data tag.
@@ -49,6 +60,8 @@ pub const PINNED_TIMEZONE_IMPLEMENTATION: &str = "chrono-tz/0.10.4";
 const MAX_REQUEST_BYTES: usize = 512 * 1024;
 const AUTH_TTL_SECONDS: i64 = 60;
 const MAX_CLAIMS: u16 = 32;
+const MAX_RETRY_SECONDS: u16 = 900;
+const MAX_RECEIPT_REFS: usize = 128;
 
 /// Stable service errors that never include request content.
 #[derive(Debug, thiserror::Error)]
@@ -329,6 +342,187 @@ pub struct CancelPlanCommand {
     pub cancellation_evidence_sha256: String,
 }
 
+/// Exact activation or pause command. Activation may enable only the already-reviewed
+/// automatic policy and recurrence stored with this plan generation.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlanLifecycleCommand {
+    /// Contract schema.
+    pub schema_version: String,
+    /// Tenant-local idempotency key.
+    pub command_id: Uuid,
+    /// Bound caller identity.
+    pub service_identity_id: Uuid,
+    /// Operations-owned principal label.
+    pub service_principal: String,
+    /// Exact caller policy generation.
+    pub policy_generation: u64,
+    /// Exact plan generation.
+    pub plan_generation: u64,
+    /// Enable the persisted automatic policy; ignored and required false for pause.
+    pub automatic_execution_enabled: bool,
+    /// Enable the persisted recurrence; ignored and required false for pause.
+    pub recurrence_enabled: bool,
+    /// Digest of the reviewed activation or pause evidence.
+    pub evidence_sha256: String,
+}
+
+/// Atomic old-generation revocation and new-generation activation command.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SupersedePlanCommand {
+    /// Contract schema.
+    pub schema_version: String,
+    /// Tenant-local idempotency key.
+    pub command_id: Uuid,
+    /// Bound caller identity.
+    pub service_identity_id: Uuid,
+    /// Operations-owned principal label.
+    pub service_principal: String,
+    /// Exact caller policy generation.
+    pub policy_generation: u64,
+    /// Prior plan being revoked.
+    pub superseded_plan_id: Uuid,
+    /// Exact prior generation.
+    pub superseded_plan_generation: u64,
+    /// Exact replacement generation.
+    pub replacement_plan_generation: u64,
+    /// Whether the replacement may use its reviewed automatic policy.
+    pub automatic_execution_enabled: bool,
+    /// Whether the replacement recurrence becomes live.
+    pub recurrence_enabled: bool,
+    /// Digest of immutable supersession evidence.
+    pub evidence_sha256: String,
+}
+
+/// Bounded scheduler cycle for recurrence, reminder, lease, and lost-response recovery.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulerCycleRequest {
+    /// Contract schema.
+    pub schema_version: String,
+    /// Replay-protected request identifier.
+    pub request_id: Uuid,
+    /// Bound scheduler identity.
+    pub service_identity_id: Uuid,
+    /// Operations-owned principal label.
+    pub service_principal: String,
+    /// Exact caller policy generation.
+    pub policy_generation: u64,
+    /// Maximum records processed in each bounded phase.
+    pub max_records: u16,
+    /// Submitted delivery age after which a stable coordinator request may be retried.
+    pub submitted_timeout_seconds: u16,
+}
+
+/// Coordinator delivery result for one crash-fenced dispatch lease.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryResultCommand {
+    /// Contract schema.
+    pub schema_version: String,
+    /// Bound scheduler identity.
+    pub service_identity_id: Uuid,
+    /// Operations-owned principal label.
+    pub service_principal: String,
+    /// Exact caller policy generation.
+    pub policy_generation: u64,
+    /// Claimed lease generation.
+    pub lease_generation: u64,
+    /// Cancellation fence observed before delivery.
+    pub cancellation_generation: u64,
+    /// Submitted or retryable failure.
+    pub outcome: DeliveryOutcome,
+    /// Stable coordinator job reference returned by the private coordinator.
+    pub coordinator_receipt_reference: Option<String>,
+    /// Digest of the coordinator response, never response content.
+    pub response_sha256: Option<String>,
+    /// Digest of a bounded failure classification when delivery did not complete.
+    pub failure_sha256: Option<String>,
+    /// Delay before the next retry, bounded by policy.
+    pub retry_after_seconds: Option<u16>,
+}
+
+/// Delivery result without provider error content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryOutcome {
+    /// The exact stable coordinator request was accepted.
+    Submitted,
+    /// No acceptance was observed and the same stable request may be retried.
+    RetryableFailure,
+}
+
+/// Occurrence-scoped terminal receipt accepted from the private coordinator boundary.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TerminalReceiptCommand {
+    /// Contract schema.
+    pub schema_version: String,
+    /// Bound receipt-ingestion service identity.
+    pub service_identity_id: Uuid,
+    /// Operations-owned principal label.
+    pub service_principal: String,
+    /// Exact caller policy generation.
+    pub policy_generation: u64,
+    /// Dispatch lease generation that reached the coordinator.
+    pub lease_generation: u64,
+    /// Exact cancellation generation observed by the executor.
+    pub cancellation_generation: u64,
+    /// Digest of the immutable execution snapshot.
+    pub execution_snapshot_sha256: String,
+    /// Terminal bounded outcome.
+    pub outcome: TerminalOutcome,
+    /// Immutable Analyst handoff coordinate.
+    pub handoff_manifest_reference: String,
+    /// Digest of the handoff manifest.
+    pub handoff_manifest_sha256: String,
+    /// Immutable Analyst artifact references.
+    pub artifact_references: BTreeSet<String>,
+    /// Immutable Analyst evidence references.
+    pub evidence_references: BTreeSet<String>,
+    /// Coordinator/model/tool receipt coordinates.
+    pub execution_receipt_references: BTreeSet<String>,
+    /// Accounted cost, bounded by the reservation.
+    pub actual_cost_microusd: u64,
+    /// Trusted coordinator completion time.
+    pub completed_at: DateTime<Utc>,
+    /// Digest of the exact terminal receipt bytes.
+    pub receipt_sha256: String,
+}
+
+/// Stable terminal outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalOutcome {
+    /// Required artifact and evidence manifests exist.
+    Succeeded,
+    /// The task needs a newly governed decision or dependency.
+    Blocked,
+    /// Execution reached a terminal failure.
+    Failed,
+    /// Execution observed cancellation before completion.
+    Cancelled,
+}
+
+/// Counts emitted by one bounded scheduler cycle.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulerCycleReceipt {
+    /// Request identity.
+    pub request_id: Uuid,
+    /// Due recurrence rows advanced.
+    pub recurrences_processed: u32,
+    /// New occurrence graphs created.
+    pub occurrences_materialized: u32,
+    /// Expired or lost-response dispatch leases recovered.
+    pub dispatches_recovered: u32,
+    /// Dispatches moved to durable dead letter.
+    pub dispatches_dead_lettered: u32,
+    /// Due reminders appended to the control outbox.
+    pub reminders_enqueued: u32,
+}
+
 /// Exact scheduler claim envelope.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -498,8 +692,32 @@ pub fn router(state: AppState) -> Router {
             post(cancel_plan),
         )
         .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/plans/{plan_id}/activate",
+            post(activate_plan),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/plans/{plan_id}/pause",
+            post(pause_plan),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/plans/{plan_id}/supersede",
+            post(supersede_plan),
+        )
+        .route(
             "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/scheduler/claims",
             post(claim_dispatches),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/scheduler/cycle",
+            post(run_scheduler_cycle),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/dispatches/{dispatch_id}/delivery",
+            post(record_delivery_result),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/dispatches/{dispatch_id}/terminal-receipt",
+            post(ingest_terminal_receipt),
         )
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BYTES))
         .with_state(state)
@@ -604,6 +822,207 @@ async fn claim_dispatches(
     Ok(Json(leases))
 }
 
+async fn activate_plan(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id, plan_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ApiReceipt>, ApiError> {
+    lifecycle_plan_handler(
+        &state,
+        PlanScope {
+            tenant_id,
+            workspace_id,
+            plan_id,
+        },
+        headers,
+        body,
+        LifecycleAction::Activate,
+    )
+    .await
+}
+
+async fn pause_plan(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id, plan_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ApiReceipt>, ApiError> {
+    lifecycle_plan_handler(
+        &state,
+        PlanScope {
+            tenant_id,
+            workspace_id,
+            plan_id,
+        },
+        headers,
+        body,
+        LifecycleAction::Pause,
+    )
+    .await
+}
+
+async fn lifecycle_plan_handler(
+    state: &AppState,
+    scope: PlanScope,
+    headers: HeaderMap,
+    body: Bytes,
+    action: LifecycleAction,
+) -> Result<Json<ApiReceipt>, ApiError> {
+    check_body(&body)?;
+    let action_name = action.as_str();
+    let url = endpoint_url(
+        &state.private_origin,
+        &format!(
+            "v1/tenants/{}/workspaces/{}/plans/{}/{action_name}",
+            scope.tenant_id, scope.workspace_id, scope.plan_id
+        ),
+    )?;
+    let auth = verify_auth(&headers, url.as_str(), &body)?;
+    let command: PlanLifecycleCommand =
+        serde_json::from_slice(&body).map_err(|_| ApiError(Error::Invalid))?;
+    validate_lifecycle(&command, action)?;
+    let digest: [u8; 32] = Sha256::digest(&body).into();
+    let result = persist_lifecycle(
+        &state.pool,
+        scope,
+        &command,
+        action,
+        &auth,
+        digest,
+        Utc::now(),
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+async fn supersede_plan(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id, replacement_plan_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ApiReceipt>, ApiError> {
+    check_body(&body)?;
+    let url = endpoint_url(
+        &state.private_origin,
+        &format!(
+            "v1/tenants/{tenant_id}/workspaces/{workspace_id}/plans/{replacement_plan_id}/supersede"
+        ),
+    )?;
+    let auth = verify_auth(&headers, url.as_str(), &body)?;
+    let command: SupersedePlanCommand =
+        serde_json::from_slice(&body).map_err(|_| ApiError(Error::Invalid))?;
+    validate_supersession(&command, replacement_plan_id)?;
+    let digest: [u8; 32] = Sha256::digest(&body).into();
+    let result = persist_supersession(
+        &state.pool,
+        PlanScope {
+            tenant_id,
+            workspace_id,
+            plan_id: replacement_plan_id,
+        },
+        &command,
+        &auth,
+        digest,
+        Utc::now(),
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+async fn run_scheduler_cycle(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<SchedulerCycleReceipt>, ApiError> {
+    check_body(&body)?;
+    let url = endpoint_url(
+        &state.private_origin,
+        &format!("v1/tenants/{tenant_id}/workspaces/{workspace_id}/scheduler/cycle"),
+    )?;
+    let auth = verify_auth(&headers, url.as_str(), &body)?;
+    let request: SchedulerCycleRequest =
+        serde_json::from_slice(&body).map_err(|_| ApiError(Error::Invalid))?;
+    validate_scheduler_cycle(&request)?;
+    let digest: [u8; 32] = Sha256::digest(&body).into();
+    let result = scheduler_cycle(
+        &state.pool,
+        tenant_id,
+        workspace_id,
+        &request,
+        &auth,
+        digest,
+        Utc::now(),
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+async fn record_delivery_result(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id, dispatch_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ApiReceipt>, ApiError> {
+    check_body(&body)?;
+    let url = endpoint_url(
+        &state.private_origin,
+        &format!(
+            "v1/tenants/{tenant_id}/workspaces/{workspace_id}/dispatches/{dispatch_id}/delivery"
+        ),
+    )?;
+    let auth = verify_auth(&headers, url.as_str(), &body)?;
+    let command: DeliveryResultCommand =
+        serde_json::from_slice(&body).map_err(|_| ApiError(Error::Invalid))?;
+    validate_delivery_result(&command)?;
+    let digest: [u8; 32] = Sha256::digest(&body).into();
+    let result = persist_delivery_result(
+        &state.pool,
+        tenant_id,
+        workspace_id,
+        dispatch_id,
+        &command,
+        &auth,
+        digest,
+        Utc::now(),
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+async fn ingest_terminal_receipt(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id, dispatch_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ApiReceipt>, ApiError> {
+    check_body(&body)?;
+    let url = endpoint_url(
+        &state.private_origin,
+        &format!(
+            "v1/tenants/{tenant_id}/workspaces/{workspace_id}/dispatches/{dispatch_id}/terminal-receipt"
+        ),
+    )?;
+    let auth = verify_auth(&headers, url.as_str(), &body)?;
+    let command: TerminalReceiptCommand =
+        serde_json::from_slice(&body).map_err(|_| ApiError(Error::Invalid))?;
+    validate_terminal_receipt(&command, Utc::now())?;
+    let digest: [u8; 32] = Sha256::digest(&body).into();
+    let result = persist_terminal_receipt(
+        &state.pool,
+        tenant_id,
+        workspace_id,
+        dispatch_id,
+        &command,
+        &auth,
+        digest,
+        Utc::now(),
+    )
+    .await?;
+    Ok(Json(result))
+}
+
 fn validate_create(
     command: &CreatePlanCommand,
     tenant_id: Uuid,
@@ -641,6 +1060,147 @@ fn validate_cancel(command: &CancelPlanCommand) -> Result<(), ApiError> {
         || command.policy_generation == 0
         || command.plan_generation == 0
         || !valid_hex_digest(&command.cancellation_evidence_sha256)
+    {
+        return Err(ApiError(Error::Invalid));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LifecycleAction {
+    Activate,
+    Pause,
+}
+
+impl LifecycleAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Activate => "activate",
+            Self::Pause => "pause",
+        }
+    }
+
+    fn command_kind(self) -> &'static str {
+        match self {
+            Self::Activate => "activate_plan",
+            Self::Pause => "pause_plan",
+        }
+    }
+}
+
+fn validate_lifecycle(
+    command: &PlanLifecycleCommand,
+    action: LifecycleAction,
+) -> Result<(), ApiError> {
+    if command.schema_version != LIFECYCLE_SCHEMA
+        || command.command_id.is_nil()
+        || command.service_identity_id.is_nil()
+        || command.policy_generation == 0
+        || command.plan_generation == 0
+        || !valid_hex_digest(&command.evidence_sha256)
+        || (action == LifecycleAction::Pause
+            && (command.automatic_execution_enabled || command.recurrence_enabled))
+        || (command.recurrence_enabled && !command.automatic_execution_enabled)
+    {
+        return Err(ApiError(Error::Invalid));
+    }
+    Ok(())
+}
+
+fn validate_supersession(
+    command: &SupersedePlanCommand,
+    replacement_plan_id: Uuid,
+) -> Result<(), ApiError> {
+    if command.schema_version != LIFECYCLE_SCHEMA
+        || command.command_id.is_nil()
+        || command.service_identity_id.is_nil()
+        || command.policy_generation == 0
+        || command.superseded_plan_id.is_nil()
+        || command.superseded_plan_id == replacement_plan_id
+        || command.superseded_plan_generation == 0
+        || command.replacement_plan_generation
+            != command.superseded_plan_generation.saturating_add(1)
+        || !valid_hex_digest(&command.evidence_sha256)
+        || (command.recurrence_enabled && !command.automatic_execution_enabled)
+    {
+        return Err(ApiError(Error::Invalid));
+    }
+    Ok(())
+}
+
+fn validate_scheduler_cycle(request: &SchedulerCycleRequest) -> Result<(), ApiError> {
+    if request.schema_version != LIFECYCLE_SCHEMA
+        || request.request_id.is_nil()
+        || request.service_identity_id.is_nil()
+        || request.policy_generation == 0
+        || !(1..=MAX_CLAIMS).contains(&request.max_records)
+        || !(60..=3_600).contains(&request.submitted_timeout_seconds)
+    {
+        return Err(ApiError(Error::Invalid));
+    }
+    Ok(())
+}
+
+fn validate_delivery_result(command: &DeliveryResultCommand) -> Result<(), ApiError> {
+    let submitted = command.outcome == DeliveryOutcome::Submitted;
+    if command.schema_version != DELIVERY_SCHEMA
+        || command.service_identity_id.is_nil()
+        || command.policy_generation == 0
+        || command.lease_generation == 0
+        || command.coordinator_receipt_reference.is_some() != submitted
+        || command.response_sha256.is_some() != submitted
+        || command.failure_sha256.is_some() == submitted
+        || command.retry_after_seconds.is_some() == submitted
+        || command
+            .response_sha256
+            .as_deref()
+            .is_some_and(|value| !valid_hex_digest(value))
+        || command
+            .failure_sha256
+            .as_deref()
+            .is_some_and(|value| !valid_hex_digest(value))
+        || command
+            .retry_after_seconds
+            .is_some_and(|value| !(1..=MAX_RETRY_SECONDS).contains(&value))
+        || command
+            .coordinator_receipt_reference
+            .as_deref()
+            .is_some_and(|value| !valid_execution_ref(value, "snowman:agent-job:"))
+    {
+        return Err(ApiError(Error::Invalid));
+    }
+    Ok(())
+}
+
+fn validate_terminal_receipt(
+    command: &TerminalReceiptCommand,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let succeeded = command.outcome == TerminalOutcome::Succeeded;
+    if command.schema_version != TERMINAL_RECEIPT_SCHEMA
+        || command.service_identity_id.is_nil()
+        || command.policy_generation == 0
+        || command.lease_generation == 0
+        || !valid_hex_digest(&command.execution_snapshot_sha256)
+        || !valid_hex_digest(&command.handoff_manifest_sha256)
+        || !valid_hex_digest(&command.receipt_sha256)
+        || !valid_analyst_reference(&command.handoff_manifest_reference)
+        || command.artifact_references.len() > MAX_RECEIPT_REFS
+        || command.evidence_references.len() > MAX_RECEIPT_REFS
+        || command.execution_receipt_references.is_empty()
+        || command.execution_receipt_references.len() > MAX_RECEIPT_REFS
+        || command
+            .artifact_references
+            .iter()
+            .chain(command.evidence_references.iter())
+            .any(|value| !valid_analyst_reference(value))
+        || command
+            .execution_receipt_references
+            .iter()
+            .any(|value| !valid_any_execution_ref(value))
+        || (succeeded
+            && (command.artifact_references.is_empty() || command.evidence_references.is_empty()))
+        || command.completed_at > now + ChronoDuration::minutes(5)
     {
         return Err(ApiError(Error::Invalid));
     }
@@ -836,6 +1396,36 @@ async fn persist_plan(
             .await
             .map_err(db_conflict)?;
         }
+        for capability in &task.required_capabilities {
+            sqlx::query(
+                "INSERT INTO snowman_orchestration_task_required_capabilities \
+                 (community_id,plan_id,plan_generation,task_id,capability) \
+                 VALUES ($1,$2,$3,$4,$5)",
+            )
+            .bind(plan.community_id)
+            .bind(plan.plan_id)
+            .bind(plan.generation as i64)
+            .bind(task.task_id)
+            .bind(capability)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_conflict)?;
+        }
+        for artifact_type in &task.expected_artifact_types {
+            sqlx::query(
+                "INSERT INTO snowman_orchestration_task_artifact_contracts \
+                 (community_id,plan_id,plan_generation,task_id,artifact_type) \
+                 VALUES ($1,$2,$3,$4,$5)",
+            )
+            .bind(plan.community_id)
+            .bind(plan.plan_id)
+            .bind(plan.generation as i64)
+            .bind(task.task_id)
+            .bind(artifact_type)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_conflict)?;
+        }
     }
     // Insert dependency edges only after every task row exists. Plans may list a
     // dependent task before its prerequisite, and the database foreign keys are
@@ -976,6 +1566,38 @@ async fn persist_cancellation(
     if matches!(state.as_str(), "completed" | "superseded") {
         return Err(ApiError(Error::Conflict));
     }
+    let submitted = sqlx::query(
+        "SELECT dispatch_id,occurrence_id FROM snowman_orchestration_dispatches \
+         WHERE community_id=$1 AND workspace_id=$2 AND plan_id=$3 AND plan_generation=$4 \
+           AND status='submitted' FOR UPDATE",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(plan_id)
+    .bind(command.plan_generation as i64)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    for row in submitted {
+        insert_control_outbox(
+            &mut tx,
+            PlanScope {
+                tenant_id,
+                workspace_id,
+                plan_id,
+            },
+            command.plan_generation,
+            row.try_get("occurrence_id")
+                .map_err(|_| ApiError(Error::Database))?,
+            Some(
+                row.try_get("dispatch_id")
+                    .map_err(|_| ApiError(Error::Database))?,
+            ),
+            "cancel_dispatch",
+            now,
+        )
+        .await?;
+    }
     sqlx::query(
         "UPDATE snowman_orchestration_plans SET state='cancelled',cancelled_at=$1,updated_at=$1 \
          WHERE community_id=$2 AND plan_id=$3 AND generation=$4",
@@ -999,12 +1621,27 @@ async fn persist_cancellation(
     .map_err(|_| ApiError(Error::Database))?;
     sqlx::query(
         "UPDATE snowman_orchestration_dispatches SET status='cancelled',cancellation_generation=cancellation_generation+1,\
-         lease_owner_identity_id=NULL,lease_expires_at=NULL,updated_at=$1 \
+         lease_owner_identity_id=NULL,lease_expires_at=NULL,\
+         terminal_at=CASE WHEN status='submitted' THEN $1 ELSE terminal_at END,\
+         terminal_outcome=CASE WHEN status='submitted' THEN 'cancelled' ELSE terminal_outcome END,updated_at=$1 \
          WHERE community_id=$2 AND plan_id=$3 AND plan_generation=$4 \
-           AND status IN ('pending','leased','failed')",
+           AND status IN ('pending','leased','failed','submitted')",
     )
     .bind(now)
     .bind(tenant_id)
+    .bind(plan_id)
+    .bind(command.plan_generation as i64)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_occurrences SET status='cancelled',updated_at=$1 \
+         WHERE community_id=$2 AND workspace_id=$3 AND plan_id=$4 AND plan_generation=$5 \
+           AND status='materialized'",
+    )
+    .bind(now)
+    .bind(tenant_id)
+    .bind(workspace_id)
     .bind(plan_id)
     .bind(command.plan_generation as i64)
     .execute(&mut *tx)
@@ -1045,6 +1682,1798 @@ async fn persist_cancellation(
         request_sha256: hex::encode(digest),
         accepted_at: now,
     })
+}
+
+async fn persist_lifecycle(
+    pool: &PgPool,
+    scope: PlanScope,
+    command: &PlanLifecycleCommand,
+    action: LifecycleAction,
+    auth: &VerifiedAuth,
+    digest: [u8; 32],
+    now: DateTime<Utc>,
+) -> Result<ApiReceipt, ApiError> {
+    let mut tx = serializable(pool).await?;
+    authorize_and_record(
+        &mut tx,
+        Scope {
+            tenant_id: scope.tenant_id,
+            workspace_id: scope.workspace_id,
+            identity_id: command.service_identity_id,
+            principal: &command.service_principal,
+            policy_generation: command.policy_generation,
+            capability: match action {
+                LifecycleAction::Activate => "orchestration.plans.activate",
+                LifecycleAction::Pause => "orchestration.plans.pause",
+            },
+        },
+        auth,
+        digest,
+        now,
+    )
+    .await?;
+    if let Some(receipt) = duplicate_receipt(
+        &mut tx,
+        scope.tenant_id,
+        scope.workspace_id,
+        command.command_id,
+        digest,
+        now,
+    )
+    .await?
+    {
+        tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+        return Ok(receipt);
+    }
+    match action {
+        LifecycleAction::Activate => {
+            activate_locked_plan(
+                &mut tx,
+                scope,
+                command.plan_generation,
+                command.command_id,
+                command.automatic_execution_enabled,
+                command.recurrence_enabled,
+                now,
+            )
+            .await?;
+        }
+        LifecycleAction::Pause => {
+            lock_plan_state(&mut tx, scope, command.plan_generation, &["active"]).await?;
+            revoke_plan_authority(&mut tx, scope, command.plan_generation, "paused", now).await?;
+        }
+    }
+    insert_command(
+        &mut tx,
+        scope.tenant_id,
+        scope.workspace_id,
+        command.command_id,
+        action.command_kind(),
+        scope.plan_id,
+        command.plan_generation,
+        digest,
+        command.service_identity_id,
+        now,
+    )
+    .await?;
+    tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+    Ok(scoped_receipt(
+        command.command_id,
+        scope,
+        command.plan_generation,
+        "applied",
+        digest,
+        now,
+    ))
+}
+
+async fn persist_supersession(
+    pool: &PgPool,
+    replacement_scope: PlanScope,
+    command: &SupersedePlanCommand,
+    auth: &VerifiedAuth,
+    digest: [u8; 32],
+    now: DateTime<Utc>,
+) -> Result<ApiReceipt, ApiError> {
+    let mut tx = serializable(pool).await?;
+    authorize_and_record(
+        &mut tx,
+        Scope {
+            tenant_id: replacement_scope.tenant_id,
+            workspace_id: replacement_scope.workspace_id,
+            identity_id: command.service_identity_id,
+            principal: &command.service_principal,
+            policy_generation: command.policy_generation,
+            capability: "orchestration.plans.supersede",
+        },
+        auth,
+        digest,
+        now,
+    )
+    .await?;
+    if let Some(receipt) = duplicate_receipt(
+        &mut tx,
+        replacement_scope.tenant_id,
+        replacement_scope.workspace_id,
+        command.command_id,
+        digest,
+        now,
+    )
+    .await?
+    {
+        tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+        return Ok(receipt);
+    }
+    let prior_scope = PlanScope {
+        plan_id: command.superseded_plan_id,
+        ..replacement_scope
+    };
+    let replacement = sqlx::query(
+        "SELECT n.state,n.request_id,n.supersedes_plan_id,o.request_id AS old_request_id,o.state AS old_state \
+         FROM snowman_orchestration_plans n \
+         JOIN snowman_orchestration_plans o ON o.community_id=n.community_id \
+           AND o.plan_id=$4 AND o.generation=$5 \
+         WHERE n.community_id=$1 AND n.workspace_id=$2 AND n.plan_id=$3 AND n.generation=$6 \
+         FOR UPDATE OF n,o",
+    )
+    .bind(replacement_scope.tenant_id)
+    .bind(replacement_scope.workspace_id)
+    .bind(replacement_scope.plan_id)
+    .bind(command.superseded_plan_id)
+    .bind(command.superseded_plan_generation as i64)
+    .bind(command.replacement_plan_generation as i64)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    .ok_or(ApiError(Error::Conflict))?;
+    let new_state: String = replacement
+        .try_get("state")
+        .map_err(|_| ApiError(Error::Database))?;
+    let new_request: Uuid = replacement
+        .try_get("request_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let old_request: Uuid = replacement
+        .try_get("old_request_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let supersedes: Option<Uuid> = replacement
+        .try_get("supersedes_plan_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let old_state: String = replacement
+        .try_get("old_state")
+        .map_err(|_| ApiError(Error::Database))?;
+    if new_state != "draft"
+        || new_request != old_request
+        || supersedes != Some(prior_scope.plan_id)
+        || !matches!(old_state.as_str(), "draft" | "active" | "paused")
+    {
+        return Err(ApiError(Error::Conflict));
+    }
+    revoke_plan_authority(
+        &mut tx,
+        prior_scope,
+        command.superseded_plan_generation,
+        "superseded",
+        now,
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_plans SET superseded_by_plan_id=$1,updated_at=$2 \
+         WHERE community_id=$3 AND plan_id=$4 AND generation=$5",
+    )
+    .bind(replacement_scope.plan_id)
+    .bind(now)
+    .bind(replacement_scope.tenant_id)
+    .bind(prior_scope.plan_id)
+    .bind(command.superseded_plan_generation as i64)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    activate_locked_plan(
+        &mut tx,
+        replacement_scope,
+        command.replacement_plan_generation,
+        command.command_id,
+        command.automatic_execution_enabled,
+        command.recurrence_enabled,
+        now,
+    )
+    .await?;
+    insert_command(
+        &mut tx,
+        replacement_scope.tenant_id,
+        replacement_scope.workspace_id,
+        command.command_id,
+        "supersede_plan",
+        replacement_scope.plan_id,
+        command.replacement_plan_generation,
+        digest,
+        command.service_identity_id,
+        now,
+    )
+    .await?;
+    tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+    Ok(scoped_receipt(
+        command.command_id,
+        replacement_scope,
+        command.replacement_plan_generation,
+        "applied",
+        digest,
+        now,
+    ))
+}
+
+async fn lock_plan_state(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: PlanScope,
+    generation: u64,
+    allowed: &[&str],
+) -> Result<(), ApiError> {
+    let state: Option<String> = sqlx::query_scalar(
+        "SELECT state FROM snowman_orchestration_plans \
+         WHERE community_id=$1 AND workspace_id=$2 AND plan_id=$3 AND generation=$4 FOR UPDATE",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    if !state
+        .as_deref()
+        .is_some_and(|value| allowed.contains(&value))
+    {
+        return Err(ApiError(Error::Conflict));
+    }
+    Ok(())
+}
+
+async fn activate_locked_plan(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: PlanScope,
+    generation: u64,
+    occurrence_id: Uuid,
+    automatic_execution_enabled: bool,
+    recurrence_enabled: bool,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    lock_plan_state(tx, scope, generation, &["draft", "paused"]).await?;
+    if recurrence_enabled {
+        let recurrence_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM snowman_orchestration_recurrences \
+             WHERE community_id=$1 AND workspace_id=$2 AND plan_id=$3 \
+               AND schedule_generation=$4)",
+        )
+        .bind(scope.tenant_id)
+        .bind(scope.workspace_id)
+        .bind(scope.plan_id)
+        .bind(generation as i64)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+        if !recurrence_exists {
+            return Err(ApiError(Error::Conflict));
+        }
+    }
+    sqlx::query(
+        "UPDATE snowman_orchestration_plans SET state='active',automatic_execution_enabled=$1,\
+         activated_at=COALESCE(activated_at,$2),cancelled_at=NULL,updated_at=$2 \
+         WHERE community_id=$3 AND workspace_id=$4 AND plan_id=$5 AND generation=$6",
+    )
+    .bind(automatic_execution_enabled)
+    .bind(now)
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_recurrences SET enabled=$1,updated_at=$2 \
+         WHERE community_id=$3 AND workspace_id=$4 AND plan_id=$5 AND schedule_generation=$6",
+    )
+    .bind(recurrence_enabled)
+    .bind(now)
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    if !recurrence_enabled {
+        create_occurrence(
+            tx,
+            scope,
+            generation,
+            occurrence_id,
+            None,
+            now,
+            false,
+            "materialized",
+        )
+        .await?;
+        if automatic_execution_enabled {
+            materialize_ready_dispatches(tx, scope, generation, occurrence_id, now).await?;
+        }
+        create_deadline_reminders(tx, scope, generation, occurrence_id, now).await?;
+    }
+    Ok(())
+}
+
+async fn revoke_plan_authority(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: PlanScope,
+    generation: u64,
+    target_state: &str,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    if !matches!(target_state, "paused" | "superseded") {
+        return Err(ApiError(Error::Invalid));
+    }
+    let submitted = sqlx::query(
+        "SELECT dispatch_id,occurrence_id FROM snowman_orchestration_dispatches \
+         WHERE community_id=$1 AND workspace_id=$2 AND plan_id=$3 AND plan_generation=$4 \
+           AND status='submitted' FOR UPDATE",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    for row in submitted {
+        let dispatch_id: Uuid = row
+            .try_get("dispatch_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let occurrence_id: Uuid = row
+            .try_get("occurrence_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        insert_control_outbox(
+            tx,
+            scope,
+            generation,
+            occurrence_id,
+            Some(dispatch_id),
+            "cancel_dispatch",
+            now,
+        )
+        .await?;
+    }
+    sqlx::query(
+        "UPDATE snowman_orchestration_plans SET state=$1,automatic_execution_enabled=FALSE,updated_at=$2 \
+         WHERE community_id=$3 AND workspace_id=$4 AND plan_id=$5 AND generation=$6",
+    )
+    .bind(target_state)
+    .bind(now)
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_recurrences SET enabled=FALSE,next_fire_at=NULL,updated_at=$1 \
+         WHERE community_id=$2 AND workspace_id=$3 AND plan_id=$4",
+    )
+    .bind(now)
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_dispatches SET status='cancelled',\
+         cancellation_generation=cancellation_generation+1,lease_owner_identity_id=NULL,\
+         lease_expires_at=NULL,terminal_at=CASE WHEN status='submitted' THEN $1 ELSE terminal_at END,\
+         terminal_outcome=CASE WHEN status='submitted' THEN 'cancelled' ELSE terminal_outcome END,updated_at=$1 \
+         WHERE community_id=$2 AND workspace_id=$3 AND plan_id=$4 AND plan_generation=$5 \
+           AND status IN ('pending','leased','failed','submitted')",
+    )
+    .bind(now)
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_occurrences SET status='cancelled',updated_at=$1 \
+         WHERE community_id=$2 AND workspace_id=$3 AND plan_id=$4 AND plan_generation=$5 \
+           AND status='materialized'",
+    )
+    .bind(now)
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_reminder_receipts SET status='cancelled' \
+         WHERE community_id=$1 AND plan_id=$2 AND plan_generation=$3 AND status='pending'",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_occurrence(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: PlanScope,
+    generation: u64,
+    occurrence_id: Uuid,
+    schedule_generation: Option<u64>,
+    scheduled_at: DateTime<Utc>,
+    catch_up: bool,
+    status: &str,
+) -> Result<bool, ApiError> {
+    let inserted = sqlx::query(
+        "INSERT INTO snowman_orchestration_occurrences \
+         (community_id,workspace_id,plan_id,plan_generation,occurrence_id,schedule_generation,\
+          scheduled_at,catch_up,status,created_at,updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10) ON CONFLICT DO NOTHING",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .bind(occurrence_id)
+    .bind(schedule_generation.map(|value| value as i64))
+    .bind(scheduled_at)
+    .bind(catch_up)
+    .bind(status)
+    .bind(Utc::now())
+    .execute(&mut **tx)
+    .await
+    .map_err(db_conflict)?;
+    Ok(inserted.rows_affected() == 1)
+}
+
+async fn materialize_ready_dispatches(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: PlanScope,
+    generation: u64,
+    occurrence_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<u32, ApiError> {
+    let candidates = sqlx::query(
+        "SELECT t.task_id,t.max_cost_microusd,pe.model_route_reference,\
+          ARRAY(SELECT c.context_manifest_reference FROM snowman_orchestration_task_context_refs c \
+                WHERE c.community_id=t.community_id AND c.plan_id=t.plan_id AND c.task_id=t.task_id \
+                ORDER BY c.context_manifest_reference) AS context_refs,\
+          ARRAY(SELECT c.capability FROM snowman_orchestration_task_required_capabilities c \
+                WHERE c.community_id=t.community_id AND c.plan_id=t.plan_id \
+                  AND c.plan_generation=t.plan_generation AND c.task_id=t.task_id ORDER BY c.capability) AS capabilities \
+         FROM snowman_orchestration_tasks t \
+         JOIN snowman_orchestration_plans p ON p.community_id=t.community_id AND p.plan_id=t.plan_id \
+           AND p.generation=t.plan_generation \
+         JOIN snowman_orchestration_personas pe ON pe.community_id=t.community_id \
+           AND pe.plan_id=t.plan_id AND pe.persona_id=t.persona_id \
+         WHERE t.community_id=$1 AND p.workspace_id=$2 AND t.plan_id=$3 AND t.plan_generation=$4 \
+           AND p.state='active' AND p.automatic_execution_enabled AND pe.enabled \
+           AND t.automatic_execution_candidate AND t.reversible AND NOT t.approval_required \
+           AND t.confidence_basis_points>=p.minimum_confidence_basis_points \
+           AND t.value_basis_points>=p.minimum_value_basis_points \
+           AND t.risk_basis_points<=p.maximum_risk_basis_points \
+           AND t.max_cost_microusd<=p.max_automatic_task_cost_microusd \
+           AND t.deadline_at>$5 AND p.deadline_at>$5 \
+           AND NOT EXISTS (SELECT 1 FROM snowman_orchestration_task_required_capabilities rc \
+             WHERE rc.community_id=t.community_id AND rc.plan_id=t.plan_id \
+               AND rc.plan_generation=t.plan_generation AND rc.task_id=t.task_id \
+               AND NOT EXISTS (SELECT 1 FROM snowman_orchestration_plan_automatic_capabilities ac \
+                 WHERE ac.community_id=rc.community_id AND ac.plan_id=rc.plan_id AND ac.capability=rc.capability)) \
+           AND NOT EXISTS (SELECT 1 FROM snowman_orchestration_task_dependencies dep \
+             WHERE dep.community_id=t.community_id AND dep.plan_id=t.plan_id \
+               AND dep.plan_generation=t.plan_generation AND dep.task_id=t.task_id \
+               AND NOT EXISTS (SELECT 1 FROM snowman_orchestration_terminal_receipts r \
+                 WHERE r.community_id=dep.community_id AND r.occurrence_id=$6 \
+                   AND r.task_id=dep.depends_on_task_id AND r.outcome='succeeded')) \
+           AND NOT EXISTS (SELECT 1 FROM snowman_orchestration_dispatches d \
+             WHERE d.community_id=t.community_id AND d.plan_id=t.plan_id \
+               AND d.plan_generation=t.plan_generation AND d.task_id=t.task_id AND d.occurrence_id=$6) \
+         ORDER BY t.task_id FOR UPDATE OF t",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .bind(now)
+    .bind(occurrence_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let max_cost: i64 = sqlx::query_scalar(
+        "SELECT max_cost_microusd FROM snowman_orchestration_plans \
+         WHERE community_id=$1 AND workspace_id=$2 AND plan_id=$3 AND generation=$4 FOR UPDATE",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let mut committed: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT SUM(actual_cost_microusd) FROM snowman_orchestration_terminal_receipts \
+          WHERE community_id=$1 AND plan_id=$2 AND plan_generation=$3),0) + \
+          COALESCE((SELECT SUM(reserved_cost_microusd) FROM snowman_orchestration_dispatches \
+          WHERE community_id=$1 AND plan_id=$2 AND plan_generation=$3 \
+            AND status IN ('pending','leased','submitted','failed')),0)",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let mut inserted_count = 0_u32;
+    for row in candidates {
+        let task_id: Uuid = row
+            .try_get("task_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let reserved_cost: i64 = row
+            .try_get("max_cost_microusd")
+            .map_err(|_| ApiError(Error::Database))?;
+        if !reservation_fits(committed, max_cost, reserved_cost) {
+            continue;
+        }
+        let model_route_reference: String = row
+            .try_get("model_route_reference")
+            .map_err(|_| ApiError(Error::Database))?;
+        let context_refs: Vec<String> = row
+            .try_get("context_refs")
+            .map_err(|_| ApiError(Error::Database))?;
+        let capabilities: Vec<String> = row
+            .try_get("capabilities")
+            .map_err(|_| ApiError(Error::Database))?;
+        if context_refs.is_empty() || capabilities.is_empty() {
+            continue;
+        }
+        let dispatch_id = Uuid::new_v4();
+        let job_id = Uuid::new_v4();
+        let snapshot = dispatch_snapshot_digest(
+            scope,
+            generation,
+            occurrence_id,
+            task_id,
+            &model_route_reference,
+            &context_refs,
+            &capabilities,
+            reserved_cost,
+        );
+        let inserted = sqlx::query(
+            "INSERT INTO snowman_orchestration_dispatches \
+             (community_id,workspace_id,dispatch_id,plan_id,plan_generation,task_id,occurrence_id,\
+              lease_generation,execution_snapshot_sha256,coordinator_job_reference,model_route_reference,\
+              analyst_context_references,required_capabilities,reserved_cost_microusd,status,next_attempt_at,created_at,updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$10,$11,$12,$13,'pending',$14,$14,$14) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(scope.tenant_id)
+        .bind(scope.workspace_id)
+        .bind(dispatch_id)
+        .bind(scope.plan_id)
+        .bind(generation as i64)
+        .bind(task_id)
+        .bind(occurrence_id)
+        .bind(snapshot.as_slice())
+        .bind(format!("snowman:agent-job:{job_id}:generation:1"))
+        .bind(model_route_reference)
+        .bind(context_refs)
+        .bind(capabilities)
+        .bind(reserved_cost)
+        .bind(now)
+        .execute(&mut **tx)
+        .await
+        .map_err(db_conflict)?;
+        if inserted.rows_affected() == 1 {
+            committed = committed.saturating_add(reserved_cost);
+            inserted_count = inserted_count.saturating_add(1);
+        }
+    }
+    Ok(inserted_count)
+}
+
+async fn create_deadline_reminders(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: PlanScope,
+    generation: u64,
+    occurrence_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO snowman_orchestration_reminder_receipts \
+         (community_id,plan_id,plan_generation,reminder_offset_seconds,occurrence_id,due_at,status) \
+         SELECT p.community_id,p.plan_id,p.generation,o,$5,p.deadline_at-make_interval(secs=>o),'pending' \
+         FROM snowman_orchestration_plans p \
+         JOIN snowman_orchestration_schedule_policies s ON s.community_id=p.community_id AND s.plan_id=p.plan_id \
+         CROSS JOIN unnest(s.reminder_offsets_seconds) AS o \
+         WHERE p.community_id=$1 AND p.workspace_id=$2 AND p.plan_id=$3 AND p.generation=$4 \
+           AND p.deadline_at-make_interval(secs=>o)>$6 ON CONFLICT DO NOTHING",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .bind(occurrence_id)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    Ok(())
+}
+
+async fn insert_control_outbox(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: PlanScope,
+    generation: u64,
+    occurrence_id: Uuid,
+    dispatch_id: Option<Uuid>,
+    command_kind: &str,
+    now: DateTime<Utc>,
+) -> Result<bool, ApiError> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"snowman.orchestration.control-outbox.v1\0");
+    hasher.update(scope.tenant_id.as_bytes());
+    hasher.update(scope.workspace_id.as_bytes());
+    hasher.update(scope.plan_id.as_bytes());
+    hasher.update(generation.to_be_bytes());
+    hasher.update(occurrence_id.as_bytes());
+    hasher.update(dispatch_id.unwrap_or(Uuid::nil()).as_bytes());
+    hasher.update(command_kind.as_bytes());
+    let command_sha256: [u8; 32] = hasher.finalize().into();
+    let inserted = sqlx::query(
+        "INSERT INTO snowman_orchestration_control_outbox \
+         (community_id,workspace_id,outbox_id,command_kind,plan_id,plan_generation,dispatch_id,\
+          occurrence_id,command_sha256,status,next_attempt_at,created_at,updated_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending',$10,$10,$10) ON CONFLICT DO NOTHING",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(Uuid::new_v4())
+    .bind(command_kind)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .bind(dispatch_id)
+    .bind(occurrence_id)
+    .bind(command_sha256.as_slice())
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .map_err(db_conflict)?;
+    Ok(inserted.rows_affected() == 1)
+}
+
+async fn scheduler_cycle(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    request: &SchedulerCycleRequest,
+    auth: &VerifiedAuth,
+    digest: [u8; 32],
+    now: DateTime<Utc>,
+) -> Result<SchedulerCycleReceipt, ApiError> {
+    let mut tx = serializable(pool).await?;
+    authorize_and_record(
+        &mut tx,
+        Scope {
+            tenant_id,
+            workspace_id,
+            identity_id: request.service_identity_id,
+            principal: &request.service_principal,
+            policy_generation: request.policy_generation,
+            capability: "orchestration.scheduler.maintain",
+        },
+        auth,
+        digest,
+        now,
+    )
+    .await?;
+    let due = sqlx::query(
+        "SELECT r.plan_id,r.schedule_generation,r.local_minute,r.weekdays,r.dst_gap_policy,\
+                r.dst_fold_policy,r.catch_up_policy,r.max_catch_up_seconds,r.next_fire_at,s.timezone \
+         FROM snowman_orchestration_recurrences r \
+         JOIN snowman_orchestration_plans p ON p.community_id=r.community_id AND p.plan_id=r.plan_id \
+           AND p.generation=r.schedule_generation \
+         JOIN snowman_orchestration_schedule_policies s ON s.community_id=r.community_id AND s.plan_id=r.plan_id \
+         WHERE r.community_id=$1 AND r.workspace_id=$2 AND r.enabled AND r.next_fire_at<=$3 \
+           AND p.state='active' AND p.automatic_execution_enabled \
+         ORDER BY r.next_fire_at,r.plan_id FOR UPDATE OF r SKIP LOCKED LIMIT $4",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(now)
+    .bind(i64::from(request.max_records))
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let mut recurrences_processed = 0_u32;
+    let mut occurrences_materialized = 0_u32;
+    for row in due {
+        let plan_id: Uuid = row
+            .try_get("plan_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let generation: i64 = row
+            .try_get("schedule_generation")
+            .map_err(|_| ApiError(Error::Database))?;
+        let scheduled_at: DateTime<Utc> = row
+            .try_get("next_fire_at")
+            .map_err(|_| ApiError(Error::Database))?;
+        let weekdays: Vec<i16> = row
+            .try_get("weekdays")
+            .map_err(|_| ApiError(Error::Database))?;
+        let policy = RecurrencePolicy {
+            schedule_generation: u64::try_from(generation)
+                .map_err(|_| ApiError(Error::Database))?,
+            timezone: row
+                .try_get("timezone")
+                .map_err(|_| ApiError(Error::Database))?,
+            local_minute: u16::try_from(
+                row.try_get::<i32, _>("local_minute")
+                    .map_err(|_| ApiError(Error::Database))?,
+            )
+            .map_err(|_| ApiError(Error::Database))?,
+            weekdays: weekdays
+                .into_iter()
+                .map(|value| u8::try_from(value).map_err(|_| ApiError(Error::Database)))
+                .collect::<Result<_, _>>()?,
+            dst_gap_policy: match row
+                .try_get::<String, _>("dst_gap_policy")
+                .map_err(|_| ApiError(Error::Database))?
+                .as_str()
+            {
+                "skip" => DstGapPolicy::Skip,
+                "shift_forward" => DstGapPolicy::ShiftForward,
+                _ => return Err(ApiError(Error::Database)),
+            },
+            dst_fold_policy: match row
+                .try_get::<String, _>("dst_fold_policy")
+                .map_err(|_| ApiError(Error::Database))?
+                .as_str()
+            {
+                "first" => DstFoldPolicy::First,
+                "second" => DstFoldPolicy::Second,
+                _ => return Err(ApiError(Error::Database)),
+            },
+            catch_up_policy: match row
+                .try_get::<String, _>("catch_up_policy")
+                .map_err(|_| ApiError(Error::Database))?
+                .as_str()
+            {
+                "skip" => CatchUpPolicy::Skip,
+                "one" => CatchUpPolicy::One,
+                _ => return Err(ApiError(Error::Database)),
+            },
+            max_catch_up_seconds: u32::try_from(
+                row.try_get::<i32, _>("max_catch_up_seconds")
+                    .map_err(|_| ApiError(Error::Database))?,
+            )
+            .map_err(|_| ApiError(Error::Database))?,
+            enabled: true,
+        };
+        let decision = decide_catch_up(&policy, scheduled_at, now);
+        let next = next_occurrence(&policy, now).map_err(ApiError)?;
+        let occurrence_id = Uuid::new_v4();
+        let plan_scope = PlanScope {
+            tenant_id,
+            workspace_id,
+            plan_id,
+        };
+        let status = if decision == CatchUpDecision::Fire {
+            "materialized"
+        } else {
+            "skipped"
+        };
+        let inserted = create_occurrence(
+            &mut tx,
+            plan_scope,
+            policy.schedule_generation,
+            occurrence_id,
+            Some(policy.schedule_generation),
+            scheduled_at,
+            now > scheduled_at,
+            status,
+        )
+        .await?;
+        if inserted && decision == CatchUpDecision::Fire {
+            materialize_ready_dispatches(
+                &mut tx,
+                plan_scope,
+                policy.schedule_generation,
+                occurrence_id,
+                now,
+            )
+            .await?;
+            create_deadline_reminders(
+                &mut tx,
+                plan_scope,
+                policy.schedule_generation,
+                occurrence_id,
+                now,
+            )
+            .await?;
+            occurrences_materialized = occurrences_materialized.saturating_add(1);
+        }
+        sqlx::query(
+            "UPDATE snowman_orchestration_recurrences SET last_fire_at=$1,next_fire_at=$2,updated_at=$3 \
+             WHERE community_id=$4 AND workspace_id=$5 AND plan_id=$6 AND schedule_generation=$7 \
+               AND next_fire_at=$1",
+        )
+        .bind(scheduled_at)
+        .bind(next.scheduled_at)
+        .bind(now)
+        .bind(tenant_id)
+        .bind(workspace_id)
+        .bind(plan_id)
+        .bind(generation)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+        recurrences_processed = recurrences_processed.saturating_add(1);
+    }
+
+    let reminder_rows = sqlx::query(
+        "SELECT rr.plan_id,rr.plan_generation,rr.occurrence_id \
+         FROM snowman_orchestration_reminder_receipts rr \
+         JOIN snowman_orchestration_plans p ON p.community_id=rr.community_id AND p.plan_id=rr.plan_id \
+           AND p.generation=rr.plan_generation \
+         WHERE rr.community_id=$1 AND p.workspace_id=$2 AND rr.status='pending' AND rr.due_at<=$3 \
+           AND p.state='active' ORDER BY rr.due_at,rr.plan_id FOR UPDATE OF rr SKIP LOCKED LIMIT $4",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(now)
+    .bind(i64::from(request.max_records))
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let mut reminders_enqueued = 0_u32;
+    for row in reminder_rows {
+        let plan_id: Uuid = row
+            .try_get("plan_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let generation = u64::try_from(
+            row.try_get::<i64, _>("plan_generation")
+                .map_err(|_| ApiError(Error::Database))?,
+        )
+        .map_err(|_| ApiError(Error::Database))?;
+        let occurrence_id: Uuid = row
+            .try_get("occurrence_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        if insert_control_outbox(
+            &mut tx,
+            PlanScope {
+                tenant_id,
+                workspace_id,
+                plan_id,
+            },
+            generation,
+            occurrence_id,
+            None,
+            "deliver_reminder",
+            now,
+        )
+        .await?
+        {
+            reminders_enqueued = reminders_enqueued.saturating_add(1);
+        }
+    }
+
+    let recovery = recover_dispatches(
+        &mut tx,
+        tenant_id,
+        workspace_id,
+        request.max_records,
+        request.submitted_timeout_seconds,
+        now,
+    )
+    .await?;
+    tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+    Ok(SchedulerCycleReceipt {
+        request_id: request.request_id,
+        recurrences_processed,
+        occurrences_materialized,
+        dispatches_recovered: recovery.recovered,
+        dispatches_dead_lettered: recovery.dead_lettered,
+        reminders_enqueued,
+    })
+}
+
+struct RecoveryCounts {
+    recovered: u32,
+    dead_lettered: u32,
+}
+
+async fn recover_dispatches(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    max_records: u16,
+    submitted_timeout_seconds: u16,
+    now: DateTime<Utc>,
+) -> Result<RecoveryCounts, ApiError> {
+    let rows = sqlx::query(
+        "SELECT d.dispatch_id,d.plan_id,d.plan_generation,d.task_id,d.occurrence_id,d.attempt_count,\
+                d.max_attempts,p.state \
+         FROM snowman_orchestration_dispatches d \
+         JOIN snowman_orchestration_plans p ON p.community_id=d.community_id AND p.plan_id=d.plan_id \
+           AND p.generation=d.plan_generation \
+         WHERE d.community_id=$1 AND d.workspace_id=$2 AND \
+           ((d.status='leased' AND d.lease_expires_at<=$3) OR \
+            (d.status='submitted' AND d.submitted_at<=($3-make_interval(secs=>$4)))) \
+         ORDER BY COALESCE(d.lease_expires_at,d.submitted_at),d.dispatch_id \
+         FOR UPDATE OF d SKIP LOCKED LIMIT $5",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(now)
+    .bind(i32::from(submitted_timeout_seconds))
+    .bind(i64::from(max_records))
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let mut counts = RecoveryCounts {
+        recovered: 0,
+        dead_lettered: 0,
+    };
+    for row in rows {
+        let dispatch_id: Uuid = row
+            .try_get("dispatch_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let plan_id: Uuid = row
+            .try_get("plan_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let generation: i64 = row
+            .try_get("plan_generation")
+            .map_err(|_| ApiError(Error::Database))?;
+        let task_id: Uuid = row
+            .try_get("task_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let occurrence_id: Uuid = row
+            .try_get("occurrence_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let attempt_count: i32 = row
+            .try_get("attempt_count")
+            .map_err(|_| ApiError(Error::Database))?;
+        let max_attempts: i32 = row
+            .try_get("max_attempts")
+            .map_err(|_| ApiError(Error::Database))?;
+        let plan_state: String = row
+            .try_get("state")
+            .map_err(|_| ApiError(Error::Database))?;
+        if recovery_disposition(&plan_state, attempt_count, max_attempts)
+            == RecoveryDisposition::Cancel
+        {
+            sqlx::query(
+                "UPDATE snowman_orchestration_dispatches SET status='cancelled',\
+                 cancellation_generation=cancellation_generation+1,lease_owner_identity_id=NULL,\
+                 lease_expires_at=NULL,terminal_at=$1,terminal_outcome='cancelled',updated_at=$1 \
+                 WHERE community_id=$2 AND dispatch_id=$3",
+            )
+            .bind(now)
+            .bind(tenant_id)
+            .bind(dispatch_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|_| ApiError(Error::Database))?;
+        } else if recovery_disposition(&plan_state, attempt_count, max_attempts)
+            == RecoveryDisposition::Retry
+        {
+            sqlx::query(
+                "UPDATE snowman_orchestration_dispatches SET status='failed',lease_owner_identity_id=NULL,\
+                 lease_expires_at=NULL,next_attempt_at=$1,updated_at=$1 WHERE community_id=$2 AND dispatch_id=$3",
+            )
+            .bind(now)
+            .bind(tenant_id)
+            .bind(dispatch_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|_| ApiError(Error::Database))?;
+            counts.recovered = counts.recovered.saturating_add(1);
+        } else {
+            dead_letter_dispatch(
+                tx,
+                tenant_id,
+                dispatch_id,
+                plan_id,
+                generation,
+                task_id,
+                occurrence_id,
+                "delivery_failed",
+                Sha256::digest(b"snowman.orchestration.delivery-timeout.v1").into(),
+                now,
+            )
+            .await?;
+            counts.dead_lettered = counts.dead_lettered.saturating_add(1);
+        }
+    }
+    Ok(counts)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn persist_delivery_result(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    dispatch_id: Uuid,
+    command: &DeliveryResultCommand,
+    auth: &VerifiedAuth,
+    digest: [u8; 32],
+    now: DateTime<Utc>,
+) -> Result<ApiReceipt, ApiError> {
+    let mut tx = serializable(pool).await?;
+    authorize_and_record(
+        &mut tx,
+        Scope {
+            tenant_id,
+            workspace_id,
+            identity_id: command.service_identity_id,
+            principal: &command.service_principal,
+            policy_generation: command.policy_generation,
+            capability: "orchestration.scheduler.dispatch",
+        },
+        auth,
+        digest,
+        now,
+    )
+    .await?;
+    if let Some(prior) = sqlx::query(
+        "SELECT request_sha256 FROM snowman_orchestration_delivery_attempts \
+         WHERE community_id=$1 AND dispatch_id=$2 AND lease_generation=$3",
+    )
+    .bind(tenant_id)
+    .bind(dispatch_id)
+    .bind(command.lease_generation as i64)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    {
+        let prior_digest: Vec<u8> = prior
+            .try_get("request_sha256")
+            .map_err(|_| ApiError(Error::Database))?;
+        if prior_digest != digest {
+            return Err(ApiError(Error::Conflict));
+        }
+        let coordinate = dispatch_coordinate(&mut tx, tenant_id, workspace_id, dispatch_id).await?;
+        tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+        return Ok(scoped_receipt(
+            dispatch_id,
+            PlanScope {
+                tenant_id,
+                workspace_id,
+                plan_id: coordinate.plan_id,
+            },
+            coordinate.generation,
+            "duplicate",
+            digest,
+            now,
+        ));
+    }
+    let row = sqlx::query(
+        "SELECT d.plan_id,d.plan_generation,d.task_id,d.occurrence_id,d.attempt_count,d.max_attempts,\
+                d.coordinator_job_reference,d.cancellation_generation,d.lease_owner_identity_id,\
+                d.lease_expires_at,p.state \
+         FROM snowman_orchestration_dispatches d \
+         JOIN snowman_orchestration_plans p ON p.community_id=d.community_id AND p.plan_id=d.plan_id \
+           AND p.generation=d.plan_generation \
+         WHERE d.community_id=$1 AND d.workspace_id=$2 AND d.dispatch_id=$3 AND d.status='leased' \
+         FOR UPDATE OF d,p",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(dispatch_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    .ok_or(ApiError(Error::Conflict))?;
+    let plan_id: Uuid = row
+        .try_get("plan_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let generation: i64 = row
+        .try_get("plan_generation")
+        .map_err(|_| ApiError(Error::Database))?;
+    let cancellation_generation: i64 = row
+        .try_get("cancellation_generation")
+        .map_err(|_| ApiError(Error::Database))?;
+    let lease_owner: Option<Uuid> = row
+        .try_get("lease_owner_identity_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let lease_expiry: Option<DateTime<Utc>> = row
+        .try_get("lease_expires_at")
+        .map_err(|_| ApiError(Error::Database))?;
+    let coordinator_reference: String = row
+        .try_get("coordinator_job_reference")
+        .map_err(|_| ApiError(Error::Database))?;
+    let state: String = row
+        .try_get("state")
+        .map_err(|_| ApiError(Error::Database))?;
+    if state != "active"
+        || lease_owner != Some(command.service_identity_id)
+        || lease_expiry.is_none_or(|expires| expires <= now)
+        || cancellation_generation != command.cancellation_generation as i64
+        || command
+            .coordinator_receipt_reference
+            .as_deref()
+            .is_some_and(|value| value != coordinator_reference)
+    {
+        return Err(ApiError(Error::Conflict));
+    }
+    let attempt_count: i32 = row
+        .try_get("attempt_count")
+        .map_err(|_| ApiError(Error::Database))?;
+    let max_attempts: i32 = row
+        .try_get("max_attempts")
+        .map_err(|_| ApiError(Error::Database))?;
+    let outcome = if command.outcome == DeliveryOutcome::Submitted {
+        "submitted"
+    } else if attempt_count >= max_attempts {
+        "dead_letter"
+    } else {
+        "retryable_failure"
+    };
+    sqlx::query(
+        "INSERT INTO snowman_orchestration_delivery_attempts \
+         (community_id,dispatch_id,lease_generation,cancellation_generation,request_sha256,outcome,\
+          coordinator_receipt_reference,response_sha256,accepted_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+    )
+    .bind(tenant_id)
+    .bind(dispatch_id)
+    .bind(command.lease_generation as i64)
+    .bind(command.cancellation_generation as i64)
+    .bind(digest.as_slice())
+    .bind(outcome)
+    .bind(&command.coordinator_receipt_reference)
+    .bind(
+        command
+            .response_sha256
+            .as_deref()
+            .map(decode_digest)
+            .transpose()?,
+    )
+    .bind(now)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_conflict)?;
+    if command.outcome == DeliveryOutcome::Submitted {
+        sqlx::query(
+            "UPDATE snowman_orchestration_dispatches SET status='submitted',submitted_at=$1,\
+             lease_owner_identity_id=NULL,lease_expires_at=NULL,updated_at=$1 \
+             WHERE community_id=$2 AND dispatch_id=$3 AND lease_generation=$4 \
+               AND cancellation_generation=$5 AND status='leased'",
+        )
+        .bind(now)
+        .bind(tenant_id)
+        .bind(dispatch_id)
+        .bind(command.lease_generation as i64)
+        .bind(command.cancellation_generation as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+    } else if outcome == "retryable_failure" {
+        let failure = decode_digest(
+            command
+                .failure_sha256
+                .as_deref()
+                .ok_or(ApiError(Error::Invalid))?,
+        )?;
+        let retry_at = now
+            + ChronoDuration::seconds(i64::from(
+                command
+                    .retry_after_seconds
+                    .ok_or(ApiError(Error::Invalid))?,
+            ));
+        sqlx::query(
+            "UPDATE snowman_orchestration_dispatches SET status='failed',lease_owner_identity_id=NULL,\
+             lease_expires_at=NULL,next_attempt_at=$1,last_failure_sha256=$2,updated_at=$3 \
+             WHERE community_id=$4 AND dispatch_id=$5 AND lease_generation=$6 \
+               AND cancellation_generation=$7 AND status='leased'",
+        )
+        .bind(retry_at)
+        .bind(failure)
+        .bind(now)
+        .bind(tenant_id)
+        .bind(dispatch_id)
+        .bind(command.lease_generation as i64)
+        .bind(command.cancellation_generation as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+    } else {
+        dead_letter_dispatch(
+            &mut tx,
+            tenant_id,
+            dispatch_id,
+            plan_id,
+            generation,
+            row.try_get("task_id")
+                .map_err(|_| ApiError(Error::Database))?,
+            row.try_get("occurrence_id")
+                .map_err(|_| ApiError(Error::Database))?,
+            "delivery_failed",
+            decode_digest(
+                command
+                    .failure_sha256
+                    .as_deref()
+                    .ok_or(ApiError(Error::Invalid))?,
+            )?,
+            now,
+        )
+        .await?;
+    }
+    tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+    Ok(scoped_receipt(
+        dispatch_id,
+        PlanScope {
+            tenant_id,
+            workspace_id,
+            plan_id,
+        },
+        u64::try_from(generation).map_err(|_| ApiError(Error::Database))?,
+        outcome,
+        digest,
+        now,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn persist_terminal_receipt(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    dispatch_id: Uuid,
+    command: &TerminalReceiptCommand,
+    auth: &VerifiedAuth,
+    digest: [u8; 32],
+    now: DateTime<Utc>,
+) -> Result<ApiReceipt, ApiError> {
+    let mut tx = serializable(pool).await?;
+    authorize_and_record(
+        &mut tx,
+        Scope {
+            tenant_id,
+            workspace_id,
+            identity_id: command.service_identity_id,
+            principal: &command.service_principal,
+            policy_generation: command.policy_generation,
+            capability: "orchestration.receipts.ingest",
+        },
+        auth,
+        digest,
+        now,
+    )
+    .await?;
+    if let Some(row) = sqlx::query(
+        "SELECT r.receipt_sha256,r.plan_id,r.plan_generation FROM snowman_orchestration_terminal_receipts r \
+         WHERE r.community_id=$1 AND r.workspace_id=$2 AND r.dispatch_id=$3",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(dispatch_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    {
+        let prior: Vec<u8> = row
+            .try_get("receipt_sha256")
+            .map_err(|_| ApiError(Error::Database))?;
+        if prior != decode_digest(&command.receipt_sha256)? {
+            return Err(ApiError(Error::Conflict));
+        }
+        let plan_id: Uuid = row.try_get("plan_id").map_err(|_| ApiError(Error::Database))?;
+        let generation = u64::try_from(
+            row.try_get::<i64, _>("plan_generation")
+                .map_err(|_| ApiError(Error::Database))?,
+        )
+        .map_err(|_| ApiError(Error::Database))?;
+        tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+        return Ok(scoped_receipt(
+            dispatch_id,
+            PlanScope {
+                tenant_id,
+                workspace_id,
+                plan_id,
+            },
+            generation,
+            "duplicate",
+            digest,
+            now,
+        ));
+    }
+    let row = sqlx::query(
+        "SELECT d.plan_id,d.plan_generation,d.task_id,d.occurrence_id,d.lease_generation,\
+                d.cancellation_generation,d.execution_snapshot_sha256,d.reserved_cost_microusd,p.state,p.deadline_at \
+         FROM snowman_orchestration_dispatches d \
+         JOIN snowman_orchestration_plans p ON p.community_id=d.community_id AND p.plan_id=d.plan_id \
+           AND p.generation=d.plan_generation \
+         WHERE d.community_id=$1 AND d.workspace_id=$2 AND d.dispatch_id=$3 AND d.status='submitted' \
+         FOR UPDATE OF d,p",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(dispatch_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    .ok_or(ApiError(Error::Conflict))?;
+    let state: String = row
+        .try_get("state")
+        .map_err(|_| ApiError(Error::Database))?;
+    let deadline: DateTime<Utc> = row
+        .try_get("deadline_at")
+        .map_err(|_| ApiError(Error::Database))?;
+    let stored_snapshot: Vec<u8> = row
+        .try_get("execution_snapshot_sha256")
+        .map_err(|_| ApiError(Error::Database))?;
+    let reserved: i64 = row
+        .try_get("reserved_cost_microusd")
+        .map_err(|_| ApiError(Error::Database))?;
+    if state != "active"
+        || row
+            .try_get::<i64, _>("lease_generation")
+            .map_err(|_| ApiError(Error::Database))?
+            != command.lease_generation as i64
+        || row
+            .try_get::<i64, _>("cancellation_generation")
+            .map_err(|_| ApiError(Error::Database))?
+            != command.cancellation_generation as i64
+        || stored_snapshot != decode_digest(&command.execution_snapshot_sha256)?
+        || command.actual_cost_microusd
+            > u64::try_from(reserved).map_err(|_| ApiError(Error::Database))?
+        || command.completed_at > deadline + ChronoDuration::minutes(5)
+    {
+        return Err(ApiError(Error::Conflict));
+    }
+    let plan_id: Uuid = row
+        .try_get("plan_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let generation: i64 = row
+        .try_get("plan_generation")
+        .map_err(|_| ApiError(Error::Database))?;
+    let task_id: Uuid = row
+        .try_get("task_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let occurrence_id: Uuid = row
+        .try_get("occurrence_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let terminal_outcome = terminal_outcome(command.outcome);
+    sqlx::query(
+        "INSERT INTO snowman_orchestration_terminal_receipts \
+         (community_id,workspace_id,dispatch_id,occurrence_id,plan_id,plan_generation,task_id,\
+          lease_generation,cancellation_generation,execution_snapshot_sha256,outcome,\
+          handoff_manifest_reference,handoff_manifest_sha256,artifact_references,evidence_references,\
+          execution_receipt_references,actual_cost_microusd,receipt_sha256,completed_at,accepted_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(dispatch_id)
+    .bind(occurrence_id)
+    .bind(plan_id)
+    .bind(generation)
+    .bind(task_id)
+    .bind(command.lease_generation as i64)
+    .bind(command.cancellation_generation as i64)
+    .bind(decode_digest(&command.execution_snapshot_sha256)?)
+    .bind(terminal_outcome)
+    .bind(&command.handoff_manifest_reference)
+    .bind(decode_digest(&command.handoff_manifest_sha256)?)
+    .bind(command.artifact_references.iter().cloned().collect::<Vec<_>>())
+    .bind(command.evidence_references.iter().cloned().collect::<Vec<_>>())
+    .bind(
+        command
+            .execution_receipt_references
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>(),
+    )
+    .bind(command.actual_cost_microusd as i64)
+    .bind(decode_digest(&command.receipt_sha256)?)
+    .bind(command.completed_at)
+    .bind(now)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_conflict)?;
+    let dispatch_status = match command.outcome {
+        TerminalOutcome::Succeeded => "succeeded",
+        TerminalOutcome::Cancelled => "cancelled",
+        TerminalOutcome::Blocked | TerminalOutcome::Failed => "dead_letter",
+    };
+    sqlx::query(
+        "UPDATE snowman_orchestration_dispatches SET status=$1,terminal_at=$2,terminal_outcome=$3,updated_at=$2 \
+         WHERE community_id=$4 AND dispatch_id=$5 AND status='submitted' \
+           AND lease_generation=$6 AND cancellation_generation=$7",
+    )
+    .bind(dispatch_status)
+    .bind(now)
+    .bind(terminal_outcome)
+    .bind(tenant_id)
+    .bind(dispatch_id)
+    .bind(command.lease_generation as i64)
+    .bind(command.cancellation_generation as i64)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    if matches!(
+        command.outcome,
+        TerminalOutcome::Blocked | TerminalOutcome::Failed
+    ) {
+        dead_letter_dispatch(
+            &mut tx,
+            tenant_id,
+            dispatch_id,
+            plan_id,
+            generation,
+            task_id,
+            occurrence_id,
+            "delivery_failed",
+            decode_digest(&command.receipt_sha256)?,
+            now,
+        )
+        .await?;
+    }
+    let scope = PlanScope {
+        tenant_id,
+        workspace_id,
+        plan_id,
+    };
+    let progress = update_progress_digest(
+        &mut tx,
+        scope,
+        u64::try_from(generation).map_err(|_| ApiError(Error::Database))?,
+        occurrence_id,
+        now,
+    )
+    .await?;
+    if command.outcome == TerminalOutcome::Succeeded {
+        materialize_ready_dispatches(
+            &mut tx,
+            scope,
+            u64::try_from(generation).map_err(|_| ApiError(Error::Database))?,
+            occurrence_id,
+            now,
+        )
+        .await?;
+    }
+    finalize_occurrence_if_terminal(&mut tx, scope, generation, occurrence_id, &progress, now)
+        .await?;
+    tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+    Ok(scoped_receipt(
+        dispatch_id,
+        scope,
+        u64::try_from(generation).map_err(|_| ApiError(Error::Database))?,
+        terminal_outcome,
+        digest,
+        now,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn dead_letter_dispatch(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    dispatch_id: Uuid,
+    plan_id: Uuid,
+    generation: i64,
+    task_id: Uuid,
+    occurrence_id: Uuid,
+    failure_class: &str,
+    failure_sha256: [u8; 32],
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "UPDATE snowman_orchestration_dispatches SET status='dead_letter',lease_owner_identity_id=NULL,\
+         lease_expires_at=NULL,last_failure_sha256=$1,terminal_at=COALESCE(terminal_at,$2),\
+         terminal_outcome=COALESCE(terminal_outcome,'failed'),updated_at=$2 \
+         WHERE community_id=$3 AND dispatch_id=$4",
+    )
+    .bind(failure_sha256.as_slice())
+    .bind(now)
+    .bind(tenant_id)
+    .bind(dispatch_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    sqlx::query(
+        "INSERT INTO snowman_orchestration_dead_letters \
+         (community_id,dead_letter_id,dispatch_id,plan_id,plan_generation,task_id,failure_class,\
+          failure_sha256,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING",
+    )
+    .bind(tenant_id)
+    .bind(Uuid::new_v4())
+    .bind(dispatch_id)
+    .bind(plan_id)
+    .bind(generation)
+    .bind(task_id)
+    .bind(failure_class)
+    .bind(failure_sha256.as_slice())
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .map_err(db_conflict)?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_occurrences SET status='failed',updated_at=$1 \
+         WHERE community_id=$2 AND occurrence_id=$3 AND status='materialized'",
+    )
+    .bind(now)
+    .bind(tenant_id)
+    .bind(occurrence_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    Ok(())
+}
+
+struct DispatchCoordinate {
+    plan_id: Uuid,
+    generation: u64,
+}
+
+async fn dispatch_coordinate(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    dispatch_id: Uuid,
+) -> Result<DispatchCoordinate, ApiError> {
+    let row = sqlx::query(
+        "SELECT plan_id,plan_generation FROM snowman_orchestration_dispatches \
+         WHERE community_id=$1 AND workspace_id=$2 AND dispatch_id=$3",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(dispatch_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    .ok_or(ApiError(Error::Conflict))?;
+    Ok(DispatchCoordinate {
+        plan_id: row
+            .try_get("plan_id")
+            .map_err(|_| ApiError(Error::Database))?,
+        generation: u64::try_from(
+            row.try_get::<i64, _>("plan_generation")
+                .map_err(|_| ApiError(Error::Database))?,
+        )
+        .map_err(|_| ApiError(Error::Database))?,
+    })
+}
+
+struct ProgressState {
+    digest: [u8; 32],
+    completed_task_ids: Vec<Uuid>,
+    accounted_cost_microusd: i64,
+}
+
+async fn update_progress_digest(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: PlanScope,
+    generation: u64,
+    occurrence_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<ProgressState, ApiError> {
+    let rows = sqlx::query(
+        "SELECT task_id,outcome,lease_generation,receipt_sha256,handoff_manifest_sha256,actual_cost_microusd \
+         FROM snowman_orchestration_terminal_receipts WHERE community_id=$1 AND workspace_id=$2 \
+           AND plan_id=$3 AND plan_generation=$4 AND occurrence_id=$5 ORDER BY task_id",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .bind(occurrence_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"snowman.orchestration.progress.v1\0");
+    hasher.update(scope.tenant_id.as_bytes());
+    hasher.update(scope.workspace_id.as_bytes());
+    hasher.update(scope.plan_id.as_bytes());
+    hasher.update(generation.to_be_bytes());
+    hasher.update(occurrence_id.as_bytes());
+    let mut completed = Vec::new();
+    let mut terminal = BTreeMap::new();
+    let mut cost = 0_i64;
+    for row in rows {
+        let task_id: Uuid = row
+            .try_get("task_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let outcome: String = row
+            .try_get("outcome")
+            .map_err(|_| ApiError(Error::Database))?;
+        let lease_generation: i64 = row
+            .try_get("lease_generation")
+            .map_err(|_| ApiError(Error::Database))?;
+        let receipt_sha: Vec<u8> = row
+            .try_get("receipt_sha256")
+            .map_err(|_| ApiError(Error::Database))?;
+        let handoff_sha: Vec<u8> = row
+            .try_get("handoff_manifest_sha256")
+            .map_err(|_| ApiError(Error::Database))?;
+        let actual: i64 = row
+            .try_get("actual_cost_microusd")
+            .map_err(|_| ApiError(Error::Database))?;
+        cost = cost.checked_add(actual).ok_or(ApiError(Error::Conflict))?;
+        hasher.update(task_id.as_bytes());
+        hasher.update(lease_generation.to_be_bytes());
+        hasher.update(&receipt_sha);
+        hasher.update(&handoff_sha);
+        hasher.update(actual.to_be_bytes());
+        hasher.update(outcome.as_bytes());
+        if outcome == "succeeded" {
+            completed.push(task_id);
+        }
+        terminal.insert(task_id, outcome);
+    }
+    let task_rows = sqlx::query(
+        "SELECT task_id FROM snowman_orchestration_tasks WHERE community_id=$1 AND plan_id=$2 \
+         AND plan_generation=$3 ORDER BY task_id",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let mut ready = Vec::new();
+    for row in task_rows {
+        let task_id: Uuid = row
+            .try_get("task_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        if terminal.contains_key(&task_id) {
+            continue;
+        }
+        let blocked: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM snowman_orchestration_task_dependencies d \
+             WHERE d.community_id=$1 AND d.plan_id=$2 AND d.plan_generation=$3 AND d.task_id=$4 \
+               AND NOT EXISTS (SELECT 1 FROM snowman_orchestration_terminal_receipts r \
+                 WHERE r.community_id=d.community_id AND r.occurrence_id=$5 \
+                   AND r.task_id=d.depends_on_task_id AND r.outcome='succeeded'))",
+        )
+        .bind(scope.tenant_id)
+        .bind(scope.plan_id)
+        .bind(generation as i64)
+        .bind(task_id)
+        .bind(occurrence_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+        if !blocked {
+            ready.push(task_id);
+        }
+    }
+    let digest: [u8; 32] = hasher.finalize().into();
+    let revision: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(revision),0)+1 FROM snowman_orchestration_progress_digests \
+         WHERE community_id=$1 AND occurrence_id=$2",
+    )
+    .bind(scope.tenant_id)
+    .bind(occurrence_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    sqlx::query(
+        "INSERT INTO snowman_orchestration_progress_digests \
+         (community_id,workspace_id,plan_id,plan_generation,occurrence_id,progress_sha256,\
+          completed_task_ids,next_ready_task_ids,accounted_cost_microusd,revision,created_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.workspace_id)
+    .bind(scope.plan_id)
+    .bind(generation as i64)
+    .bind(occurrence_id)
+    .bind(digest.as_slice())
+    .bind(&completed)
+    .bind(&ready)
+    .bind(cost)
+    .bind(revision)
+    .bind(now)
+    .execute(&mut **tx)
+    .await
+    .map_err(db_conflict)?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_occurrences SET progress_sha256=$1,\
+         accounted_cost_microusd=$2,updated_at=$3 WHERE community_id=$4 AND occurrence_id=$5",
+    )
+    .bind(digest.as_slice())
+    .bind(cost)
+    .bind(now)
+    .bind(scope.tenant_id)
+    .bind(occurrence_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    Ok(ProgressState {
+        digest,
+        completed_task_ids: completed,
+        accounted_cost_microusd: cost,
+    })
+}
+
+async fn finalize_occurrence_if_terminal(
+    tx: &mut Transaction<'_, Postgres>,
+    scope: PlanScope,
+    generation: i64,
+    occurrence_id: Uuid,
+    progress: &ProgressState,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let task_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM snowman_orchestration_tasks WHERE community_id=$1 AND plan_id=$2 \
+         AND plan_generation=$3",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.plan_id)
+    .bind(generation)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let terminal_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM snowman_orchestration_terminal_receipts WHERE community_id=$1 \
+         AND occurrence_id=$2",
+    )
+    .bind(scope.tenant_id)
+    .bind(occurrence_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    if terminal_count != task_count {
+        return Ok(());
+    }
+    let completed = i64::try_from(progress.completed_task_ids.len())
+        .map_err(|_| ApiError(Error::Database))?
+        == task_count;
+    sqlx::query(
+        "UPDATE snowman_orchestration_occurrences SET status=$1,progress_sha256=$2,\
+         accounted_cost_microusd=$3,updated_at=$4 WHERE community_id=$5 AND occurrence_id=$6",
+    )
+    .bind(if completed { "completed" } else { "failed" })
+    .bind(progress.digest.as_slice())
+    .bind(progress.accounted_cost_microusd)
+    .bind(now)
+    .bind(scope.tenant_id)
+    .bind(occurrence_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let recurring: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM snowman_orchestration_recurrences WHERE community_id=$1 \
+         AND plan_id=$2 AND schedule_generation=$3)",
+    )
+    .bind(scope.tenant_id)
+    .bind(scope.plan_id)
+    .bind(generation)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    if completed && !recurring {
+        sqlx::query(
+            "UPDATE snowman_orchestration_plans SET state='completed',automatic_execution_enabled=FALSE,\
+             updated_at=$1 WHERE community_id=$2 AND workspace_id=$3 AND plan_id=$4 \
+               AND generation=$5 AND state='active'",
+        )
+        .bind(now)
+        .bind(scope.tenant_id)
+        .bind(scope.workspace_id)
+        .bind(scope.plan_id)
+        .bind(generation)
+        .execute(&mut **tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+    }
+    Ok(())
 }
 
 async fn claim_ready_dispatches(
@@ -1429,6 +3858,129 @@ fn valid_hex_digest(value: &str) -> bool {
     value.len() == 64 && hex::decode(value).is_ok()
 }
 
+fn decode_digest(value: &str) -> Result<[u8; 32], ApiError> {
+    let bytes = hex::decode(value).map_err(|_| ApiError(Error::Invalid))?;
+    bytes.try_into().map_err(|_| ApiError(Error::Invalid))
+}
+
+fn valid_analyst_reference(value: &str) -> bool {
+    value
+        .strip_prefix("analyst360:sha256:")
+        .is_some_and(valid_hex_digest)
+}
+
+fn valid_execution_ref(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|rest| {
+        rest.split_once(":generation:")
+            .is_some_and(|(id, generation)| {
+                Uuid::parse_str(id).is_ok()
+                    && generation
+                        .parse::<u64>()
+                        .is_ok_and(|generation| generation > 0)
+            })
+    })
+}
+
+fn valid_any_execution_ref(value: &str) -> bool {
+    [
+        "snowman:agent-job:",
+        "snowman:model-generation:",
+        "snowman:tool-action:",
+    ]
+    .iter()
+    .any(|prefix| valid_execution_ref(value, prefix))
+}
+
+fn terminal_outcome(value: TerminalOutcome) -> &'static str {
+    match value {
+        TerminalOutcome::Succeeded => "succeeded",
+        TerminalOutcome::Blocked => "blocked",
+        TerminalOutcome::Failed => "failed",
+        TerminalOutcome::Cancelled => "cancelled",
+    }
+}
+
+fn scoped_receipt(
+    command_id: Uuid,
+    scope: PlanScope,
+    generation: u64,
+    status: &str,
+    digest: [u8; 32],
+    now: DateTime<Utc>,
+) -> ApiReceipt {
+    ApiReceipt {
+        schema_version: API_RECEIPT_SCHEMA.into(),
+        command_id,
+        community_id: scope.tenant_id,
+        workspace_id: scope.workspace_id,
+        plan_id: scope.plan_id,
+        plan_generation: generation,
+        status: status.into(),
+        request_sha256: hex::encode(digest),
+        accepted_at: now,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_snapshot_digest(
+    scope: PlanScope,
+    generation: u64,
+    occurrence_id: Uuid,
+    task_id: Uuid,
+    model_route_reference: &str,
+    context_refs: &[String],
+    capabilities: &[String],
+    reserved_cost_microusd: i64,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"snowman.orchestration.dispatch-snapshot.v1\0");
+    hasher.update(scope.tenant_id.as_bytes());
+    hasher.update(scope.workspace_id.as_bytes());
+    hasher.update(scope.plan_id.as_bytes());
+    hasher.update(generation.to_be_bytes());
+    hasher.update(occurrence_id.as_bytes());
+    hasher.update(task_id.as_bytes());
+    hasher.update(model_route_reference.as_bytes());
+    for reference in context_refs {
+        hasher.update(reference.as_bytes());
+        hasher.update([0]);
+    }
+    for capability in capabilities {
+        hasher.update(capability.as_bytes());
+        hasher.update([0]);
+    }
+    hasher.update(reserved_cost_microusd.to_be_bytes());
+    hasher.finalize().into()
+}
+
+fn reservation_fits(committed: i64, ceiling: i64, requested: i64) -> bool {
+    committed >= 0
+        && ceiling >= 0
+        && requested >= 0
+        && committed <= ceiling.saturating_sub(requested)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecoveryDisposition {
+    Cancel,
+    Retry,
+    DeadLetter,
+}
+
+fn recovery_disposition(
+    plan_state: &str,
+    attempt_count: i32,
+    max_attempts: i32,
+) -> RecoveryDisposition {
+    if plan_state != "active" {
+        RecoveryDisposition::Cancel
+    } else if attempt_count < max_attempts {
+        RecoveryDisposition::Retry
+    } else {
+        RecoveryDisposition::DeadLetter
+    }
+}
+
 fn parse_private_origin(value: &str) -> Result<Url, ConfigError> {
     let url = Url::parse(value).map_err(|_| ConfigError::Invalid("origin"))?;
     let host = url.host_str().ok_or(ConfigError::Invalid("origin"))?;
@@ -1661,6 +4213,112 @@ mod tests {
         }
         assert!(source.contains("reserved_cost_microusd BIGINT NOT NULL"));
         assert!(source.contains("analyst_context_references TEXT[] NOT NULL"));
+        assert!(!source.contains("provider_api_key"));
+        assert!(!source.contains("raw_prompt"));
+    }
+
+    #[test]
+    fn activation_and_supersession_remain_explicit_and_default_off() {
+        let mut lifecycle = PlanLifecycleCommand {
+            schema_version: LIFECYCLE_SCHEMA.into(),
+            command_id: Uuid::from_u128(1),
+            service_identity_id: Uuid::from_u128(2),
+            service_principal: "snowman:orchestration-controller".into(),
+            policy_generation: 1,
+            plan_generation: 1,
+            automatic_execution_enabled: false,
+            recurrence_enabled: false,
+            evidence_sha256: hex::encode([1_u8; 32]),
+        };
+        assert!(validate_lifecycle(&lifecycle, LifecycleAction::Activate).is_ok());
+        lifecycle.recurrence_enabled = true;
+        assert!(validate_lifecycle(&lifecycle, LifecycleAction::Activate).is_err());
+        lifecycle.automatic_execution_enabled = true;
+        assert!(validate_lifecycle(&lifecycle, LifecycleAction::Pause).is_err());
+
+        let mut supersede = SupersedePlanCommand {
+            schema_version: LIFECYCLE_SCHEMA.into(),
+            command_id: Uuid::from_u128(3),
+            service_identity_id: Uuid::from_u128(2),
+            service_principal: "snowman:orchestration-controller".into(),
+            policy_generation: 1,
+            superseded_plan_id: Uuid::from_u128(4),
+            superseded_plan_generation: 2,
+            replacement_plan_generation: 3,
+            automatic_execution_enabled: false,
+            recurrence_enabled: false,
+            evidence_sha256: hex::encode([2_u8; 32]),
+        };
+        assert!(validate_supersession(&supersede, Uuid::from_u128(5)).is_ok());
+        supersede.replacement_plan_generation = 4;
+        assert!(validate_supersession(&supersede, Uuid::from_u128(5)).is_err());
+    }
+
+    #[test]
+    fn dispatch_snapshot_is_deterministic_and_scope_bound() {
+        let scope = PlanScope {
+            tenant_id: Uuid::from_u128(1),
+            workspace_id: Uuid::from_u128(2),
+            plan_id: Uuid::from_u128(3),
+        };
+        let context = vec![format!("analyst360:sha256:{}", hex::encode([4_u8; 32]))];
+        let capabilities = vec!["analyst.query".into()];
+        let first = dispatch_snapshot_digest(
+            scope,
+            1,
+            Uuid::from_u128(5),
+            Uuid::from_u128(6),
+            &format!("snowman:model-route:{}:revision:1", Uuid::from_u128(7)),
+            &context,
+            &capabilities,
+            100,
+        );
+        let replay = dispatch_snapshot_digest(
+            scope,
+            1,
+            Uuid::from_u128(5),
+            Uuid::from_u128(6),
+            &format!("snowman:model-route:{}:revision:1", Uuid::from_u128(7)),
+            &context,
+            &capabilities,
+            100,
+        );
+        let other_tenant = dispatch_snapshot_digest(
+            PlanScope {
+                tenant_id: Uuid::from_u128(8),
+                ..scope
+            },
+            1,
+            Uuid::from_u128(5),
+            Uuid::from_u128(6),
+            &format!("snowman:model-route:{}:revision:1", Uuid::from_u128(7)),
+            &context,
+            &capabilities,
+            100,
+        );
+        assert_eq!(first, replay);
+        assert_ne!(first, other_tenant);
+    }
+
+    #[test]
+    fn budget_and_recovery_decisions_fail_closed() {
+        assert!(reservation_fits(50, 100, 50));
+        assert!(!reservation_fits(51, 100, 50));
+        assert!(!reservation_fits(-1, 100, 1));
+        assert!(recovery_disposition("paused", 0, 3) == RecoveryDisposition::Cancel);
+        assert!(recovery_disposition("active", 2, 3) == RecoveryDisposition::Retry);
+        assert!(recovery_disposition("active", 3, 3) == RecoveryDisposition::DeadLetter);
+    }
+
+    #[test]
+    fn lifecycle_migration_fences_duplicates_cancellation_and_occurrences() {
+        let source =
+            include_str!("../../../migrations/0055_snowman_orchestration_execution_lifecycle.sql");
+        assert!(source.contains("PRIMARY KEY (community_id, dispatch_id, lease_generation)"));
+        assert!(source.contains("UNIQUE (community_id, occurrence_id, task_id)"));
+        assert!(source.contains("cancellation_generation BIGINT NOT NULL"));
+        assert!(source.contains("command_kind IN ('cancel_dispatch','deliver_reminder')"));
+        assert!(source.contains("handoff_manifest_reference ~ '^analyst360:sha256:"));
         assert!(!source.contains("provider_api_key"));
         assert!(!source.contains("raw_prompt"));
     }

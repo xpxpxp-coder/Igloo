@@ -9395,6 +9395,7 @@ dependencies = [
 name = "snowman-meeting-media-gateway"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chrono",
  "hex",
  "serde",
@@ -9402,6 +9403,7 @@ dependencies = [
  "sha2 0.11.0",
  "snowman-meeting-control",
  "thiserror 2.0.18",
+ "url",
  "uuid",
 ]
 

@@ -19,6 +19,9 @@ use snowman_meeting_control::{
 };
 use uuid::Uuid;
 
+/// Executable, transport-injected provider adapters for governed live media.
+pub mod adapters;
+
 /// Contract schema for a join command.
 pub const JOIN_SCHEMA: &str = "snowman.meeting-media.join.v1";
 /// Contract schema for a leave/cancel command.
@@ -415,6 +418,37 @@ impl MediaSession {
         self.provider_session_ids_sha256
             .get(&provider)
             .map(String::as_str)
+    }
+
+    /// Release a short-lived provider adapter lease from the current fenced
+    /// session. The lease contains no raw conference coordinate or credential.
+    pub fn adapter_lease(
+        &self,
+        provider: Provider,
+        now: DateTime<Utc>,
+    ) -> Result<adapters::AdapterLease, Error> {
+        if !matches!(self.status, SessionStatus::Joining | SessionStatus::Active)
+            || now >= self.deadline
+            || !self.grant.required_providers().contains(&provider)
+        {
+            return Err(Error::InvalidTransition);
+        }
+        Ok(adapters::AdapterLease {
+            tenant_id: self.grant.tenant_id,
+            workspace_id: self.grant.workspace_id,
+            meeting_id: self.grant.meeting_id,
+            session_id: self.grant.session_id,
+            session_generation: self.grant.session_generation,
+            provider,
+            provider_binding_sha256: self.provider_binding_sha256.clone(),
+            conference_approval_sha256: self.grant.conference_approval_sha256.clone(),
+            sealed_coordinate_ref: self.grant.sealed_coordinate_ref.clone(),
+            deadline: self.deadline,
+            lease_expires_at: self.deadline.min(now + Duration::seconds(15)),
+            remaining_cost_microusd: self
+                .cost_ceiling_microusd
+                .saturating_sub(self.spent_microusd),
+        })
     }
 }
 
