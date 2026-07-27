@@ -4,7 +4,7 @@ out=$(mktemp); production_out=$(mktemp)
 trap 'rm -f "$out" "$production_out"' EXIT
 
 # Defaults must lint and render without parameter injection.
-helm lint deploy/charts/buzz-push-gateway >/dev/null
+helm lint deploy/charts/buzz-push-gateway
 helm template push deploy/charts/buzz-push-gateway >"$out"
 # Production values must attach push.snowmanai.org to an explicit Gateway.
 production_args=(
@@ -15,7 +15,7 @@ production_args=(
   --set 'httpRoute.parentRefs[0].namespace=gateway-system'
   --set 'networkPolicy.postgresEgressCidrs[0]=10.42.0.0/16'
 )
-helm lint deploy/charts/buzz-push-gateway "${production_args[@]}" >/dev/null
+helm lint deploy/charts/buzz-push-gateway "${production_args[@]}"
 helm template push deploy/charts/buzz-push-gateway "${production_args[@]}" >"$production_out"
 
 python3 - "$out" "$production_out" <<'PY'
