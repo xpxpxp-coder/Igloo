@@ -141,6 +141,24 @@ resource "aws_security_group" "worker" {
   vpc_id      = aws_vpc.command_center.id
 }
 
+resource "aws_security_group" "agent_executor" {
+  name        = "${local.workload_name}-agent-executor"
+  description = "One-shot Snowman ACP sandboxes with private, deny-by-default egress"
+  vpc_id      = aws_vpc.command_center.id
+}
+
+resource "aws_security_group" "agent_endpoints" {
+  name        = "${local.workload_name}-agent-endpoints"
+  description = "Only ECR image-pull and CloudWatch log endpoints for agent sandboxes"
+  vpc_id      = aws_vpc.command_center.id
+}
+
+resource "aws_security_group" "agent_broker" {
+  name        = "${local.workload_name}-agent-broker"
+  description = "Purpose-specific broker for one-shot Snowman agent jobs"
+  vpc_id      = aws_vpc.command_center.id
+}
+
 resource "aws_security_group" "scheduler" {
   name        = "${local.workload_name}-scheduler"
   description = "Deadline and lease maintenance only; no Analyst or model route"
@@ -307,6 +325,42 @@ resource "aws_vpc_security_group_egress_rule" "worker_to_model_gateway" {
   ip_protocol                  = "tcp"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "model_gateway_from_agent_executor" {
+  security_group_id            = aws_security_group.model_gateway.id
+  referenced_security_group_id = aws_security_group.agent_executor.id
+  from_port                    = 8443
+  to_port                      = 8443
+  ip_protocol                  = "tcp"
+  description                  = "Private model inference from one-shot ACP sandboxes"
+}
+
+resource "aws_vpc_security_group_egress_rule" "agent_executor_to_model_gateway" {
+  security_group_id            = aws_security_group.agent_executor.id
+  referenced_security_group_id = aws_security_group.model_gateway.id
+  from_port                    = 8443
+  to_port                      = 8443
+  ip_protocol                  = "tcp"
+  description                  = "No direct model-provider route"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "agent_broker_from_executor" {
+  security_group_id            = aws_security_group.agent_broker.id
+  referenced_security_group_id = aws_security_group.agent_executor.id
+  from_port                    = 8444
+  to_port                      = 8444
+  ip_protocol                  = "tcp"
+  description                  = "Purpose-bound job context, action, and result API only"
+}
+
+resource "aws_vpc_security_group_egress_rule" "agent_executor_to_broker" {
+  security_group_id            = aws_security_group.agent_executor.id
+  referenced_security_group_id = aws_security_group.agent_broker.id
+  from_port                    = 8444
+  to_port                      = 8444
+  ip_protocol                  = "tcp"
+  description                  = "No direct relay, Analyst, artifact-store, or connector route"
+}
+
 resource "aws_vpc_security_group_ingress_rule" "inference_from_model_gateway" {
   security_group_id            = aws_security_group.inference.id
   referenced_security_group_id = aws_security_group.model_gateway.id
@@ -389,6 +443,24 @@ resource "aws_vpc_security_group_ingress_rule" "endpoints_from_services" {
   ip_protocol                  = "tcp"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "agent_endpoints_from_executor" {
+  security_group_id            = aws_security_group.agent_endpoints.id
+  referenced_security_group_id = aws_security_group.agent_executor.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "ECS-managed image pull and log delivery only"
+}
+
+resource "aws_vpc_security_group_egress_rule" "agent_executor_to_agent_endpoints" {
+  security_group_id            = aws_security_group.agent_executor.id
+  referenced_security_group_id = aws_security_group.agent_endpoints.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "ECS-managed image pull and log delivery only"
+}
+
 resource "aws_vpc_security_group_egress_rule" "services_to_endpoints" {
   for_each = {
     relay         = aws_security_group.relay.id
@@ -443,6 +515,24 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_tcp" {
   ip_protocol       = "tcp"
 }
 
+resource "aws_vpc_security_group_egress_rule" "agent_executor_to_dns_udp" {
+  security_group_id = aws_security_group.agent_executor.id
+  cidr_ipv4         = var.vpc_cidr
+  from_port         = 53
+  to_port           = 53
+  ip_protocol       = "udp"
+  description       = "VPC resolver only"
+}
+
+resource "aws_vpc_security_group_egress_rule" "agent_executor_to_dns_tcp" {
+  security_group_id = aws_security_group.agent_executor.id
+  cidr_ipv4         = var.vpc_cidr
+  from_port         = 53
+  to_port           = 53
+  ip_protocol       = "tcp"
+  description       = "VPC resolver only"
+}
+
 resource "aws_vpc_endpoint" "interface" {
   for_each = local.interface_endpoint_services
 
@@ -455,7 +545,10 @@ resource "aws_vpc_endpoint" "interface" {
     0,
     var.environment == "production" ? 3 : 1,
   )
-  security_group_ids = [aws_security_group.endpoints.id]
+  security_group_ids = contains(["ecr.api", "ecr.dkr", "logs"], each.value) ? [
+    aws_security_group.endpoints.id,
+    aws_security_group.agent_endpoints.id,
+  ] : [aws_security_group.endpoints.id]
 
   tags = { Name = "${local.workload_name}-${replace(each.value, ".", "-")}" }
 }

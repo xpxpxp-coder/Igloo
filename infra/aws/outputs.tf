@@ -51,6 +51,8 @@ output "network_posture" {
     edge_security_group              = aws_security_group.edge.id
     relay_security_group             = aws_security_group.relay.id
     worker_security_group            = aws_security_group.worker.id
+    agent_executor_security_group    = aws_security_group.agent_executor.id
+    agent_broker_security_group      = aws_security_group.agent_broker.id
     scheduler_security_group         = aws_security_group.scheduler.id
     trigger_security_group           = aws_security_group.trigger.id
     reminder_security_group          = aws_security_group.reminder.id
@@ -114,6 +116,10 @@ output "dormant_compute_posture" {
     relay_execution_role_arn      = aws_iam_role.relay_execution.arn
     relay_task_role_arn           = aws_iam_role.relay_task.arn
     relay_runtime_secret_arn      = aws_secretsmanager_secret.relay_runtime.arn
-    activated_service_count       = 0
+    agent_runtime_task_definitions = {
+      for name, task in aws_ecs_task_definition.agent_executor : name => task.arn
+    }
+    agent_runtime_profile_count = length(var.agent_runtime_profiles)
+    activated_service_count     = 0
   }
 }

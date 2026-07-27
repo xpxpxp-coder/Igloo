@@ -76,6 +76,11 @@ the highest risks without changing the production-readiness verdict:
 - ACP agent children no longer inherit relay signing/owner credentials, cloud
   or direct model-provider secrets; MCP receives only the relay address, and
   Codex tool network access is forced off after persona/parent config merging;
+- dormant one-shot Fargate agent task definitions now require digest-pinned
+  Snowman runtime images plus SBOM/provenance/evaluation evidence, omit the ECS
+  task role entirely, expose only bounded scratch mounts, and use a dedicated
+  security group that can reach only the future private broker, model gateway,
+  VPC DNS, and isolated ECR/log endpoints; no agent service is created;
 - definition-time rejection of unimplemented workflow actions and unsafe
   webhook destinations/credential headers; and
 - a default-off Analyst lifecycle-event ingress with host-derived community
@@ -106,7 +111,8 @@ the highest risks without changing the production-readiness verdict:
 These are implementation foundations, not staged proof. OIDC assertion exchange,
 private integration routing, live database/bootstrap evidence, recurring
 partition rotation and authenticated-edge bypass tests,
-proactive execution, the agent sandbox, KMS audit checkpoints, staged
+proactive execution, the executor binary/action broker and live sandbox proof,
+KMS audit checkpoints, staged
 recovery/load/isolation exercises, comprehensive branding, accessibility, UAT,
 and launch evidence remain open gates.
 

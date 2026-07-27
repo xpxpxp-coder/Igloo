@@ -100,6 +100,7 @@ const runtimeAuthorityFiles = [
   "infra/aws/edge.tf",
   "infra/aws/data_plane.tf",
   "infra/aws/compute.tf",
+  "infra/aws/agent_executor.tf",
   "infra/aws/operations.tf",
   "infra/aws/outputs.tf",
 ];
@@ -345,6 +346,37 @@ requireFragment(
   "readonlyRootFilesystem = true",
   "the dormant relay task must use a read-only root filesystem",
 );
+requireFragment(
+  "infra/aws/agent_executor.tf",
+  'entryPoint             = ["/usr/local/bin/snowman-agent-executor"]',
+  "one-shot agent tasks must use the governed Snowman executor entry point",
+);
+requireFragment(
+  "infra/aws/agent_executor.tf",
+  "SNOWMAN_AGENT_REQUIRE_BROKERED_JOB_TOKEN",
+  "agent tasks must require a purpose-bound broker credential",
+);
+requireFragment(
+  "infra/aws/agent_executor.tf",
+  'capabilities       = { drop = ["ALL"] }',
+  "agent tasks must drop every Linux capability",
+);
+const agentExecutorTerraform = read("infra/aws/agent_executor.tf");
+if (/^\s*task_role_arn\s*=/m.test(agentExecutorTerraform)) {
+  failures.push(
+    "infra/aws/agent_executor.tf: untrusted agent tasks must not receive an ECS task role",
+  );
+}
+if (/resource\s+"aws_ecs_service"/m.test(agentExecutorTerraform)) {
+  failures.push(
+    "infra/aws/agent_executor.tf: agent execution must remain one-shot instead of an ambient service",
+  );
+}
+if (/BUZZ_PRIVATE_KEY|SNOWMAN_ANALYST_|api\.openai\.com|anthropic\.com/i.test(agentExecutorTerraform)) {
+  failures.push(
+    "infra/aws/agent_executor.tf: agent tasks contain a relay, Analyst, or direct provider authority",
+  );
+}
 requireFragment(
   "infra/aws/edge.tf",
   'mode            = "verify"',

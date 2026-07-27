@@ -37,6 +37,19 @@ class AwsPreflightContractTests(unittest.TestCase):
         self.assertNotIn(":main", source)
         self.assertNotIn("ghcr.io/block", source)
 
+    def test_agent_runtime_contract_is_digest_and_evidence_pinned(self) -> None:
+        source = (ROOT / "variables.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'variable "agent_runtime_profiles"',
+            'snowman-agent-runtime-',
+            '@sha256:',
+            'sbom_sha256',
+            'provenance_sha256',
+            'evaluation_evidence_sha256',
+            'contains(["ARM64", "X86_64"], profile.cpu_architecture)',
+        ):
+            self.assertIn(fragment, source)
+
 
 if __name__ == "__main__":
     unittest.main()

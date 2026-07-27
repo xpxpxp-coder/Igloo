@@ -72,6 +72,68 @@ variable "worker_desired_count" {
   }
 }
 
+variable "agent_runtime_profiles" {
+  description = "Digest-pinned Snowman ACP runtime images eligible for one-shot agent sandbox tasks. Defining a profile creates no running compute."
+  type = map(object({
+    image                      = string
+    runtime_id                 = string
+    cpu_architecture           = string
+    cpu                        = number
+    memory                     = number
+    ephemeral_storage_gib      = number
+    max_task_seconds           = number
+    sbom_sha256                = string
+    provenance_sha256          = string
+    evaluation_evidence_sha256 = string
+  }))
+  default = {}
+  validation {
+    condition = alltrue([
+      for name, profile in var.agent_runtime_profiles :
+      can(regex("^[a-z][a-z0-9-]{2,31}$", name)) &&
+      can(regex("^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/snowman-agent-runtime-[a-z0-9-]+@sha256:[0-9a-f]{64}$", profile.image)) &&
+      can(regex("^[a-z][a-z0-9-]{2,63}$", profile.runtime_id)) &&
+      contains(["ARM64", "X86_64"], profile.cpu_architecture) &&
+      contains([256, 512, 1024, 2048, 4096, 8192, 16384], profile.cpu) &&
+      (
+        (profile.cpu == 256 && contains([512, 1024, 2048], profile.memory)) ||
+        (profile.cpu == 512 && profile.memory >= 1024 && profile.memory <= 4096 && profile.memory % 1024 == 0) ||
+        (profile.cpu == 1024 && profile.memory >= 2048 && profile.memory <= 8192 && profile.memory % 1024 == 0) ||
+        (profile.cpu == 2048 && profile.memory >= 4096 && profile.memory <= 16384 && profile.memory % 1024 == 0) ||
+        (profile.cpu == 4096 && profile.memory >= 8192 && profile.memory <= 30720 && profile.memory % 1024 == 0) ||
+        (profile.cpu == 8192 && profile.memory >= 16384 && profile.memory <= 61440 && profile.memory % 4096 == 0) ||
+        (profile.cpu == 16384 && profile.memory >= 32768 && profile.memory <= 122880 && profile.memory % 8192 == 0)
+      ) &&
+      profile.ephemeral_storage_gib >= 21 && profile.ephemeral_storage_gib <= 200 &&
+      profile.max_task_seconds >= 60 && profile.max_task_seconds <= 14400 &&
+      can(regex("^[0-9a-f]{64}$", profile.sbom_sha256)) &&
+      can(regex("^[0-9a-f]{64}$", profile.provenance_sha256)) &&
+      can(regex("^[0-9a-f]{64}$", profile.evaluation_evidence_sha256))
+    ])
+    error_message = "Every agent runtime profile must be a bounded, digest-pinned Snowman ECR image with immutable supply-chain and evaluation evidence."
+  }
+}
+
+variable "agent_broker_url" {
+  type        = string
+  description = "Private Snowman action-broker origin used by one-shot agent sandboxes."
+  default     = ""
+  validation {
+    condition     = var.agent_broker_url == "" || (var.agent_broker_url == lower(var.agent_broker_url) && can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?(/[^?#]*)?$", var.agent_broker_url)))
+    error_message = "agent_broker_url must be empty or an exact lower-case Snowman HTTPS URL."
+  }
+}
+
+variable "agent_model_gateway_url" {
+  type        = string
+  description = "Private Snowman model-gateway origin used by one-shot agent sandboxes."
+  default     = ""
+  validation {
+    condition     = var.agent_model_gateway_url == "" || (var.agent_model_gateway_url == lower(var.agent_model_gateway_url) && can(regex("^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?(/[^?#]*)?$", var.agent_model_gateway_url)))
+    error_message = "agent_model_gateway_url must be empty or an exact lower-case Snowman HTTPS URL."
+  }
+}
+
 variable "scheduler_desired_count" {
   type        = number
   description = "Desired dedicated workforce maintenance scheduler tasks."

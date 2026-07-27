@@ -63,6 +63,10 @@ mock_provider "aws" {
     target = data.aws_iam_policy_document.workforce_reminder_execution
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
+  override_data {
+    target = data.aws_iam_policy_document.agent_executor_execution
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
 }
 
 variables {
@@ -226,6 +230,42 @@ run "explicit_authenticated_edge" {
   assert {
     condition     = length(aws_wafv2_web_acl_association.edge) == 1
     error_message = "The edge ALB must have exactly one WAF association."
+  }
+}
+
+run "credentialless_one_shot_agent_executor" {
+  command = plan
+
+  variables {
+    agent_broker_url        = "https://agents.staging.internal.snowmanai.org:443/v1"
+    agent_model_gateway_url = "https://models.staging.internal.snowmanai.org:443/v1"
+    agent_runtime_profiles = {
+      native-acp = {
+        image                      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/snowman-agent-runtime-native@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        runtime_id                 = "snowman-acp"
+        cpu_architecture           = "ARM64"
+        cpu                        = 1024
+        memory                     = 4096
+        ephemeral_storage_gib      = 30
+        max_task_seconds           = 3600
+        sbom_sha256                = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        provenance_sha256          = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        evaluation_evidence_sha256 = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    }
+  }
+
+  assert {
+    condition     = length(aws_ecs_task_definition.agent_executor) == 1
+    error_message = "An evaluated profile must create exactly one dormant task definition."
+  }
+  assert {
+    condition     = aws_ecs_task_definition.agent_executor["native-acp"].task_role_arn == null
+    error_message = "The untrusted agent process must not receive an ECS task role."
+  }
+  assert {
+    condition     = aws_ecs_task_definition.agent_executor["native-acp"].cpu == "1024" && aws_ecs_task_definition.agent_executor["native-acp"].memory == "4096"
+    error_message = "The evaluated runtime profile must preserve its resource ceiling."
   }
 }
 

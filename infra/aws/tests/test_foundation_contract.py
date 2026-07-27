@@ -194,6 +194,42 @@ class AwsFoundationContractTests(unittest.TestCase):
         self.assertNotIn('"kms:*"', source)
         self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
 
+    def test_agent_executor_is_one_shot_credentialless_and_private(self) -> None:
+        source = (ROOT / "agent_executor.tf").read_text(encoding="utf-8")
+        variables = (ROOT / "variables.tf").read_text(encoding="utf-8")
+        network = (ROOT / "network.tf").read_text(encoding="utf-8")
+        outputs = (ROOT / "outputs.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'for_each = var.agent_runtime_profiles',
+            'image                  = each.value.image',
+            'entryPoint             = ["/usr/local/bin/snowman-agent-executor"]',
+            'readonlyRootFilesystem = true',
+            'privileged             = false',
+            'capabilities       = { drop = ["ALL"] }',
+            'sourceVolume = "workspace", containerPath = "/workspace"',
+            'sourceVolume = "tmp", containerPath = "/tmp"',
+            'SNOWMAN_AGENT_REQUIRE_BROKERED_JOB_TOKEN',
+            'SNOWMAN_AGENT_DISABLE_SELF_UPDATE',
+            'snowman-agent-runtime-',
+            'sbom_sha256',
+            'provenance_sha256',
+            'evaluation_evidence_sha256',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, source + variables)
+        self.assertNotRegex(source, r"(?m)^\s*task_role_arn\s*=")
+        self.assertNotIn('resource "aws_ecs_service"', source)
+        self.assertNotIn('resource "aws_secretsmanager_secret"', source)
+        self.assertNotIn('BUZZ_PRIVATE_KEY', source)
+        self.assertNotIn('SNOWMAN_ANALYST', source)
+        self.assertIn('resource "aws_security_group" "agent_executor"', network)
+        self.assertIn('resource "aws_security_group" "agent_broker"', network)
+        self.assertIn('resource "aws_security_group" "agent_endpoints"', network)
+        self.assertIn('description                  = "No direct relay, Analyst, artifact-store, or connector route"', network)
+        self.assertIn('["ecr.api", "ecr.dkr", "logs"]', network)
+        self.assertIn('agent_runtime_task_definitions', outputs)
+        self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
+
     def test_runtime_image_contains_every_workforce_entrypoint(self) -> None:
         source = (ROOT.parent.parent / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("-p snowman-workforce-worker --bins", source)
