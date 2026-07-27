@@ -100,7 +100,9 @@ one-time authenticated-request evidence, derives a recoverable job-bound token
 using KMS HMAC without storing its plaintext, and launches exactly one pinned
 Fargate task with a deterministic ECS client token. Its production ECS call
 sets private subnets, one executor security group, public IP disabled, ECS Exec
-disabled, and only tenant ID, job ID, and job token container overrides. The
+disabled, and only tenant ID, job ID, and broker token container overrides. A
+separately MACed model grant is issued but deliberately not passed in an ECS
+override; secure bootstrap and the executor-local proxy remain gates. The
 token is not reused as a model credential.
 
 This is not yet an executable production sandbox because service deployment,
@@ -115,7 +117,8 @@ requires:
 - due-launch and running-task reconciliation with cancellation/expiry/token
   revocation, plus exact coordinator task-role/`iam:PassRole` restrictions;
 - a broker-authenticated model-gateway path for agent principals;
-- a short-lived model-gateway credential that is distinct from the job token
+- the executor-local model proxy and gateway live-state/spend enforcement for
+  the now-issued short-lived model grant, which is distinct from the broker token
   and cannot reach a direct model provider;
 - sandbox cancellation, timeout, process-tree, scratch-destruction, log
   redaction, prompt-injection, credential-exfiltration, DNS, redirect, and

@@ -203,6 +203,12 @@ data "aws_iam_policy_document" "model_gateway_task" {
       resources = sort(distinct([for policy in values(var.model_gateway_principals) : policy.key_id]))
     }
   }
+  statement {
+    sid       = "VerifyAgentModelGrants"
+    effect    = "Allow"
+    actions   = ["kms:VerifyMac"]
+    resources = [aws_kms_key.agent_job_token.arn]
+  }
   dynamic "statement" {
     for_each = length([
       for route in values(var.model_gateway_routes) : route
@@ -275,6 +281,7 @@ resource "aws_ecs_task_definition" "model_gateway" {
       { name = "SNOWMAN_MODEL_GATEWAY_REDIS_URL", value = "rediss://${aws_elasticache_replication_group.valkey.primary_endpoint_address}:${aws_elasticache_replication_group.valkey.port}" },
       { name = "SNOWMAN_MODEL_GATEWAY_ROUTES_JSON", value = jsonencode(local.model_gateway_route_contract) },
       { name = "SNOWMAN_MODEL_GATEWAY_TIMEOUT_SECONDS", value = "60" },
+      { name = "SNOWMAN_MODEL_GATEWAY_AGENT_GRANT_KEY_ARN", value = aws_kms_key.agent_job_token.arn },
       { name = "SNOWMAN_MODEL_GATEWAY_VALKEY_CACHE_NAME", value = aws_elasticache_replication_group.valkey.replication_group_id },
       { name = "SNOWMAN_MODEL_GATEWAY_VALKEY_IAM_USER_ID", value = aws_elasticache_user.model_gateway.user_id },
     ]

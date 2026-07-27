@@ -9072,6 +9072,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "snowman-agent-contract",
  "snowman-aws-auth",
  "thiserror 2.0.18",
  "tokio",

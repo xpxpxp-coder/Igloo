@@ -337,6 +337,36 @@ requireFragment(
   "recoverable one-job credentials must derive from the exact KMS HMAC key",
 );
 requireFragment(
+  "crates/snowman-agent-contract/src/lib.rs",
+  "snowman.agent.model-grant.v1",
+  "agent model authority must use a versioned contract distinct from the broker token",
+);
+requireFragment(
+  "migrations/0045_snowman_agent_model_grants.sql",
+  "model_token_sha256",
+  "only the digest of an agent model credential may be durable",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "MODEL_TOKEN_DOMAIN",
+  "model credentials must be domain-separated from broker credentials",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  '"SNOWMAN_AGENT_MODEL_TOKEN"',
+  "the untrusted ACP child must not inherit the model bearer grant directly",
+);
+requireFragment(
+  "crates/snowman-model-gateway/src/lib.rs",
+  ".verify_mac()",
+  "the model gateway must authenticate coordinator grants through KMS",
+);
+requireFragment(
+  "infra/aws/model_gateway.tf",
+  '["kms:VerifyMac"]',
+  "the model gateway role must receive only exact model-grant verification authority",
+);
+requireFragment(
   "migrations/0044_snowman_agent_launches.sql",
   "PRIMARY KEY (community_id, launch_id)",
   "agent launch evidence must lead with the tenant boundary",

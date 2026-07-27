@@ -37,7 +37,7 @@ capabilities, select a destination, or approve an action.
   definition, container, subnets, and security group. It is not a credential.
 - `RunTask` starts exactly one Fargate task, disables ECS Exec and public IPs,
   supplies no task/execution role override, and permits only tenant ID, job ID,
-  and job token container overrides.
+  and broker token container overrides.
 - Launch exhaustion and deadline expiry revoke the broker token. Deadline
   recovery revokes before replaying the idempotent ECS call to recover and stop
   any task whose ARN was lost during a crash.
@@ -46,8 +46,13 @@ capabilities, select a destination, or approve an action.
   state, deadline, and token revocation. It stops lost-authority tasks and
   records terminal ECS/broker state without retaining container diagnostics.
 
-The job token cannot authenticate to the model gateway. Model access requires a
-separate short-lived agent principal that is still an activation blocker.
+The broker token cannot authenticate to the model gateway. The coordinator now
+mints a separate KMS-HMAC model grant binding the exact tenant, job, task fence,
+model, specialist role, capabilities, minimization evidence, aggregate budgets,
+and deadline; only its SHA-256 digest is stored. The grant is not delivered to
+the task until a non-CloudTrail-bearing bootstrap path, the local model proxy,
+and the gateway's live job-state/spend checks are complete. The ACP environment
+denylist already treats the future grant as sensitive.
 
 ## AWS boundary
 
@@ -72,8 +77,9 @@ IAM authority. Its desired count is hard-zero in Terraform.
   coordinator receipts in the workforce event chain.
 - Wire terminal broker receipts into workforce completion, then complete
   purge/retention and externally checkpointed evidence.
-- Implement separate short-lived model-gateway agent credentials and
-  capability-specific action brokers; never reuse the job token.
+- Complete the executor-local model proxy plus gateway live job-state,
+  cancellation, aggregate-spend, and lost-response checks; never reuse the
+  broker token. Implement capability-specific action brokers separately.
 - Run Postgres integration, NIP-98 replay, cross-tenant, cancellation, crash,
   expiration, prompt-injection, exfiltration, DNS/egress, and cost tests in AWS.
 - Apply an exact reviewed Terraform plan only after workload identity and cost

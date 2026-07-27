@@ -38,6 +38,7 @@ const SENSITIVE_AGENT_ENV_KEYS: &[&str] = &[
     "SNOWMAN_AGENT_JOB_ID",
     "SNOWMAN_AGENT_TENANT_ID",
     "SNOWMAN_AGENT_JOB_TOKEN",
+    "SNOWMAN_AGENT_MODEL_TOKEN",
     "SNOWMAN_AGENT_BROKER_TOKEN",
     "SNOWMAN_AGENT_CONTEXT_TOKEN",
     "AWS_ACCESS_KEY_ID",
@@ -2172,6 +2173,7 @@ mod tests {
             "HTTPS_PROXY",
             "SSH_AUTH_SOCK",
             "SNOWMAN_AGENT_SHELL_CAPABILITY",
+            "SNOWMAN_AGENT_MODEL_TOKEN",
         ] {
             assert!(is_sensitive_agent_env(key), "missing denylist entry: {key}");
         }

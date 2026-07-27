@@ -127,6 +127,36 @@ evidence for a runtime, recovery, accessibility, or operational claim.
 - Webhooks enforce HTTPS, allowlisted destinations, DNS/IP revalidation, private
   address denial, bounded payloads/responses, brokered credentials, and evidence.
 
+### Live huddles and meeting agents
+
+- The meeting agent joins as a visibly and audibly disclosed tenant-bound
+  service identity; transcription, recording, and external processing have
+  distinct, durable consent evidence, including late-join disclosure.
+- Native huddle media uses the existing fenced room ownership and authenticated
+  audio path. Cross-pod failover, reconnect, backpressure, mute, interruption,
+  revocation, and hangup tests prove that stale agents cannot hear or speak.
+- Phone participation accepts or dials only an approved meeting object with
+  bounded E.164/SIP destination, caller ID, DTMF sequence, window, duration,
+  classification, and cost. A model cannot select or alter those coordinates.
+- Raw audio is not retained by default. Any retained transcript remains under
+  Analyst 360 evidence authority; Command Center receives only bounded summaries,
+  decisions, action items, citations, and immutable artifact references.
+- Live speech is treated as untrusted and potentially PII-bearing. Aptive and
+  restricted meetings use the Snowman/AWS route unless an explicit workspace
+  processor policy and all consent/retention/region controls authorize another
+  route; pre-meeting trust does not bypass this gate.
+- Realtime tools can propose action items, clarify owners, record decisions, and
+  request specialist work only. Every accepted action becomes an idempotent,
+  capability-scoped workforce event; external or high-impact work still requires
+  the existing approval path.
+- Twilio, OpenAI, and ElevenLabs credentials remain in purpose-specific Snowman
+  gateways. DNS/WebSocket/SIP capture proves no client, relay, or specialist
+  runtime can reach them directly or any unregistered provider.
+- Staged tests cover speaker attribution, interruption, action-item accuracy,
+  false commitments, spoken prompt injection, sensitive-data leakage, duplicate
+  webhooks/calls, provider outage, spend exhaustion, accessibility, and complete
+  post-meeting thread/work-product handoff.
+
 ### Tenant isolation
 
 - Adversarial two-tenant tests cover WebSocket AUTH/EVENT/REQ/COUNT, HTTP bridge,

@@ -19,7 +19,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use snowman_agent_broker::{issue_job_in_transaction, IssueError, IssueJob};
-use snowman_agent_contract::JobSnapshot;
+use snowman_agent_contract::{JobSnapshot, ModelGrantClaims, MODEL_GRANT_SCHEMA};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -30,6 +30,7 @@ pub mod service;
 /// Coordinator contract version.
 pub const COORDINATOR_SCHEMA: &str = "snowman.agent.coordinator.v1";
 const TOKEN_DOMAIN: &[u8] = b"snowman.agent.job-token.v1\0";
+const MODEL_TOKEN_DOMAIN: &[u8] = b"snowman.agent.model-token.v1\0";
 const CLIENT_TOKEN_DOMAIN: &[u8] = b"snowman.agent.ecs-client-token.v1\0";
 const MAX_LAUNCH_ATTEMPTS: i32 = 20;
 
@@ -41,7 +42,7 @@ pub struct RuntimeProfile {
     pub runtime_id: String,
     /// Fully qualified, revision-pinned ECS task definition ARN.
     pub task_definition_arn: String,
-    /// Exact container receiving the three purpose-bound job coordinates.
+    /// Exact container receiving only the purpose-bound broker coordinates.
     pub container_name: String,
 }
 
@@ -232,6 +233,12 @@ pub trait TokenDeriver: Send + Sync {
         &self,
         coordinates: &JobCoordinates,
     ) -> Result<Zeroizing<String>, CoordinatorError>;
+
+    /// Return a separate, domain-bound model grant for the exact snapshot.
+    async fn derive_model_grant(
+        &self,
+        snapshot: &JobSnapshot,
+    ) -> Result<Zeroizing<String>, CoordinatorError>;
 }
 
 /// AWS KMS HMAC-backed token derivation.
@@ -277,12 +284,44 @@ impl TokenDeriver for KmsTokenDeriver {
             URL_SAFE_NO_PAD.encode(mac.as_ref())
         )))
     }
+
+    async fn derive_model_grant(
+        &self,
+        snapshot: &JobSnapshot,
+    ) -> Result<Zeroizing<String>, CoordinatorError> {
+        let claims = model_grant_claims(snapshot)?;
+        let payload = serde_json::to_vec(&claims).map_err(|_| CoordinatorError::TokenDerivation)?;
+        if payload.is_empty() || payload.len() > 16 * 1024 {
+            return Err(CoordinatorError::TokenDerivation);
+        }
+        let mut message = Vec::with_capacity(MODEL_TOKEN_DOMAIN.len() + payload.len());
+        message.extend_from_slice(MODEL_TOKEN_DOMAIN);
+        message.extend_from_slice(&payload);
+        let output = self
+            .client
+            .generate_mac()
+            .key_id(&self.key_arn)
+            .mac_algorithm(MacAlgorithmSpec::HmacSha256)
+            .message(Blob::new(message))
+            .send()
+            .await
+            .map_err(|_| CoordinatorError::TokenDerivation)?;
+        let mac = output.mac().ok_or(CoordinatorError::TokenDerivation)?;
+        if mac.as_ref().len() != 32 {
+            return Err(CoordinatorError::TokenDerivation);
+        }
+        Ok(Zeroizing::new(format!(
+            "smg1_{}.{}",
+            URL_SAFE_NO_PAD.encode(payload),
+            URL_SAFE_NO_PAD.encode(mac.as_ref())
+        )))
+    }
 }
 
 /// Narrow ECS authority used by production and deterministic tests.
 #[async_trait]
 pub trait EcsControl: Send + Sync {
-    /// Start exactly one private task using only the three allowed overrides.
+    /// Start exactly one private task using only the three bootstrap coordinates.
     async fn run_task(
         &self,
         spec: &LaunchSpec,
@@ -487,6 +526,10 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
         };
         let spec = build_launch_spec(&self.config, profile, coordinates);
         let token = self.token_deriver.derive(&spec.coordinates).await?;
+        let model_token = self
+            .token_deriver
+            .derive_model_grant(&request.snapshot)
+            .await?;
         let mut transaction = self
             .pool
             .begin()
@@ -500,6 +543,13 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
                 snapshot: request.snapshot.clone(),
                 job_token: token.to_string(),
             },
+        )
+        .await?;
+        record_model_grant(
+            &mut transaction,
+            tenant_id,
+            request.snapshot.job_id,
+            &model_token,
         )
         .await?;
         persist_launch(&mut transaction, &spec, &request).await?;
@@ -520,7 +570,8 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
         let rows = sqlx::query(
             "SELECT l.community_id,l.job_id,l.task_id,l.generation,l.launch_attempt_count,\
              l.runtime_profile,l.ecs_cluster_arn,l.task_definition_arn,l.client_token_sha256,\
-             j.deadline_at FROM snowman_agent_launches l JOIN snowman_agent_jobs j \
+             j.deadline_at,j.snapshot_body,j.model_token_sha256 \
+             FROM snowman_agent_launches l JOIN snowman_agent_jobs j \
              ON j.community_id=l.community_id AND j.job_id=l.job_id \
              WHERE l.status IN ('pending','launching') AND l.reconcile_after<=NOW() \
              AND (l.claim_id IS NULL OR l.claim_expires_at<NOW()) \
@@ -553,6 +604,11 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
             let deadline_at: DateTime<Utc> = row
                 .try_get("deadline_at")
                 .map_err(|_| CoordinatorError::Database)?;
+            let snapshot_body: Vec<u8> = row
+                .try_get("snapshot_body")
+                .map_err(|_| CoordinatorError::Database)?;
+            let snapshot: JobSnapshot =
+                serde_json::from_slice(&snapshot_body).map_err(|_| CoordinatorError::Conflict)?;
             let generation = u32::try_from(generation).map_err(|_| CoordinatorError::Conflict)?;
             let profile = self
                 .config
@@ -566,6 +622,16 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
                 generation,
                 deadline_at,
             };
+            if snapshot.job_id != job_id
+                || snapshot.workspace_id != tenant_id
+                || snapshot.tenant_id != tenant_id.to_string()
+                || snapshot.task_id != task_id
+                || snapshot.generation != generation
+                || snapshot.deadline_at != deadline_at
+                || snapshot.runtime_id != runtime_id
+            {
+                return Err(CoordinatorError::Conflict);
+            }
             let spec = build_launch_spec(&self.config, profile, coordinates);
             verify_stored_launch_policy(&row, &spec)?;
             if attempts >= MAX_LAUNCH_ATTEMPTS {
@@ -574,6 +640,14 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
                 continue;
             }
             let token = self.token_deriver.derive(&spec.coordinates).await?;
+            let model_token = self.token_deriver.derive_model_grant(&snapshot).await?;
+            let stored_model_digest: Vec<u8> = row
+                .try_get("model_token_sha256")
+                .map_err(|_| CoordinatorError::Database)?;
+            let actual_model_digest: [u8; 32] = Sha256::digest(model_token.as_bytes()).into();
+            if stored_model_digest != actual_model_digest {
+                return Err(CoordinatorError::Conflict);
+            }
             if deadline_at <= Utc::now() + Duration::seconds(30) {
                 expire_unobserved_launch(&self.pool, &self.ecs, &spec, token.as_str()).await?;
                 reconciled += 1;
@@ -943,6 +1017,30 @@ async fn record_auth_event(
         .map_err(|_| CoordinatorError::Database)?;
     if digest != request.request_sha256 || pubkey != request.requester_pubkey {
         return Err(CoordinatorError::AuthenticationConflict);
+    }
+    Ok(())
+}
+
+async fn record_model_grant(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    job_id: Uuid,
+    model_token: &str,
+) -> Result<(), CoordinatorError> {
+    let digest: [u8; 32] = Sha256::digest(model_token.as_bytes()).into();
+    let updated = sqlx::query(
+        "UPDATE snowman_agent_jobs SET model_token_sha256=COALESCE(model_token_sha256,$3),\
+         updated_at=NOW() WHERE community_id=$1 AND job_id=$2 \
+         AND (model_token_sha256 IS NULL OR model_token_sha256=$3)",
+    )
+    .bind(tenant_id)
+    .bind(job_id)
+    .bind(digest.as_slice())
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| CoordinatorError::Database)?;
+    if updated.rows_affected() != 1 {
+        return Err(CoordinatorError::Conflict);
     }
     Ok(())
 }
@@ -1394,6 +1492,38 @@ fn valid_hmac_key_arn(value: &str) -> bool {
         && parts[5].len() > 4
 }
 
+fn model_grant_claims(snapshot: &JobSnapshot) -> Result<ModelGrantClaims, CoordinatorError> {
+    let tenant_id =
+        Uuid::parse_str(&snapshot.tenant_id).map_err(|_| CoordinatorError::InvalidRequest)?;
+    if tenant_id != snapshot.workspace_id
+        || !snapshot.data_policy.pii_prohibited
+        || snapshot.data_policy.minimization_evidence_sha256.len() != 64
+        || !snapshot
+            .data_policy
+            .minimization_evidence_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(CoordinatorError::InvalidRequest);
+    }
+    Ok(ModelGrantClaims {
+        schema_version: MODEL_GRANT_SCHEMA.into(),
+        tenant_id,
+        job_id: snapshot.job_id,
+        task_id: snapshot.task_id,
+        generation: snapshot.generation,
+        model_id: snapshot.model_id.clone(),
+        specialist_role: snapshot.specialist_role.clone(),
+        classification: snapshot.classification,
+        capability_grants: snapshot.capability_grants.clone(),
+        max_input_tokens: snapshot.max_input_tokens,
+        max_output_tokens: snapshot.max_output_tokens,
+        max_cost_microusd: snapshot.max_cost_microusd,
+        minimization_evidence_sha256: snapshot.data_policy.minimization_evidence_sha256.clone(),
+        expires_at: snapshot.deadline_at,
+    })
+}
+
 fn valid_stop_reason(value: &str) -> bool {
     (3..=255).contains(&value.len())
         && value
@@ -1448,6 +1578,34 @@ mod tests {
         }
     }
 
+    fn snapshot() -> JobSnapshot {
+        let coordinates = coordinates();
+        JobSnapshot {
+            schema_version: snowman_agent_contract::JOB_SNAPSHOT_SCHEMA.into(),
+            job_id: coordinates.job_id,
+            tenant_id: coordinates.tenant_id.to_string(),
+            workspace_id: coordinates.tenant_id,
+            request_id: Uuid::new_v4(),
+            task_id: coordinates.task_id,
+            generation: coordinates.generation,
+            runtime_id: "native-acp".into(),
+            model_id: "snowman-research-v1".into(),
+            specialist_role: "research_evidence".into(),
+            classification: snowman_agent_contract::Classification::Confidential,
+            data_policy: snowman_agent_contract::AgentDataPolicy {
+                pii_prohibited: true,
+                minimization_evidence_sha256: "ab".repeat(32),
+            },
+            system_prompt: "Follow governed policy.".into(),
+            prompt: "Prepare the bounded work product.".into(),
+            capability_grants: vec!["artifact.draft".into()],
+            max_input_tokens: 100_000,
+            max_output_tokens: 20_000,
+            max_cost_microusd: 50_000,
+            deadline_at: coordinates.deadline_at,
+        }
+    }
+
     #[test]
     fn launch_identity_is_deterministic_and_sensitive_to_the_fence() {
         let config = config();
@@ -1463,6 +1621,25 @@ mod tests {
             first.client_token,
             build_launch_spec(&config, profile, changed).client_token
         );
+    }
+
+    #[test]
+    fn model_grant_claims_bind_pii_evidence_model_budget_and_fence() {
+        let snapshot = snapshot();
+        let claims = model_grant_claims(&snapshot).unwrap();
+        assert_eq!(claims.schema_version, MODEL_GRANT_SCHEMA);
+        assert_eq!(claims.tenant_id, snapshot.workspace_id);
+        assert_eq!(claims.task_id, snapshot.task_id);
+        assert_eq!(claims.generation, snapshot.generation);
+        assert_eq!(claims.model_id, snapshot.model_id);
+        assert_eq!(claims.max_cost_microusd, snapshot.max_cost_microusd);
+        assert_eq!(
+            claims.minimization_evidence_sha256,
+            snapshot.data_policy.minimization_evidence_sha256
+        );
+        let mut rejected = snapshot;
+        rejected.data_policy.pii_prohibited = false;
+        assert!(model_grant_claims(&rejected).is_err());
     }
 
     #[test]

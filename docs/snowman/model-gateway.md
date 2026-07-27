@@ -4,6 +4,13 @@ Status: service, client contract, dormant AWS task boundary, private ingress
 substrate, and local tests are implemented; inference deployment and staged
 proof remain.
 
+The source also verifies the coordinator's domain-separated KMS-HMAC agent
+model-grant envelope and Terraform grants `kms:VerifyMac` on only that exact
+key. This verifier is deliberately not yet connected to an inference route:
+the route must first atomically recheck the stored token digest, live job state,
+deadline, cancellation, and aggregate spend. A cryptographically valid bearer
+grant alone is not sufficient authority.
+
 `snowman-model-gateway` is the only generative model boundary used by governed
 Analyst 360 execution. Command Center clients and workforce workers never receive
 a provider endpoint or credential and cannot call a model runtime directly.
@@ -63,6 +70,8 @@ is still a separate production gate.
   scale-from-zero operation without duplicate charges or artifacts.
 - Add response-receipt reconciliation to the Command Center spend ledger and a
   crash/retry test that proves a lost response cannot create untracked spend.
+- Connect the executor-local OpenAI-compatible proxy to the agent-grant verifier
+  only after the live database and cumulative-budget checks are implemented.
 - Add saturation, timeout, cancellation, malformed-backend, cross-tenant,
   direct-egress denial, failover, and recovery tests in dormant staging.
 - Export immutable route/catalog, image, KMS/IAM, network, test, and cost

@@ -8,11 +8,15 @@
 //! backend. It never accepts an endpoint, credential, or arbitrary tool from a
 //! caller and it does not persist prompts or model output.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use aws_sdk_kms::{
     primitives::Blob,
-    types::{MessageType, SigningAlgorithmSpec},
+    types::{MacAlgorithmSpec, MessageType, SigningAlgorithmSpec},
 };
 use axum::{
     body::Bytes,
@@ -29,6 +33,7 @@ use reqwest::{redirect::Policy, Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use snowman_agent_contract::{ModelGrantClaims, MODEL_GRANT_SCHEMA};
 use tower_http::limit::RequestBodyLimitLayer;
 use url::Url;
 
@@ -38,6 +43,7 @@ pub const GENERATION_PATH: &str = "/internal/snowman/v1/model-generations";
 pub const GENERATION_SCHEMA_VERSION: &str = "snowman.model-generation.v1";
 const ASSERTION_VERSION: &str = "snowman.service-request.v1";
 const OPERATION: &str = "models.generate";
+const MODEL_TOKEN_DOMAIN: &[u8] = b"snowman.agent.model-token.v1\0";
 const MAX_REQUEST_BYTES: usize = 256 * 1024;
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 const MAX_ASSERTION_AGE_SECONDS: i64 = 90;
@@ -109,6 +115,8 @@ pub struct Config {
     pub valkey_cache_name: String,
     /// AWS region shared by KMS and ElastiCache.
     pub aws_region: String,
+    /// Exact HMAC KMS key used only to verify coordinator-issued agent grants.
+    pub agent_grant_key_arn: String,
     /// Principal policies keyed by principal ID.
     pub principals: BTreeMap<String, PrincipalPolicy>,
     /// Model routes keyed by catalog model ID.
@@ -125,6 +133,109 @@ pub enum ConfigError {
     Invalid(&'static str),
 }
 
+/// Fail-closed model-grant verification failures. No token or client content
+/// is included in either the value or its display form.
+#[derive(Debug, thiserror::Error)]
+pub enum AgentModelGrantError {
+    /// The compact token or its claims violate the Snowman contract.
+    #[error("Snowman agent model grant is invalid")]
+    Invalid,
+    /// KMS could not validate the exact domain-separated MAC.
+    #[error("Snowman agent model grant authentication failed")]
+    Authentication,
+}
+
+/// Verify one coordinator-issued model grant with the exact HMAC KMS key.
+///
+/// This proves token integrity only. A caller must additionally recheck the
+/// token digest and live `issued`/`started` job state before inference so that
+/// cancellation, deadline expiry, and lease loss revoke model authority.
+pub async fn verify_agent_model_grant(
+    kms: &aws_sdk_kms::Client,
+    key_id: &str,
+    token: &str,
+) -> Result<ModelGrantClaims, AgentModelGrantError> {
+    if !valid_hmac_key_arn(key_id) {
+        return Err(AgentModelGrantError::Invalid);
+    }
+    let (payload, mac, claims) = decode_agent_model_grant(token)?;
+    let mut message = Vec::with_capacity(MODEL_TOKEN_DOMAIN.len() + payload.len());
+    message.extend_from_slice(MODEL_TOKEN_DOMAIN);
+    message.extend_from_slice(&payload);
+    let verified = kms
+        .verify_mac()
+        .key_id(key_id)
+        .mac_algorithm(MacAlgorithmSpec::HmacSha256)
+        .message(Blob::new(message))
+        .mac(Blob::new(mac))
+        .send()
+        .await
+        .map_err(|_| AgentModelGrantError::Authentication)?
+        .mac_valid();
+    if !verified {
+        return Err(AgentModelGrantError::Authentication);
+    }
+    Ok(claims)
+}
+
+fn decode_agent_model_grant(
+    token: &str,
+) -> Result<(Vec<u8>, Vec<u8>, ModelGrantClaims), AgentModelGrantError> {
+    if !(64..=32_768).contains(&token.len()) || !token.starts_with("smg1_") {
+        return Err(AgentModelGrantError::Invalid);
+    }
+    let (payload_text, mac_text) = token[5..]
+        .split_once('.')
+        .ok_or(AgentModelGrantError::Invalid)?;
+    if payload_text.contains('.') || mac_text.contains('.') {
+        return Err(AgentModelGrantError::Invalid);
+    }
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_text)
+        .map_err(|_| AgentModelGrantError::Invalid)?;
+    let mac = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(mac_text)
+        .map_err(|_| AgentModelGrantError::Invalid)?;
+    if payload.is_empty() || payload.len() > 16 * 1024 || mac.len() != 32 {
+        return Err(AgentModelGrantError::Invalid);
+    }
+    let claims: ModelGrantClaims =
+        serde_json::from_slice(&payload).map_err(|_| AgentModelGrantError::Invalid)?;
+    if serde_json::to_vec(&claims).map_err(|_| AgentModelGrantError::Invalid)? != payload
+        || !valid_model_grant_claims(&claims)
+    {
+        return Err(AgentModelGrantError::Invalid);
+    }
+    Ok((payload, mac, claims))
+}
+
+fn valid_model_grant_claims(claims: &ModelGrantClaims) -> bool {
+    let capabilities = claims.capability_grants.iter().collect::<BTreeSet<_>>();
+    claims.schema_version == MODEL_GRANT_SCHEMA
+        && !claims.tenant_id.is_nil()
+        && !claims.job_id.is_nil()
+        && !claims.task_id.is_nil()
+        && claims.generation > 0
+        && valid_identifier(&claims.model_id)
+        && !claims.model_id.contains("://")
+        && valid_identifier(&claims.specialist_role)
+        && !claims.capability_grants.is_empty()
+        && claims.capability_grants.len() <= 64
+        && capabilities.len() == claims.capability_grants.len()
+        && claims
+            .capability_grants
+            .iter()
+            .all(|value| valid_identifier(value))
+        && claims.max_input_tokens > 0
+        && claims.max_input_tokens <= 10_000_000
+        && claims.max_output_tokens > 0
+        && claims.max_output_tokens <= 1_000_000
+        && claims.max_cost_microusd <= 1_000_000_000
+        && is_sha256(&claims.minimization_evidence_sha256)
+        && claims.expires_at > Utc::now()
+        && claims.expires_at <= Utc::now() + chrono::Duration::hours(4)
+}
+
 impl Config {
     /// Load and fully validate the gateway configuration from the environment.
     pub fn from_env() -> Result<Self, ConfigError> {
@@ -138,6 +249,8 @@ impl Config {
             .map_err(|_| ConfigError::Invalid("Valkey cache name is required"))?;
         let aws_region = std::env::var("AWS_REGION")
             .map_err(|_| ConfigError::Invalid("AWS region is required"))?;
+        let agent_grant_key_arn = std::env::var("SNOWMAN_MODEL_GATEWAY_AGENT_GRANT_KEY_ARN")
+            .map_err(|_| ConfigError::Invalid("agent grant key is required"))?;
         let principals: Vec<PrincipalPolicy> = serde_json::from_str(
             &std::env::var("SNOWMAN_MODEL_GATEWAY_PRINCIPALS_JSON")
                 .map_err(|_| ConfigError::Invalid("principal policy is required"))?,
@@ -158,6 +271,8 @@ impl Config {
             || !valid_identifier(&valkey_iam_user_id)
             || !valid_identifier(&valkey_cache_name)
             || aws_region.is_empty()
+            || !valid_hmac_key_arn(&agent_grant_key_arn)
+            || agent_grant_key_arn.split(':').nth(3) != Some(aws_region.as_str())
         {
             return Err(ConfigError::Invalid("bind address or timeout is invalid"));
         }
@@ -189,6 +304,7 @@ impl Config {
             valkey_iam_user_id,
             valkey_cache_name,
             aws_region,
+            agent_grant_key_arn,
             principals: principal_map,
             routes: route_map,
             timeout: Duration::from_secs(timeout_seconds),
@@ -958,6 +1074,19 @@ fn valid_kms_key_arn(value: &str) -> bool {
         && parts[5].len() == 40
 }
 
+fn valid_hmac_key_arn(value: &str) -> bool {
+    let parts: Vec<_> = value.split(':').collect();
+    parts.len() == 6
+        && parts[0] == "arn"
+        && parts[1].starts_with("aws")
+        && parts[2] == "kms"
+        && !parts[3].is_empty()
+        && parts[4].len() == 12
+        && parts[4].chars().all(|character| character.is_ascii_digit())
+        && parts[5].starts_with("key/")
+        && parts[5].len() > 4
+}
+
 fn is_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -987,6 +1116,31 @@ fn token_cost(tokens: u64, rate: u64) -> Result<u64, GatewayError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn model_grant_token() -> String {
+        let claims = ModelGrantClaims {
+            schema_version: MODEL_GRANT_SCHEMA.into(),
+            tenant_id: "20000000-0000-4000-8000-000000000001".parse().unwrap(),
+            job_id: "20000000-0000-4000-8000-000000000002".parse().unwrap(),
+            task_id: "20000000-0000-4000-8000-000000000003".parse().unwrap(),
+            generation: 2,
+            model_id: "snowman-research-v1".into(),
+            specialist_role: "research_evidence".into(),
+            classification: snowman_agent_contract::Classification::Confidential,
+            capability_grants: vec!["artifact.draft".into()],
+            max_input_tokens: 100_000,
+            max_output_tokens: 20_000,
+            max_cost_microusd: 50_000,
+            minimization_evidence_sha256: "ab".repeat(32),
+            expires_at: Utc::now() + chrono::Duration::minutes(30),
+        };
+        let payload = serde_json::to_vec(&claims).unwrap();
+        format!(
+            "smg1_{}.{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload),
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7_u8; 32])
+        )
+    }
 
     fn route(origin: &str) -> ModelRoute {
         ModelRoute {
@@ -1026,6 +1180,20 @@ mod tests {
         assert!(validate_route(&sagemaker).is_ok());
         sagemaker.backend_origin = Some("https://api.openai.com".into());
         assert!(validate_route(&sagemaker).is_err());
+    }
+
+    #[test]
+    fn model_grant_is_canonical_bounded_and_scope_complete() {
+        let token = model_grant_token();
+        let (_, mac, claims) = decode_agent_model_grant(&token).unwrap();
+        assert_eq!(mac, vec![7_u8; 32]);
+        assert_eq!(claims.model_id, "snowman-research-v1");
+        assert_eq!(claims.capability_grants, ["artifact.draft"]);
+        assert!(decode_agent_model_grant(&format!("{token}.extra")).is_err());
+        assert!(!valid_hmac_key_arn("arn:aws:kms:us-west-2:other:key/key"));
+        assert!(valid_hmac_key_arn(
+            "arn:aws:kms:us-west-2:123456789012:key/00000000-0000-4000-8000-000000000001"
+        ));
     }
 
     #[test]

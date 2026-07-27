@@ -18,6 +18,8 @@ pub const JOB_STARTED_SCHEMA: &str = "snowman.agent.job.started.v1";
 pub const JOB_RESULT_SCHEMA: &str = "snowman.agent.job.result.v1";
 /// Broker acknowledgement schema returned to the executor.
 pub const BROKER_ACK_SCHEMA: &str = "snowman.agent.broker.ack.v1";
+/// Short-lived, KMS-MACed model grant carried only by one executor process.
+pub const MODEL_GRANT_SCHEMA: &str = "snowman.agent.model-grant.v1";
 
 /// Governed data class assigned before an agent receives a snapshot.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -83,6 +85,45 @@ pub struct JobSnapshot {
     pub max_cost_microusd: u64,
     /// Hard expiration for the job and its credential.
     pub deadline_at: DateTime<Utc>,
+}
+
+/// Non-secret claims authenticated by a domain-separated KMS HMAC.
+///
+/// The compact token carrying these claims is a bearer credential, but the
+/// claims themselves are safe authorization evidence. The model gateway must
+/// also recheck the live job row before every inference request so cancellation
+/// or lease loss revokes use before the token's deadline.
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ModelGrantClaims {
+    /// Exact schema version.
+    pub schema_version: String,
+    /// Tenant boundary.
+    pub tenant_id: Uuid,
+    /// Exact one-shot job.
+    pub job_id: Uuid,
+    /// Exact fenced workforce task.
+    pub task_id: Uuid,
+    /// Monotonic lease generation.
+    pub generation: u32,
+    /// Exact evaluated model catalog ID.
+    pub model_id: String,
+    /// Specialist role assigned by the governed team plan.
+    pub specialist_role: String,
+    /// Maximum data classification the model route may receive.
+    pub classification: Classification,
+    /// Exact model/tool capabilities usable during the job.
+    pub capability_grants: Vec<String>,
+    /// Maximum input tokens for the whole job.
+    pub max_input_tokens: u64,
+    /// Maximum output tokens for the whole job.
+    pub max_output_tokens: u64,
+    /// Maximum model spend for the whole job, in micro-USD.
+    pub max_cost_microusd: u64,
+    /// Evidence that the agent projection passed minimization/redaction.
+    pub minimization_evidence_sha256: String,
+    /// Hard expiration shared with the job authority.
+    pub expires_at: DateTime<Utc>,
 }
 
 /// Idempotent proof that the one-shot runtime began the exact snapshot.
@@ -173,5 +214,6 @@ mod tests {
             r#"{"schema_version":"snowman.agent.broker.ack.v1","accepted":true,"extra":1}"#
         )
         .is_err());
+        assert_eq!(MODEL_GRANT_SCHEMA, "snowman.agent.model-grant.v1");
     }
 }
