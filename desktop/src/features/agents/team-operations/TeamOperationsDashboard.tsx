@@ -405,7 +405,7 @@ function TaskPlan({ snapshot }: { snapshot: TeamOperationsSnapshot }) {
               <button
                 aria-current={selectedTaskId === task.id ? "step" : undefined}
                 className={cn(
-                  "relative flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-colors motion-reduce:transition-none",
+                  "relative flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-colors motion-reduce:duration-0 motion-reduce:transition-none",
                   selectedTaskId === task.id
                     ? "border-sky-500/40 bg-sky-500/8"
                     : "border-border/60 bg-background/60 hover:bg-muted/45",
@@ -569,6 +569,7 @@ function ApprovalQueue({
                 </p>
                 <div className="mt-3 flex gap-2">
                   <Button
+                    aria-label={`Approve ${approval.title}`}
                     disabled={!controls.approve || pendingAction !== null}
                     onClick={() => onApproval(approval, "approved")}
                     size="xs"
@@ -576,6 +577,7 @@ function ApprovalQueue({
                     Approve
                   </Button>
                   <Button
+                    aria-label={`Deny ${approval.title}`}
                     disabled={!controls.approve || pendingAction !== null}
                     onClick={() => onApproval(approval, "denied")}
                     size="xs"
@@ -798,7 +800,11 @@ export function TeamOperationsDashboard({
   onApproval,
 }: DashboardProps) {
   return (
-    <section aria-labelledby="team-operations-title" className="space-y-4">
+    <section
+      aria-labelledby="team-operations-title"
+      className="min-w-0 space-y-4"
+      data-testid="team-operations-dashboard"
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2
@@ -824,11 +830,7 @@ export function TeamOperationsDashboard({
       </div>
 
       {notice ? (
-        <p
-          aria-live="polite"
-          className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3 text-sm"
-          role="status"
-        >
+        <p className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3 text-sm">
           {notice}
         </p>
       ) : null}

@@ -18,6 +18,11 @@ import {
   type TeamOperationsAdapter,
   type TeamOperationsLoadResult,
 } from "./teamOperationsAdapter";
+import {
+  createTeamOperationsE2eAdapter,
+  isTeamOperationsE2eEnabled,
+  type TeamOperationsE2eConfig,
+} from "./teamOperationsE2eAdapter";
 import { teamOperationsFixture } from "./teamOperationsFixture";
 
 const TeamOperationsDashboard = React.lazy(async () => {
@@ -26,14 +31,27 @@ const TeamOperationsDashboard = React.lazy(async () => {
 });
 
 type TeamOperationsE2eWindow = Window & {
-  __BUZZ_E2E__?: { teamOperationsFixture?: boolean };
+  __BUZZ_E2E__?: TeamOperationsE2eConfig & {
+    teamOperationsFixture?: boolean;
+  };
 };
+
+const noTeamOperationsControls = {
+  activate: false,
+  approve: false,
+  cancel: false,
+  pause: false,
+  supersede: false,
+} as const;
 
 function createDefaultAdapter(
   tenantId: string | undefined,
   relayUrl: string | undefined,
 ): TeamOperationsAdapter {
   const e2e = (window as TeamOperationsE2eWindow).__BUZZ_E2E__;
+  if (isTeamOperationsE2eEnabled(import.meta.env.MODE, e2e)) {
+    return createTeamOperationsE2eAdapter(e2e.teamOperationsScenario);
+  }
   if (import.meta.env.MODE === "e2e" && e2e?.teamOperationsFixture === true) {
     return createFixtureTeamOperationsAdapter(teamOperationsFixture);
   }
@@ -65,6 +83,28 @@ function TeamOperationsLoading() {
         <Skeleton className="h-56 rounded-2xl" />
       </div>
     </section>
+  );
+}
+
+function OperationStatus({
+  notice,
+  pendingAction,
+}: {
+  notice: string | null;
+  pendingAction: string | null;
+}) {
+  return (
+    <p
+      aria-atomic="true"
+      aria-live="polite"
+      className="sr-only"
+      data-testid="team-operations-live-status"
+      role="status"
+    >
+      {pendingAction
+        ? `${pendingAction} in progress.`
+        : (notice ?? "Team operations are ready.")}
+    </p>
   );
 }
 
@@ -137,11 +177,29 @@ function GovernedRequestComposer({
     );
   const [deadline, setDeadline] = React.useState("");
   const [budget, setBudget] = React.useState("25");
+  const objectiveRef = React.useRef<HTMLTextAreaElement>(null);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+
+  React.useEffect(() => {
+    if (open) objectiveRef.current?.focus();
+  }, [open]);
+
+  const close = () => {
+    setOpen(false);
+    requestAnimationFrame(() => triggerRef.current?.focus());
+  };
 
   if (!open) {
     return (
       <div className="flex justify-end">
-        <Button disabled={disabled} onClick={() => setOpen(true)} size="sm">
+        <Button
+          aria-controls="governed-request-composer"
+          aria-expanded="false"
+          disabled={disabled}
+          onClick={() => setOpen(true)}
+          ref={triggerRef}
+          size="sm"
+        >
           Start a governed request
         </Button>
       </div>
@@ -151,7 +209,9 @@ function GovernedRequestComposer({
     <Card>
       <CardContent className="p-5">
         <form
+          aria-busy={disabled}
           className="grid gap-4 lg:grid-cols-2"
+          id="governed-request-composer"
           onSubmit={(event) => {
             event.preventDefault();
             const dollars = Number(budget);
@@ -176,6 +236,7 @@ function GovernedRequestComposer({
               maxLength={8000}
               onChange={(event) => setObjective(event.target.value)}
               placeholder="Describe the outcome without pasting raw client rows, mailbox content, or transcripts."
+              ref={objectiveRef}
               required
               value={objective}
             />
@@ -236,11 +297,7 @@ function GovernedRequestComposer({
             Context is attached later through immutable Analyst 360 references.
           </p>
           <div className="flex flex-wrap justify-end gap-2 lg:col-span-2">
-            <Button
-              onClick={() => setOpen(false)}
-              type="button"
-              variant="ghost"
-            >
+            <Button onClick={close} type="button" variant="ghost">
               Close
             </Button>
             <Button disabled={disabled} type="submit">
@@ -271,6 +328,11 @@ export function TeamOperationsPanel({
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
   const [pendingAction, setPendingAction] = React.useState<string | null>(null);
+  const errorRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (error) errorRef.current?.focus();
+  }, [error]);
 
   React.useEffect(() => {
     const controller = new AbortController();
@@ -313,7 +375,12 @@ export function TeamOperationsPanel({
                   snapshot: nextSnapshot,
                   controls: command.controls ?? current.controls,
                 }
-              : current,
+              : {
+                  kind: "ready",
+                  source: "live",
+                  snapshot: nextSnapshot,
+                  controls: command.controls ?? noTeamOperationsControls,
+                },
           );
         }
         setNotice(`${label} receipt: ${command.receipt.status}.`);
@@ -332,7 +399,13 @@ export function TeamOperationsPanel({
 
   if (error) {
     return (
-      <Card className="border-destructive/30" role="alert">
+      <Card
+        className="border-destructive/30 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        data-testid="team-operations-error"
+        ref={errorRef}
+        role="alert"
+        tabIndex={-1}
+      >
         <CardContent className="flex items-start gap-3 p-5 text-sm">
           <AlertTriangle
             aria-hidden="true"
@@ -356,7 +429,9 @@ export function TeamOperationsPanel({
       <section
         aria-labelledby="team-operations-empty-title"
         className="space-y-4"
+        data-testid="team-operations-empty"
       >
+        <OperationStatus notice={notice} pendingAction={pendingAction} />
         <Card>
           <CardContent className="p-5">
             <h2 className="font-semibold" id="team-operations-empty-title">
@@ -384,7 +459,12 @@ export function TeamOperationsPanel({
   }
 
   return (
-    <div className="space-y-4">
+    <div
+      aria-busy={pendingAction !== null}
+      className="min-w-0 space-y-4"
+      data-testid="team-operations-surface"
+    >
+      <OperationStatus notice={notice} pendingAction={pendingAction} />
       <GovernedRequestComposer
         disabled={!resolvedAdapter.createRequest || pendingAction !== null}
         onCreate={(input) => {

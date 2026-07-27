@@ -52,7 +52,18 @@ state and is not added to the command-center projection.
 
 Fixture data is available only when the E2E build sets
 `window.__BUZZ_E2E__.teamOperationsFixture` to `true`; preview controls remain
-disabled.
+disabled. A separate deterministic operator harness accepts only the E2E-only
+`teamOperationsScenario` switch and covers ready, empty, load-failure, and
+command-failure paths. Unit tests prove the switch cannot activate in
+production or development modes. The checked-in `.env.e2e` permits loopback
+only for this local acceptance build; production still requires WSS on a
+Snowman-owned hostname.
+
+Desktop acceptance automation now covers empty-workspace request creation,
+receipt-driven plan adoption, approval and lifecycle controls, keyboard
+activation and focus, live status announcements, fail-closed load/command
+errors, reduced motion, a 390-pixel viewport without horizontal overflow, and
+metadata-only rendering with no Block-origin browser requests.
 
 The deployment must provision a caller admission for each human/workspace and
 retain the default-off build variables until private routing, workforce
@@ -61,10 +72,10 @@ authority: every server mutation revalidates the live identity, session,
 capability, policy generation, plan generation, cancellation/supersession
 fences, and receipt replay state.
 
-Launch evidence still requires desktop/web/mobile keyboard and screen-reader
-testing; 200% zoom and responsive-layout checks; reduced-motion and contrast
-verification; live approval/cancellation race tests; expired/superseded snapshot
-tests; cross-tenant adversarial tests; lost-response recovery; performance and
+Launch evidence still requires manual desktop screen-reader and 200% zoom
+testing; web/mobile accessibility coverage; contrast verification; live
+approval/cancellation race tests; expired/superseded snapshot tests;
+cross-tenant adversarial tests; lost-response recovery; performance and
 bundle-budget checks; and AWS staging UAT against the private orchestration
-service. Until those gates pass, this is a production-oriented experience slice,
-not a claim that 24/7 autonomous execution is active.
+service. Until those gates pass, this is a production-oriented experience
+slice, not a claim that 24/7 autonomous execution is active.
