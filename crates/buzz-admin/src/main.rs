@@ -32,10 +32,7 @@ use nostr::{EventBuilder, Keys, Kind, Tag};
 use tracing::warn;
 
 #[derive(Parser)]
-#[command(
-    name = "snowman-admin",
-    about = "Snowman Operations administration"
-)]
+#[command(name = "snowman-admin", about = "Snowman Operations administration")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

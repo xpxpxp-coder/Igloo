@@ -1,6 +1,6 @@
 # Snowman Command Center Helm Chart
 
-[Snowman Command Center](https://github.com/snowman-ai-org/snowman-command-center) is a governed human and agent operations platform: a relay service serving WebSocket + REST + web UI, backed by PostgreSQL, Redis, and S3-compatible object storage.
+[Snowman Command Center](https://github.com/xpxpxp-coder/Igloo) is a governed human and agent operations platform: a relay service serving WebSocket + REST + web UI, backed by PostgreSQL, Redis, and S3-compatible object storage.
 
 This chart has two operating profiles selected by values:
 

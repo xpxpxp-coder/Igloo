@@ -2,7 +2,7 @@ apiVersion: v2
 # Published to the Snowman-owned OCI registry after provenance verification.
 # branches (see docs/push-gateway-deployment.md, "Gateway chart release").
 name: buzz-push-gateway
-description: Public capability-gated APNs last-hop gateway for Buzz
+description: Public capability-gated APNs last-hop gateway for Snowman 360
 version: 0.1.0
 appVersion: "0.1.0"
 type: application

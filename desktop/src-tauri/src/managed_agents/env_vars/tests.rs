@@ -89,16 +89,10 @@ fn merged_env_strips_reserved_keys_from_persona() {
     // Defense-in-depth: even if a reserved key sneaks into on-disk
     // persona data (e.g. older record from before validation existed),
     // it must be stripped before reaching the child process.
-    let persona = map(&[
-        ("BUZZ_PRIVATE_KEY", "nsec1evil"),
-        ("SAFE_SETTING", "ok"),
-    ]);
+    let persona = map(&[("BUZZ_PRIVATE_KEY", "nsec1evil"), ("SAFE_SETTING", "ok")]);
     let merged = merged_user_env(&persona, &BTreeMap::new());
     assert!(!merged.contains_key("BUZZ_PRIVATE_KEY"));
-    assert_eq!(
-        merged.get("SAFE_SETTING").map(String::as_str),
-        Some("ok")
-    );
+    assert_eq!(merged.get("SAFE_SETTING").map(String::as_str), Some("ok"));
 }
 
 #[test]
@@ -185,7 +179,10 @@ fn reserved_keys_include_relay_url() {
 
 #[test]
 fn validate_keys_accepts_non_secret_behavior_env() {
-    let env = map(&[("GOOSE_TEMPERATURE", "0.2"), ("GOOSE_PROVIDER", "anthropic")]);
+    let env = map(&[
+        ("GOOSE_TEMPERATURE", "0.2"),
+        ("GOOSE_PROVIDER", "anthropic"),
+    ]);
     assert!(validate_user_env_keys(&env).is_ok());
 }
 

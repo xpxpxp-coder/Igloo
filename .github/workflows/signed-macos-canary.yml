@@ -12,13 +12,21 @@ permissions:
 jobs:
   build:
     name: Build signed macOS canary
-    if: github.repository == 'snowman-ai-org/snowman-command-center'
     runs-on: macos-latest
     timeout-minutes: 60
     permissions:
       contents: read
       id-token: write # reserved for the Snowman-owned signing provider
     steps:
+      - name: Require approved Snowman repository
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          case "$REPOSITORY" in
+            xpxpxp-coder/Igloo|snowman-ai-org/snowman-command-center) ;;
+            *) echo "::error::Unsupported canary repository: $REPOSITORY"; exit 1 ;;
+          esac
+
       - name: Require main
         env:
           SOURCE_REF: ${{ github.ref }}
@@ -101,10 +109,9 @@ jobs:
         id: mesh_rev
         run: |
           set -euo pipefail
-          REV=$(python3 -c 'import tomllib; d=tomllib.load(open("Cargo.lock", "rb")); p=next(p for p in d["package"] if p["name"] == "mesh-llm-sdk"); print(p["source"].rsplit("#", 1)[1])')
-          [[ -n "$REV" ]] || { echo "::error::could not resolve mesh-llm rev from Cargo.lock"; exit 1; }
+          REV=$(python3 -c 'import tomllib; d=tomllib.load(open("desktop/src-tauri/Cargo.lock", "rb")); p=next(p for p in d["package"] if p["name"] == "mesh-llm-sdk"); print(p["source"].rsplit("#", 1)[1])')
+          [[ -n "$REV" ]] || { echo "::error::could not resolve mesh-llm rev from desktop Cargo.lock"; exit 1; }
           echo "rev=$REV" >> "$GITHUB_OUTPUT"
-          echo "short=${REV:0:7}" >> "$GITHUB_OUTPUT"
 
       - name: Restore mesh llama build cache
         id: llama_cache
@@ -116,15 +123,20 @@ jobs:
       - name: Build mesh llama native libraries
         if: steps.llama_cache.outputs.cache-hit != 'true'
         env:
-          MESH_REV_SHORT: ${{ steps.mesh_rev.outputs.short }}
+          MESH_REV: ${{ steps.mesh_rev.outputs.rev }}
         run: |
           set -euo pipefail
-          cargo fetch --manifest-path desktop/src-tauri/Cargo.toml
-          MESH_ROOT=$(find "${CARGO_HOME:-$HOME/.cargo}/git/checkouts" -path "*/$MESH_REV_SHORT" -type d -name "$MESH_REV_SHORT" | head -1)
-          if [[ -z "$MESH_ROOT" ]]; then
-            echo "::error::mesh-llm checkout for $MESH_REV_SHORT not found after cargo fetch"
+          cargo fetch --locked --manifest-path desktop/src-tauri/Cargo.toml
+          MESH_MANIFEST=$(cargo metadata --locked --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["manifest_path"] for p in d["packages"] if p["name"] == "mesh-llm-sdk"))')
+          MESH_PACKAGE_DIR=$(dirname "$MESH_MANIFEST")
+          MESH_ROOT=$(git -C "$MESH_PACKAGE_DIR" rev-parse --show-toplevel)
+          if [[ ! -f "$MESH_ROOT/scripts/prepare-llama.sh" || ! -f "$MESH_ROOT/scripts/build-llama.sh" ]]; then
+            echo "::error::mesh-llm checkout was not resolved by cargo metadata"
             exit 1
           fi
+          ACTUAL_REV=$(git -C "$MESH_ROOT" rev-parse HEAD)
+          [[ "$ACTUAL_REV" == "$MESH_REV" ]] || { echo "::error::mesh-llm checkout is $ACTUAL_REV, expected $MESH_REV"; exit 1; }
           export LLAMA_STAGE_BACKEND=metal
           export LLAMA_STAGE_BUILD_DIR="$GITHUB_WORKSPACE/.cache/mesh-llama/build-stage-abi-metal"
           export CMAKE_OSX_DEPLOYMENT_TARGET=10.15

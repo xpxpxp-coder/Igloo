@@ -16,7 +16,6 @@ permissions:
 jobs:
   build:
     name: Build Windows canary
-    if: github.repository == 'snowman-ai-org/snowman-command-center'
     runs-on: windows-latest
     timeout-minutes: 60
     permissions:
@@ -24,6 +23,16 @@ jobs:
     env:
       TARGET: x86_64-pc-windows-msvc
     steps:
+      - name: Require approved Snowman repository
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          case "$REPOSITORY" in
+            xpxpxp-coder/Igloo|snowman-ai-org/snowman-command-center) ;;
+            *) echo "::error::Unsupported canary repository: $REPOSITORY"; exit 1 ;;
+          esac
+
       - name: Require main
         shell: bash
         env:

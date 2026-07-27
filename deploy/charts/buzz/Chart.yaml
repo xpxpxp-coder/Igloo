@@ -9,9 +9,9 @@ description: |
 type: application
 version: 0.1.6
 appVersion: "0.1.0"
-home: https://github.com/snowman-ai-org/snowman-command-center
+home: https://github.com/xpxpxp-coder/Igloo
 sources:
-  - https://github.com/snowman-ai-org/snowman-command-center
+  - https://github.com/xpxpxp-coder/Igloo
 keywords:
   - nostr
   - relay

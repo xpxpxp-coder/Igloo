@@ -1170,7 +1170,7 @@ requireFragment(
 );
 requireFragment(
   "Dockerfile.push-gateway",
-  "https://github.com/snowman-ai-org/snowman-command-center",
+  "https://github.com/xpxpxp-coder/Igloo",
   "container provenance must identify the Snowman-owned source repository",
 );
 requireFragment(

@@ -291,7 +291,9 @@ test("rewriteRelayUrl: matches relay origin case-insensitively (uppercase saved 
         if (command === "get_relay_http_url") {
           // Saved community URLs keep the user's casing; the relay always
           // emits lowercased media URLs (normalize_host in buzz-core).
-          return Promise.resolve("https://PENDING-SEED.communities.buzz.xyz");
+          return Promise.resolve(
+            "https://PENDING-SEED.communities.snowmanai.org",
+          );
         }
         return Promise.reject(new Error(`Unexpected command: ${command}`));
       },
@@ -302,7 +304,7 @@ test("rewriteRelayUrl: matches relay origin case-insensitively (uppercase saved 
     const mediaUrl = await import(`./mediaUrl.ts?case=${Date.now()}`);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const relayMediaUrl = `https://pending-seed.communities.buzz.xyz/media/${HASH}.png`;
+    const relayMediaUrl = `https://pending-seed.communities.snowmanai.org/media/${HASH}.png`;
     assert.equal(
       mediaUrl.rewriteRelayUrl(relayMediaUrl),
       `http://127.0.0.1:54321/media/${HASH}.png`,

@@ -300,7 +300,10 @@ fn parse_nostr_bind_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayload, Str
 }
 
 fn parse_workforce_enroll_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayload, String> {
-    if !matches!(url.path(), "" | "/") || url.fragment().is_some() || url.query_pairs().count() != 12 {
+    if !matches!(url.path(), "" | "/")
+        || url.fragment().is_some()
+        || url.query_pairs().count() != 12
+    {
         return Err("workforce enrollment link shape is invalid".into());
     }
     let assertion_id = non_empty_param(url, "assertion_id")?;
@@ -332,8 +335,8 @@ fn parse_workforce_enroll_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayloa
     }
     let callback_url = callback_url.unwrap_or_default();
     validate_nostr_bind_callback_url(&callback_url, &origin)?;
-    let callback = Url::parse(&callback_url)
-        .map_err(|error| format!("invalid callback_url: {error}"))?;
+    let callback =
+        Url::parse(&callback_url).map_err(|error| format!("invalid callback_url: {error}"))?;
     let callback_parameters: Vec<_> = callback.query_pairs().collect();
     if callback.path() != "/"
         || callback.fragment().is_some()

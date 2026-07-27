@@ -272,7 +272,7 @@ pub(crate) fn validate_clone_url(clone_url: &str) -> Result<(), String> {
         })
         .unwrap_or(false);
     if !is_buzz_repo_path {
-        return Err("clone URL must point at a Buzz git repository".into());
+        return Err("clone URL must point at a Snowman Command Center git repository".into());
     }
     Ok(())
 }

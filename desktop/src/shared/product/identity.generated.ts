@@ -15,7 +15,7 @@ export const SNOWMAN_PRODUCT = {
   desktop_dev_bundle_id: "ai.snowman.commandcenter.dev",
   container_image: "ghcr.io/snowman-ai-org/snowman-command-center",
   push_gateway_image: "ghcr.io/snowman-ai-org/snowman-push-gateway",
-  source_repository: "https://github.com/snowman-ai-org/snowman-command-center",
+  source_repository: "https://github.com/xpxpxp-coder/Igloo",
   release_page_path: "/downloads",
   release_api_path: "/api/releases?per_page=10",
   desktop_release_tag: "snowman-command-center-latest",

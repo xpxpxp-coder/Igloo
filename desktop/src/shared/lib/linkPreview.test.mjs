@@ -9,12 +9,12 @@ import {
 
 test("parseSupportedLinkPreview parses GitHub pull request URLs", () => {
   assert.deepEqual(
-    parseSupportedLinkPreview("https://github.com/block/sprout/pull/1234"),
+    parseSupportedLinkPreview("https://github.com/xpxpxp-coder/Igloo/pull/1234"),
     {
       kind: "github-pull-request",
-      href: "https://github.com/block/sprout/pull/1234",
+      href: "https://github.com/xpxpxp-coder/Igloo/pull/1234",
       provider: "GitHub",
-      title: "block/sprout #1234",
+      title: "xpxpxp-coder/Igloo #1234",
       typeLabel: "PR",
     },
   );
@@ -22,12 +22,12 @@ test("parseSupportedLinkPreview parses GitHub pull request URLs", () => {
 
 test("parseSupportedLinkPreview parses GitHub repository URLs", () => {
   assert.deepEqual(
-    parseSupportedLinkPreview("https://github.com/block/sprout"),
+    parseSupportedLinkPreview("https://github.com/xpxpxp-coder/Igloo"),
     {
       kind: "github-repository",
-      href: "https://github.com/block/sprout",
+      href: "https://github.com/xpxpxp-coder/Igloo",
       provider: "GitHub",
-      title: "block/sprout",
+      title: "xpxpxp-coder/Igloo",
       typeLabel: "repo",
     },
   );
@@ -35,12 +35,12 @@ test("parseSupportedLinkPreview parses GitHub repository URLs", () => {
 
 test("parseSupportedLinkPreview trims markdown punctuation around GitHub URLs", () => {
   assert.deepEqual(
-    parseSupportedLinkPreview("https://github.com/block/sprout/pull/1234)."),
+    parseSupportedLinkPreview("https://github.com/xpxpxp-coder/Igloo/pull/1234)."),
     {
       kind: "github-pull-request",
-      href: "https://github.com/block/sprout/pull/1234",
+      href: "https://github.com/xpxpxp-coder/Igloo/pull/1234",
       provider: "GitHub",
-      title: "block/sprout #1234",
+      title: "xpxpxp-coder/Igloo #1234",
       typeLabel: "PR",
     },
   );
@@ -48,7 +48,7 @@ test("parseSupportedLinkPreview trims markdown punctuation around GitHub URLs", 
 
 test("parseSupportedLinkPreview ignores unsupported GitHub URLs", () => {
   assert.equal(
-    parseSupportedLinkPreview("https://github.com/block/sprout/tree/main"),
+    parseSupportedLinkPreview("https://github.com/xpxpxp-coder/Igloo/tree/main"),
     null,
   );
 });
@@ -104,22 +104,22 @@ test("extractSupportedLinkPreviews returns unique supported links in order", () 
   assert.deepEqual(
     extractSupportedLinkPreviews(
       [
-        "See github.com/block/sprout/pull/1",
+        "See github.com/xpxpxp-coder/Igloo/pull/1",
         "and https://linear.app/buzz/issue/BUG-2/fix-preview",
-        "then https://github.com/block/sprout/pull/1 again.",
+        "then https://github.com/xpxpxp-coder/Igloo/pull/1 again.",
         "plus https://docs.google.com/document/d/doc123/edit",
       ].join(" "),
     ).map((preview) => preview.title),
-    ["block/sprout #1", "BUG-2", "Document"],
+    ["xpxpxp-coder/Igloo #1", "BUG-2", "Document"],
   );
 });
 
 test("extractSupportedLinkPreviews handles markdown link serialization", () => {
   assert.deepEqual(
     extractSupportedLinkPreviews(
-      "[https://github.com/block/sprout/pull/44](https://github.com/block/sprout/pull/44)",
+      "[https://github.com/xpxpxp-coder/Igloo/pull/44](https://github.com/xpxpxp-coder/Igloo/pull/44)",
     ).map((preview) => preview.title),
-    ["block/sprout #44"],
+    ["xpxpxp-coder/Igloo #44"],
   );
 });
 
@@ -161,14 +161,14 @@ test("extractSupportedLinkPreviews skips URLs inside inline and fenced code", ()
   assert.deepEqual(
     extractSupportedLinkPreviews(
       [
-        "`https://github.com/block/sprout/pull/1`",
+        "`https://github.com/xpxpxp-coder/Igloo/pull/1`",
         "```",
         "https://linear.app/buzz/issue/BUG-2/fix-preview",
         "```",
-        "https://github.com/block/sprout/pull/3",
+        "https://github.com/xpxpxp-coder/Igloo/pull/3",
       ].join("\n"),
     ).map((preview) => preview.title),
-    ["block/sprout #3"],
+    ["xpxpxp-coder/Igloo #3"],
   );
 });
 
@@ -177,11 +177,11 @@ test("extractSupportedLinkPreviews skips URLs inside indented code", () => {
     extractSupportedLinkPreviews(
       [
         "    https://docs.google.com/document/d/hidden/edit",
-        "\tgithub.com/block/sprout/pull/4",
-        "https://github.com/block/sprout/pull/5",
+        "\tgithub.com/xpxpxp-coder/Igloo/pull/4",
+        "https://github.com/xpxpxp-coder/Igloo/pull/5",
       ].join("\n"),
     ).map((preview) => preview.title),
-    ["block/sprout #5"],
+    ["xpxpxp-coder/Igloo #5"],
   );
 });
 
@@ -190,7 +190,7 @@ test("extractSupportedLinkPreviews skips markdown image link URLs", () => {
     extractSupportedLinkPreviews(
       [
         "![alt](https://docs.google.com/document/d/doc123/edit)",
-        "![alt](https://github.com/block/sprout)",
+        "![alt](https://github.com/xpxpxp-coder/Igloo)",
         "[Composer attachment polish](https://docs.google.com/document/d/doc456/edit)",
       ].join("\n"),
     ).map((preview) => preview.title),
@@ -202,12 +202,12 @@ test("extractSupportedLinkPreviews requires bare URL boundaries", () => {
   assert.deepEqual(
     extractSupportedLinkPreviews(
       [
-        "https://evil-github.com/block/sprout/pull/1",
+        "https://evil-github.com/xpxpxp-coder/Igloo/pull/1",
         "https://example.com/go/https://docs.google.com/document/d/doc123/edit",
-        "(https://github.com/block/sprout/pull/2)",
+        "(https://github.com/xpxpxp-coder/Igloo/pull/2)",
       ].join(" "),
     ).map((preview) => preview.title),
-    ["block/sprout #2"],
+    ["xpxpxp-coder/Igloo #2"],
   );
 });
 
@@ -217,10 +217,10 @@ test("extractSupportedLinkPreviews skips links inside inline spoilers", () => {
       [
         "Keep",
         "||[roadmap](https://docs.google.com/document/d/hidden/edit)||",
-        "hidden, but show https://github.com/block/sprout/pull/7",
+        "hidden, but show https://github.com/xpxpxp-coder/Igloo/pull/7",
       ].join(" "),
     ).map((preview) => preview.title),
-    ["block/sprout #7"],
+    ["xpxpxp-coder/Igloo #7"],
   );
 });
 
@@ -233,19 +233,19 @@ test("extractSupportedLinkPreviews skips links inside block spoilers", () => {
         "https://linear.app/buzz/issue/BUG-99/hidden-spoiler-link",
         "",
         "||",
-        "https://github.com/block/sprout/pull/8",
+        "https://github.com/xpxpxp-coder/Igloo/pull/8",
       ].join("\n"),
     ).map((preview) => preview.title),
-    ["block/sprout #8"],
+    ["xpxpxp-coder/Igloo #8"],
   );
 });
 
 test("isSupportedLinkAutolinkLabel matches normalized bare URL labels", () => {
-  const preview = parseSupportedLinkPreview("github.com/block/sprout/pull/5");
+  const preview = parseSupportedLinkPreview("github.com/xpxpxp-coder/Igloo/pull/5");
   assert.ok(preview);
   assert.equal(
     isSupportedLinkAutolinkLabel(
-      "https://github.com/block/sprout/pull/5",
+      "https://github.com/xpxpxp-coder/Igloo/pull/5",
       preview,
     ),
     true,

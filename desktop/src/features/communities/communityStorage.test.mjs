@@ -51,8 +51,31 @@ test("migrateLegacyCommunityStorage does not overwrite new community state", () 
 
 test("signed-build relay defaults auto-connect during first-run onboarding", () => {
   assert.equal(
-    shouldAutoConnectDefaultRelay("wss://buzz.block.builderlab.xyz"),
+    shouldAutoConnectDefaultRelay("wss://relay.snowmanai.org"),
     true,
+  );
+  assert.equal(
+    shouldAutoConnectDefaultRelay(
+      "wss://aptive.communities.snowmanai.org/community",
+    ),
+    true,
+  );
+  assert.equal(shouldAutoConnectDefaultRelay("wss://snowmanai.org"), true);
+  assert.equal(
+    shouldAutoConnectDefaultRelay("wss://relay.external.example"),
+    false,
+  );
+  assert.equal(
+    shouldAutoConnectDefaultRelay("wss://snowmanai.org.external.example"),
+    false,
+  );
+  assert.equal(
+    shouldAutoConnectDefaultRelay("wss://evil-snowmanai.org"),
+    false,
+  );
+  assert.equal(
+    shouldAutoConnectDefaultRelay("ws://relay.snowmanai.org"),
+    false,
   );
   assert.equal(shouldAutoConnectDefaultRelay("ws://localhost:3000"), false);
   assert.equal(shouldAutoConnectDefaultRelay("ws://127.0.0.1:3000"), false);

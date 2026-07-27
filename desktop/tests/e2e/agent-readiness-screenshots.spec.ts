@@ -241,7 +241,7 @@ test.describe("agent readiness gate screenshots", () => {
           default_args: [],
           mcp_command: "buzz-dev-mcp",
           install_hint: "Ships with the Buzz desktop app.",
-          install_instructions_url: "https://github.com/block/buzz",
+          install_instructions_url: "https://github.com/xpxpxp-coder/Igloo",
           can_auto_install: false,
           underlying_cli_path: null,
         },

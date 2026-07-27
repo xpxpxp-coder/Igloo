@@ -1,10 +1,10 @@
-# Contributing to Buzz
+# Contributing to Snowman Command Center
 
-Welcome, and thank you for your interest in contributing! Buzz is an
+Welcome, and thank you for your interest in contributing! Snowman Command Center is an
 open-source project and we're glad you're here. This guide will help you
 get from zero to a merged pull request.
 
-If you have questions that aren't answered here, [open an issue](https://github.com/block/buzz/issues/new).
+If you have questions that aren't answered here, [open an issue](https://github.com/xpxpxp-coder/Igloo/issues/new).
 
 ---
 
@@ -29,17 +29,17 @@ If you have questions that aren't answered here, [open an issue](https://github.
 
 This project follows the [Contributor Covenant v2.1](CODE_OF_CONDUCT.md).
 By participating you agree to uphold these standards. Please report
-unacceptable behavior to **conduct@buzz-relay.org**.
+unacceptable behavior to **security@snowmanai.org**.
 
 ---
 
 ## Before You Open a PR
 
-Before starting, search [open PRs](https://github.com/block/buzz/pulls) and [open issues](https://github.com/block/buzz/issues) for duplicates — someone may already be working on the same thing. When you open your PR, link the closest existing one in the description (or say "none found").
+Before starting, search [open PRs](https://github.com/xpxpxp-coder/Igloo/pulls) and [open issues](https://github.com/xpxpxp-coder/Igloo/issues) for duplicates — someone may already be working on the same thing. When you open your PR, link the closest existing one in the description (or say "none found").
 
 For anything beyond a small fix, opening an issue first is strongly recommended. Describe the problem and proposed solution so a maintainer can acknowledge the approach before you build — it avoids two people building the same thing in parallel.
 
-Buzz is an agent platform, so AI-assisted PRs are welcome. No need to disclose the tools you used, but you own and must have reviewed the final code. Submissions that are clearly unreviewed may be closed with a pointer here.
+Snowman Command Center is an agent platform, so AI-assisted changes are welcome. Contributors own and must review the final code and evidence.
 
 We squash-merge, so your PR title becomes the commit subject in `main`. Use [Conventional Commits](https://www.conventionalcommits.org/) format: `feat(mcp): add get_feed_actions tool`. The type prefix (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`) is required. See the [Commit Messages](#commit-messages) section for the full reference.
 
@@ -79,8 +79,8 @@ versions in the table above.
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/block/buzz.git
-cd buzz
+git clone https://github.com/xpxpxp-coder/Igloo.git
+cd Igloo
 
 # 2. Activate Hermit (optional but recommended)
 . ./bin/activate-hermit
@@ -124,7 +124,7 @@ just desktop-dev  # terminal 2 — Vite dev server only (no Tauri shell)
 
 ```bash
 just down    # Stop Docker services, keep data
-just reset   # Wipe all dev state and recreate it; installed Buzz is preserved
+just reset   # Wipe all dev state and recreate it; installed Snowman Command Center is preserved
 ```
 
 Development desktop state uses separate bundle identifiers
@@ -311,20 +311,17 @@ to existing clients.
 
 ## Ecosystem
 
-Buzz is developed across multiple repositories. This repo (`block/buzz`)
-is the open-source home for all application code — the relay, desktop app,
-mobile app, CLI, and agent harness. Internal repositories handle
-enterprise-signed builds and infrastructure deployment.
+Snowman Command Center is developed in this repository (`xpxpxp-coder/Igloo`),
+which contains the relay, desktop app, mobile app, CLI, agent harness, and
+Snowman production evidence gates. Snowman-owned AWS and GitHub workflows
+handle signed builds and infrastructure deployment.
 
 See [AGENTS.md § Ecosystem](AGENTS.md#ecosystem) for the full repo table and
 dependency diagram.
 
-**External contributors:** Fork `block/buzz`, open a PR, and CI runs
-automatically. No special access is required.
-
-**Block team members:** See the internal
-[sprout-releases CONTRIBUTING.md](https://github.com/squareup/sprout-releases/blob/main/CONTRIBUTING.md)
-for team access setup, onboarding, and the full repo inventory. See
+**External contributors:** Fork `xpxpxp-coder/Igloo`, open a PR, and CI runs
+automatically. Snowman maintainers may use the documented exact-SHA direct-main
+path after equivalent independent review and hosted checks. See
 [RELEASING.md](RELEASING.md) for the release process.
 
 ---
@@ -435,7 +432,8 @@ If an HTTP endpoint is still necessary:
 
 ## License and CLA
 
-Buzz is licensed under the **Apache License, Version 2.0**. See
+Snowman Command Center includes upstream Buzz-derived code licensed under the
+**Apache License, Version 2.0**. See
 [LICENSE](LICENSE) for the full text.
 
 By submitting a pull request, you agree that your contribution is licensed

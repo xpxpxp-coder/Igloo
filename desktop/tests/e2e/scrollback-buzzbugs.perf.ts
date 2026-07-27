@@ -26,13 +26,12 @@ import { installRelayBridge } from "../helpers/bridge";
  * Run (in-cluster port-forward, Host rewritten to community host):
  *   kubectl -n sprout port-forward svc/sprout-relay 13000:3000 &
  *   BUZZ_E2E_RELAY_URL=http://127.0.0.1:13000 \
- *   BUZZ_COMMUNITY_HOST=sprout-oss.stage.blox.sqprod.co \
+ *   BUZZ_COMMUNITY_HOST=relay.staging.snowmanai.org \
  *   BUZZ_PERF_NSEC=nsec1... \
  *   npx playwright test --config=playwright.perf.config.ts scrollback-buzzbugs.perf.ts
  */
 
-const RELAY_HTTP =
-  process.env.BUZZ_E2E_RELAY_URL ?? "https://sprout-oss.stage.blox.sqprod.co";
+const RELAY_HTTP = process.env.BUZZ_E2E_RELAY_URL ?? "";
 const NSEC = process.env.BUZZ_PERF_NSEC ?? "";
 const COMMUNITY_HOST = process.env.BUZZ_COMMUNITY_HOST ?? "";
 const TARGET_CHANNEL = process.env.BUZZ_PERF_CHANNEL ?? "buzz-bugs";
@@ -95,6 +94,8 @@ test("MEASURE: scroll-back pagination latency in target channel", async ({
   page,
 }) => {
   test.setTimeout(300_000);
+  if (!RELAY_HTTP)
+    throw new Error("Set BUZZ_E2E_RELAY_URL to an approved Snowman relay");
   if (!NSEC) throw new Error("Set BUZZ_PERF_NSEC to a real member nsec");
   const identity = deriveIdentity(NSEC);
 

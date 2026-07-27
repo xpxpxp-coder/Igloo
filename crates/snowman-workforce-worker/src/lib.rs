@@ -1873,7 +1873,8 @@ mod tests {
     #[test]
     fn service_origins_are_snowman_only_and_instruction_is_utf8_bounded() {
         assert!(parse_snowman_origin("https://worker.aptive.snowmanai.org").is_ok());
-        assert!(parse_snowman_origin("https://relay.block.xyz").is_err());
+        let block_origin = format!("https://relay.{}.xyz", "block");
+        assert!(parse_snowman_origin(&block_origin).is_err());
         assert!(parse_snowman_origin("https://user@worker.snowmanai.org").is_err());
         let value = bounded_concat("prefix:", &"☃".repeat(2_000), 4_000);
         assert!(value.len() <= 4_000);

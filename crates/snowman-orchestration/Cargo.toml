@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-repository = "https://github.com/snowman-ai-org/snowman-command-center"
+repository = "https://github.com/xpxpxp-coder/Igloo"
 
 [dependencies]
 chrono = { workspace = true }

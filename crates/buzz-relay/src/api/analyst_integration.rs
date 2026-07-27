@@ -246,10 +246,12 @@ pub async fn receive_analyst_event(
     ))
 }
 
+type EventValidationResult = Result<(Value, [u8; 32], [u8; 32]), (StatusCode, Json<Value>)>;
+
 fn validate_event(
     event: &AnalystStatusEvent,
     binding: &AnalystIntegrationBinding,
-) -> Result<(Value, [u8; 32], [u8; 32]), (StatusCode, Json<Value>)> {
+) -> EventValidationResult {
     if event.schema_version != CONTRACT_VERSION {
         return Err(unprocessable("unsupported Analyst event contract version"));
     }

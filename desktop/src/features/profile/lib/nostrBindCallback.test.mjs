@@ -45,10 +45,7 @@ test("buildNostrBindCallbackUrl supports the Snowman enrollment fragment", () =>
     "signed",
     "snowman_enrollment",
   );
-  assert.equal(
-    new URL(result).hash,
-    "#snowman_enrollment=v1.c2lnbmVk",
-  );
+  assert.equal(new URL(result).hash, "#snowman_enrollment=v1.c2lnbmVk");
 });
 
 test("buildNostrBindCallbackUrl rejects callback URLs beyond the opener ceiling", () => {

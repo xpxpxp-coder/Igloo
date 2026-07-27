@@ -331,7 +331,9 @@ fn welcome_team_is_seeded_and_idempotent() {
     assert_eq!(welcome.name, "Snowman AI Workforce");
     assert_eq!(
         welcome.description.as_deref(),
-        Some("A governed specialist team for research, analysis, delivery, and independent review.")
+        Some(
+            "A governed specialist team for research, analysis, delivery, and independent review."
+        )
     );
     assert!(welcome
         .instructions

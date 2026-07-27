@@ -118,9 +118,10 @@ function isLocalRelayHost(hostname: string): boolean {
 export function shouldAutoConnectDefaultRelay(relayUrl: string): boolean {
   try {
     const parsed = new URL(relayUrl);
+    const hostname = parsed.hostname.toLowerCase();
     return (
-      (parsed.protocol === "ws:" || parsed.protocol === "wss:") &&
-      !isLocalRelayHost(parsed.hostname)
+      parsed.protocol === "wss:" &&
+      (hostname === "snowmanai.org" || hostname.endsWith(".snowmanai.org"))
     );
   } catch {
     return false;
@@ -137,7 +138,7 @@ export function deriveCommunityName(relayUrl: string): string {
       return "Local Dev";
     }
     const parts = host.split(".");
-    // Detect staging environments (e.g. buzz-oss.stage.blox.sqprod.co)
+    // Detect staging environments (e.g. relay.staging.snowmanai.org)
     if (parts.some((p) => p === "stage" || p === "staging")) {
       return "Snowman (staging)";
     }

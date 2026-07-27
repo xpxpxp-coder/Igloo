@@ -11,6 +11,17 @@ const identity = JSON.parse(read("product/identity.json"));
 const brandAssets = JSON.parse(read("product/brand-assets.json"));
 const failures = [];
 
+for (const path of [
+  "docs/assets/screenshots/channel-agents.png",
+  "docs/assets/screenshots/channel-thread.png",
+  "docs/assets/screenshots/create-channel.png",
+  "docs/assets/screenshots/media-comments.png",
+]) {
+  if (existsSync(resolve(root, path))) {
+    failures.push(`${path}: legacy upstream screenshot must not ship`);
+  }
+}
+
 if (brandAssets.schema_version !== 1 || !Array.isArray(brandAssets.assets)) {
   failures.push("product/brand-assets.json: unsupported asset manifest");
 }
@@ -45,6 +56,10 @@ const required = new Map([
     `<string>${identity.primary_deep_link_scheme}</string>`,
   ],
   ["web/index.html", `<title>${identity.command_center_name}</title>`],
+  ["admin-web/index.html", `<title>${identity.admin_name}</title>`],
+  ["SECURITY.md", "security@snowmanai.org"],
+  ["ARCHITECTURE.md", "# Snowman Command Center Architecture"],
+  ["VISION_MODERATION.md", "# 🛡️ Snowman Moderation"],
   [
     "Dockerfile",
     `org.opencontainers.image.title="${identity.command_center_name}"`,
@@ -102,6 +117,18 @@ const visibleFiles = [
   "crates/buzz-admin/src/main.rs",
   "desktop/src-tauri/src/managed_agents/nest_agents.md",
   "desktop/src-tauri/src/managed_agents/nest_skill.md",
+  "crates/buzz-acp/src/base_prompt.md",
+  "crates/buzz-agent/src/auth.rs",
+  "crates/buzz-dev-mcp/src/shell.rs",
+  "crates/buzz-cli/src/commands/agents.rs",
+  "crates/buzz-cli/src/commands/channel_templates.rs",
+  "crates/buzz-cli/src/commands/channels.rs",
+  "desktop/src-tauri/src/commands/agent_discovery/post_install_verification.rs",
+  "desktop/src-tauri/src/commands/agent_discovery/managed_node.rs",
+  "desktop/src-tauri/src/commands/project_git_exec.rs",
+  "desktop/src-tauri/src/mesh_llm/catalog.rs",
+  "SECURITY.md",
+  "VISION_MODERATION.md",
 ];
 const forbiddenVisible = [
   /Welcome to Buzz/i,
@@ -122,6 +149,13 @@ const forbiddenVisible = [
   /Buzz will choose an available shared model/i,
   /Add agents in the Buzz desktop app/i,
   /# Buzz CLI Skill/i,
+  /inside the Buzz platform/i,
+  /Buzz relay configured/i,
+  /Buzz auth failed/i,
+  /Buzz: signed in/i,
+  /Buzz still could not use/i,
+  /Buzz default for/i,
+  /Buzz git repository/i,
 ];
 for (const path of visibleFiles) {
   const source = read(path);
@@ -166,11 +200,30 @@ const operationalSurfaces = [
   "deploy/charts/buzz/README.md",
   "deploy/charts/buzz/values.schema.json",
   "deploy/charts/buzz/templates/NOTES.txt",
+  "Dockerfile.push-gateway",
+  "deploy/charts/buzz-push-gateway/Chart.yaml",
+  "docs/push-gateway-deployment.md",
+  "Justfile",
+  "scripts/release-rulesets.sh",
+  "scripts/publish-mobile-release-candidate.sh",
+  "scripts/mobile-release.sh",
+  "scripts/post-screenshots.sh",
+  "benchmarks/harbor-buzz-orchestra/scripts/benchmark.py",
+  "benchmarks/harbor-buzz-orchestra/scripts/run_leaderboard.py",
+  "benchmarks/harbor-buzz-orchestra/uv.lock",
+  "benchmarks/harbor-buzz-orchestra/testbed/uv.lock",
+  "scripts/instance-env.sh",
+  "CONTRIBUTING.md",
+  "RELEASING.md",
+  "deploy/local/build-and-deploy.sh",
+  "docs/nips/NIP-PL.md",
 ];
 const forbiddenOperationalSurface = [
   /github\.com\/block\//i,
   /ghcr\.io\/block\//i,
   /block\.xyz/i,
+  /global\.block-artifacts\.com/i,
+  /block-pypi/i,
   /squareup\//i,
   /com\.buzz\.(service|env|volume|network)/i,
   /container_name:\s*buzz-/i,
@@ -178,6 +231,14 @@ const forbiddenOperationalSurface = [
   /name:\s*buzz-net/i,
   /# Buzz Helm Chart/i,
   /name:\s*Block/i,
+  /["']agent_org_display_name["']\s*:\s*["']Block["']/i,
+  /Buzz Orchestra/i,
+  /productName[^\n]{0,20}Buzz/i,
+  /run Buzz from repo root/i,
+  /sprout-oss\.stage\.blox\.sqprod\.co/i,
+  /buzz\.block\.builderlab\.xyz/i,
+  /buzz@block\.xyz/i,
+  /push\.buzz\.xyz/i,
 ];
 for (const path of operationalSurfaces) {
   const source = read(path);

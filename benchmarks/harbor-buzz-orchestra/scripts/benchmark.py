@@ -48,7 +48,7 @@ COMPOSE_FILES = (
 RELAY_HTTP_PORT = 3600
 PG_HOST_PORT = 5633
 METRICS_HOST_PORT = 9602
-GUI_BUNDLE_IDENTIFIER = "xyz.block.buzz.app.benchmark"
+GUI_BUNDLE_IDENTIFIER = "ai.snowman.commandcenter.benchmark"
 
 DEFAULT_DATASET = "terminal-bench/terminal-bench-2-1"
 DEFAULT_ATTEMPTS = 5
@@ -179,11 +179,29 @@ def print_user_identity(state: dict[str, str]) -> None:
     )
 
 
+def require_immutable_image(value: str | None) -> str:
+    """Require a content-addressed command-center image for evidence runs."""
+    if not value or "@sha256:" not in value:
+        raise SystemExit(
+            "BUZZ_IMAGE must be an explicit image digest "
+            "(for example ghcr.io/snowman-ai-org/snowman-command-center@sha256:<64-hex>)"
+        )
+    repository, digest = value.rsplit("@sha256:", 1)
+    if repository != "ghcr.io/snowman-ai-org/snowman-command-center":
+        raise SystemExit(
+            "BUZZ_IMAGE must use the Snowman-owned "
+            "ghcr.io/snowman-ai-org/snowman-command-center repository"
+        )
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise SystemExit("BUZZ_IMAGE must end in @sha256:<64 lowercase hex characters>")
+    return value
+
+
 def write_env_file(state: dict[str, str]) -> Path:
     """Compose interpolation env — regenerated from state on every run."""
     env_path = STATE_DIR / ".env"
     lines = {
-        "BUZZ_IMAGE": os.environ.get("BUZZ_IMAGE", "ghcr.io/block/buzz:main"),
+        "BUZZ_IMAGE": require_immutable_image(os.environ.get("BUZZ_IMAGE")),
         "BUZZ_DOMAIN": "localhost",
         "RELAY_URL": f"ws://localhost:{RELAY_HTTP_PORT}",
         "BUZZ_MEDIA_BASE_URL": f"http://localhost:{RELAY_HTTP_PORT}/media",
@@ -469,7 +487,7 @@ def launch_gui(state: dict[str, str]) -> subprocess.Popen:
     # workspace silently shadows the benchmark relay. An identifier of our own
     # keeps that state isolated both ways.
     tauri_config = json.dumps(
-        {"identifier": GUI_BUNDLE_IDENTIFIER, "productName": "Buzz Benchmark"}
+        {"identifier": GUI_BUNDLE_IDENTIFIER, "productName": "Snowman Agent Orchestra Benchmark"}
     )
     return subprocess.Popen(
         ["pnpm", "exec", "tauri", "dev", "--config", tauri_config],

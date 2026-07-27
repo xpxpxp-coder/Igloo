@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local docker-desktop k8s testbed for the Buzz relay mesh.
+# Local Docker Desktop Kubernetes testbed for the Snowman relay mesh.
 #
 # Repeatable path: build image -> helm dep build -> helm install (quickstart HA,
 # 3 replicas) -> wait 3/3 Ready -> probe /_readiness on every pod. This is the
@@ -23,7 +23,7 @@ IMAGE_REPO="${IMAGE_REPO:-buzz-relay}"
 IMAGE_TAG="${IMAGE_TAG:-mesh-local}"
 CHART="${REPO_ROOT}/deploy/charts/buzz"
 VALUES="${REPO_ROOT}/deploy/local/quickstart-ha-values.yaml"
-CA_PEM="${REPO_ROOT}/deploy/local/proxy-ca.pem"
+CA_PEM="${EXTRA_CA_CERTS_FILE:-}"
 EXPECT_CTX="docker-desktop"
 REPLICAS=3
 EVID="${EVID:-/tmp/mesh-build/deploy-evidence-$(date +%Y%m%d-%H%M%S)}"
@@ -37,30 +37,20 @@ CTX="$(kubectl config current-context)"
 [ "$CTX" = "$EXPECT_CTX" ] || die "kube context is '$CTX', expected '$EXPECT_CTX' (refusing to touch a non-local cluster)"
 log "context: $CTX"; kubectl get nodes | tee "$EVID/nodes.txt"
 
-# ── 1. corporate-proxy CA + npm mirror (TLS-intercepting gateway) ────────────
-# Two stacked blocks on Block's network: (a) the gateway re-signs TLS with
-# internal CAs the build container doesn't trust; (b) public registry.npmjs.org
-# is policy-blocked (Dependency Confusion mitigation), so npm/corepack must use
-# the Artifactory mirror. Both no-op on a normal network (build-args stay unset).
+# ── 1. explicitly configured Snowman proxy CA + npm mirror ──────────────────
+# No certificate or registry is discovered from an upstream corporate network.
+# Operators may opt in to a Snowman-controlled CA bundle or configured package
+# mirror; otherwise the public registry is used.
 CA_ARG=()
 REG_ARG=()
-# (a) Build a complete internal-CA bundle from the macOS System keychain.
-if [ ! -f "$CA_PEM" ] && command -v security >/dev/null 2>&1; then
-  log "exporting Block internal CA bundle from System keychain"
-  : > "$CA_PEM"
-  for name in "Cloudflare Gateway CA" \
-              "Service To Service AWS Native CA production G0" \
-              "Corp Systems AWS Native CA production G0" \
-              "Block, Inc CA G1" \
-              "Square Primary Certificate Authority - G2"; do
-    security find-certificate -a -c "$name" -p /Library/Keychains/System.keychain >> "$CA_PEM" 2>/dev/null || true
-  done
-fi
-if [ -f "$CA_PEM" ] && grep -q 'BEGIN CERTIFICATE' "$CA_PEM"; then
+if [ -n "$CA_PEM" ]; then
+  [ -f "$CA_PEM" ] || die "EXTRA_CA_CERTS_FILE does not exist: $CA_PEM"
+  grep -q 'BEGIN CERTIFICATE' "$CA_PEM" || die "EXTRA_CA_CERTS_FILE is not a PEM certificate bundle"
+  cp "$CA_PEM" "${REPO_ROOT}/deploy/local/proxy-ca.pem"
   CA_ARG=(--build-arg "EXTRA_CA_CERTS=deploy/local/proxy-ca.pem")
   log "using proxy CA bundle ($(grep -c 'BEGIN CERTIFICATE' "$CA_PEM") certs)"
 fi
-# (b) Use the host's configured npm registry (Artifactory) if it isn't public.
+# Use the host's explicitly configured npm registry when present.
 HOST_NPM_REG="$(pnpm config get registry 2>/dev/null || echo '')"
 if [ -n "$HOST_NPM_REG" ] && ! echo "$HOST_NPM_REG" | grep -q 'registry.npmjs.org'; then
   REG_ARG=(--build-arg "NPM_REGISTRY=${HOST_NPM_REG}")

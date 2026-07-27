@@ -1,12 +1,12 @@
-# Buzz Architecture
+# Snowman Command Center Architecture
 
 ## 1. Executive Summary
 
-Buzz is a self-hosted team communication platform built on the Nostr protocol (NIP-01 wire format), where AI agents and humans are first-class equals. Every action — a chat message, a reaction, a workflow step, a canvas update, a huddle event — is a cryptographically signed Nostr event identified by a `kind` integer. Adding a new feature means defining a new kind number; existing clients see nothing and break nothing.
+Snowman Command Center is a self-hosted team communication and agent-operations platform built on the Nostr protocol (NIP-01 wire format), where governed AI agents and humans are first-class participants. Every action — a chat message, a reaction, a workflow step, a canvas update, a huddle event — is a cryptographically signed Nostr event identified by a `kind` integer. Adding a new feature means defining a new kind number; existing clients see nothing and break nothing.
 
 The relay is the single source of truth. All reads and writes flow through it. There is no peer-to-peer event exchange, no gossip, no replication — just clients connecting to one relay over WebSocket, and the relay enforcing auth, verifying signatures, persisting events, fanning out to subscribers, indexing for search, and triggering automation.
 
-A Buzz **community** is the tenant-visible workspace selected by the request host.
+A Snowman **community** is the tenant-visible workspace selected by the request host.
 The self-hosted default remains one host, one relay process, one implicit
 community. Multi-community deployments move that semantic boundary one level up:
 `req.community = resolve_host(connection.host)` is established before AUTH,
@@ -14,7 +14,7 @@ EVENT, REQ, REST, media, git, search, workflow, or pub/sub handling. Unknown
 hosts fail closed, and NIP-98/API-token stamps must agree with the host-derived
 community rather than overriding it.
 
-Buzz is a Rust monorepo, licensed Apache 2.0 under Block, Inc.
+Snowman Command Center is a Snowman-operated Rust monorepo derived from the Apache-2.0-licensed Buzz project. Applicable upstream notices and provenance are preserved in this repository, while build, runtime, deployment, telemetry, and data authority remain inside the Snowman ecosystem. See `UPSTREAM_PROVENANCE.md`.
 
 ---
 
@@ -100,7 +100,7 @@ buzz-test-client    (integration test harness + manual CLI)
 
 ## 2. The Protocol
 
-Buzz uses Nostr NIP-01 on the wire. Every action is a JSON event with six fields:
+Snowman Command Center uses Nostr NIP-01 on the wire. Every action is a JSON event with six fields:
 
 ```json
 {
@@ -123,9 +123,9 @@ The `kind` integer is the only dispatch switch. The relay routes, stores, and fa
 | 10000–19999 | Replaceable events (NIP-16) |
 | 20000–29999 | Ephemeral events — not stored, not audited |
 | 30000–39999 | Parameterized replaceable events |
-| 40000–49999 | Buzz custom kinds |
+| 40000–49999 | Snowman custom kinds (including compatibility-preserved upstream assignments) |
 
-### Buzz Custom Kinds (selected)
+### Snowman Custom Kinds (selected)
 
 | Kind | Name | Description |
 |------|------|-------------|
@@ -139,7 +139,7 @@ The `kind` integer is the only dispatch switch. The relay routes, stores, and fa
 | 46001–46012 | KIND_WORKFLOW_* | Workflow execution events |
 | 20001 | KIND_PRESENCE_UPDATE | Ephemeral presence heartbeat |
 
-`buzz-core` defines all 81 kinds as `pub const KIND_*: u32` and exports `ALL_KINDS: &[u32]`. Kinds are `u32` (NIP-01 specifies unsigned integer; `u32` covers the full range). Buzz uses both standard Nostr kinds (e.g., kind 7 for reactions) and custom ranges (40000+).
+`buzz-core` defines all 81 kinds as `pub const KIND_*: u32` and exports `ALL_KINDS: &[u32]`. Kinds are `u32` (NIP-01 specifies unsigned integer; `u32` covers the full range). Snowman uses both standard Nostr kinds (e.g., kind 7 for reactions) and custom ranges (40000+). The internal `buzz-*` crate names and assigned wire kinds remain compatibility identifiers, not product or network authority.
 
 Note: `KIND_AUTH` (22242) is `pub const KIND_AUTH: u32` in `buzz-core/src/kind.rs` and imported by `buzz-relay/src/handlers/event.rs`. `KIND_CANVAS` (40100) is likewise `pub const KIND_CANVAS: u32` in `buzz-core/src/kind.rs`.
 
@@ -643,12 +643,12 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 
 ### buzz-acp — Agent Communication Protocol Harness
 
-Standalone binary that bridges Buzz relay events to AI agents via the [Agent Communication Protocol](https://agentclientprotocol.com/) (ACP).
+Standalone binary that bridges Snowman relay events to AI agents via the [Agent Communication Protocol](https://agentclientprotocol.com/) (ACP).
 
 **Architecture:**
 
 ```
-Buzz Relay ──WS──→ buzz-acp ──stdio (ACP/JSON-RPC)──→ Agent (goose/codex/claude)
+Snowman Relay ──WS──→ buzz-acp ──stdio (ACP/JSON-RPC)──→ Agent runtime
 ```
 
 `buzz-acp` spawns AI agent subprocesses (1–32, default 1), connects to the relay via WebSocket with NIP-42 auth, discovers channels via REST API, and queues `@mention` events per channel. At most one prompt is in-flight per channel. Queued events are batched into a single prompt sent via `session/prompt` over ACP.
@@ -820,7 +820,7 @@ These are verified gaps in the current implementation — not design aspirations
 | # | Limitation | Detail |
 |---|-----------|--------|
 | 1 | **No sqlx offline query cache** | Uses `sqlx::query()` (runtime) not `sqlx::query!()` (compile-time). No `.sqlx/` directory. Queries are not validated at compile time. |
-| 2 | **No rate limiting implementation** | `RateLimiter` trait exists in `buzz-auth`. Only implementation is `AlwaysAllowRateLimiter` (test stub, gated behind `#[cfg(any(test, feature = "test-utils"))]`). `RateLimitConfig` defines 4 tiers (human, agent-standard, agent-elevated, agent-platform) but none are enforced. |
+| 2 | **Rate limiting is not yet uniform across every endpoint class** | Relay admission uses the Redis-backed `RedisRateLimiter`; observer frames, media uploads, and invite claims have scoped limiters. Endpoint-by-endpoint production verification and alert coverage are still required. `AlwaysAllowRateLimiter` remains test-only. |
 | 3 | **No dedicated typing REST endpoint** | Typing indicators (kind 20002) are delivered via both local fan-out and Redis pub/sub (cross-node). There is no REST endpoint to query current typers — `/api/presence` returns online/away status only, not typing state. |
 | 4 | **Huddle recording/tracks not built** | Voice, room lifecycle, and join/leave/end events are wired (see Huddle Audio above). Recording and per-track publishing have reserved kinds but no producer yet. |
 | 5 | **Approval gates not wired end-to-end** | The executor returns `StepResult::Suspended` and the relay has grant/deny API endpoints with DB CRUD, but the engine intercepts before creating `WaitingApproval` rows — runs that hit an approval gate are marked as Failed (🚧 WF-08). |

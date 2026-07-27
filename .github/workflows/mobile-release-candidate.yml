@@ -43,14 +43,17 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Require canonical repository
+      - name: Require approved Snowman repository
         env:
           REPOSITORY: ${{ github.repository }}
         run: |
-          if [ "$REPOSITORY" != "snowman-ai-org/snowman-command-center" ]; then
-            echo "::error::Mobile candidate publication is restricted to the Snowman repository"
-            exit 1
-          fi
+          case "$REPOSITORY" in
+            xpxpxp-coder/Igloo|snowman-ai-org/snowman-command-center) ;;
+            *)
+              echo "::error::Mobile candidate publication is restricted to an approved Snowman repository"
+              exit 1
+              ;;
+          esac
 
       - name: Create release tagger token
         id: release-tagger
@@ -66,4 +69,5 @@ jobs:
           MOBILE_VERSION: ${{ inputs.version }}
           CANDIDATE_NUMBER: ${{ inputs.candidate_number }}
           TARGET_SHA: ${{ inputs.target_sha }}
+          SNOWMAN_RELEASE_TAG_RULESET_ID: ${{ vars.SNOWMAN_RELEASE_TAG_RULESET_ID }}
         run: scripts/publish-mobile-release-candidate.sh "$MOBILE_VERSION" "$CANDIDATE_NUMBER" "$TARGET_SHA"

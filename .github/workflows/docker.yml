@@ -125,13 +125,13 @@ jobs:
               max-parallelism = 2
 
       - name: Log in to GHCR
-        # Skip on pull_request from forks — no GHCR creds, build-only.
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        # Pull requests are credential-free build-only runs.
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.SNOWMAN_GHCR_USERNAME != '' && vars.SNOWMAN_GHCR_USERNAME || github.repository_owner }}
+          password: ${{ secrets.SNOWMAN_GHCR_TOKEN != '' && secrets.SNOWMAN_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
@@ -180,7 +180,7 @@ jobs:
           cache-from: |
             type=registry,ref=${{ env.IMAGE_NAME }}-buildcache:${{ matrix.arch }}
           cache-to: |
-            ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && format('type=registry,ref={0}-buildcache:{1},mode=max,compression=zstd', env.IMAGE_NAME, matrix.arch) || '' }}
+            ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}-buildcache:{1},mode=max,compression=zstd', env.IMAGE_NAME, matrix.arch) || '' }}
 
       - name: Export digest
         if: github.event_name != 'pull_request'
@@ -226,8 +226,8 @@ jobs:
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.SNOWMAN_GHCR_USERNAME != '' && vars.SNOWMAN_GHCR_USERNAME || github.repository_owner }}
+          password: ${{ secrets.SNOWMAN_GHCR_TOKEN != '' && secrets.SNOWMAN_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
         id: meta
@@ -342,12 +342,12 @@ jobs:
             [worker.oci]
               max-parallelism = 2
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.SNOWMAN_GHCR_USERNAME != '' && vars.SNOWMAN_GHCR_USERNAME || github.repository_owner }}
+          password: ${{ secrets.SNOWMAN_GHCR_TOKEN != '' && secrets.SNOWMAN_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0
@@ -367,7 +367,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=ghcr.io/snowman-ai-org/snowman-push-gateway,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=registry,ref=ghcr.io/snowman-ai-org/snowman-push-gateway-buildcache:${{ matrix.arch }}
-          cache-to: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && format('type=registry,ref=ghcr.io/snowman-ai-org/snowman-push-gateway-buildcache:{0},mode=max,compression=zstd', matrix.arch) || '' }}
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref=ghcr.io/snowman-ai-org/snowman-push-gateway-buildcache:{0},mode=max,compression=zstd', matrix.arch) || '' }}
       - name: Export digest
         if: github.event_name != 'pull_request'
         env:
@@ -406,8 +406,8 @@ jobs:
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.SNOWMAN_GHCR_USERNAME != '' && vars.SNOWMAN_GHCR_USERNAME || github.repository_owner }}
+          password: ${{ secrets.SNOWMAN_GHCR_TOKEN != '' && secrets.SNOWMAN_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9  # v6.1.0

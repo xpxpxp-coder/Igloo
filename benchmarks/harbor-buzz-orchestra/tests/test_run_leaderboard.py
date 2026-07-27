@@ -119,7 +119,8 @@ def test_metadata_template_matches_harbor_schema(args, tmp_path):
 
     path = run_leaderboard.write_metadata_template(args, tmp_path)
     loaded = load_metadata(path)
-    assert loaded["agent_org_display_name"] == "Block"
+    assert loaded["agent_org_display_name"] == "Snowman AI"
+    assert loaded["agent_display_name"].startswith("Snowman Agent Orchestra")
     assert [m["model_name"] for m in loaded["models"]] == ["frontier", "fast"]
     assert loaded["models"][0]["model_org_display_name"] == "Anthropic"
     assert loaded["models"][1]["model_provider"] == "FILL_ME"

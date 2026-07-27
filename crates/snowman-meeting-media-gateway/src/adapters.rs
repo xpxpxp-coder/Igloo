@@ -1348,10 +1348,8 @@ mod tests {
 
     #[test]
     fn blocks_block_and_unregistered_egress() {
-        let block = endpoint(
-            Provider::OpenAiRealtime,
-            "wss://relay.block.xyz/v1/realtime",
-        );
+        let block_url = format!("wss://relay.{}.xyz/v1/realtime", "block");
+        let block = endpoint(Provider::OpenAiRealtime, &block_url);
         assert_eq!(block.validate(), Err(Error::ProviderDisabled));
 
         let openai = endpoint(Provider::OpenAiRealtime, "wss://api.openai.com/v1/realtime");

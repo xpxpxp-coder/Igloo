@@ -159,7 +159,7 @@ impl RelayInfo {
             supported_nips,
             supported_extensions: Some(vec!["nip-er".to_string()]),
             push: None,
-            software: "https://github.com/snowman-ai-org/snowman-command-center".to_string(),
+            software: "https://github.com/xpxpxp-coder/Igloo".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             limitation: Some(relay_limitation(max_message_length)),
             pairing_relay_url: pairing_relay_url.map(str::to_string),
@@ -387,10 +387,7 @@ mod tests {
     #[test]
     fn build_advertises_snowman_repository_url() {
         let info = RelayInfo::build(None, None, false, DEFAULT_MAX_FRAME_BYTES, None);
-        assert_eq!(
-            info.software,
-            "https://github.com/snowman-ai-org/snowman-command-center"
-        );
+        assert_eq!(info.software, "https://github.com/xpxpxp-coder/Igloo");
     }
 
     #[test]

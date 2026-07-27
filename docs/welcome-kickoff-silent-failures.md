@@ -5,7 +5,8 @@ Context: the Welcome-channel kickoff choreography
 opener, teammates introduce themselves in-thread, and Fizz posts a closer.
 
 The file name says "silent-failures" for link stability (referenced from
-[PR #2066](https://github.com/block/buzz/pull/2066) and
+historical upstream PR #2066 (recorded in
+[`UPSTREAM_PROVENANCE.md`](../UPSTREAM_PROVENANCE.md)) and
 `useWelcomeKickoffStage.ts`); the scope is all kickoff failure paths.
 
 ## The one bug behind all of it
@@ -485,7 +486,7 @@ covers this one team, so it complements rather than replaces §2.
 
 - **Rate-limiting incident.** One Welcome agent produced a 42KB log of
   "rate-limited: quota exceeded" retries within seconds (2026-07-17, remote
-  relay `onboarding.communities.buzz.xyz`). A tight retry loop against a quota
+  relay `onboarding.communities.snowmanai.org`). A tight retry loop against a quota
   makes every other send in the session fail too — including the kickoff's, one
   of the §3 silent paths. Worth a separate look at buzz-acp publish backoff.
   Originally suspected to be the §2 loop burning quota; with §2 fixed, if this

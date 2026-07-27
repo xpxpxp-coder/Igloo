@@ -12,6 +12,10 @@ const KMS_SIGNING_KEY =
   /^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key\/[0-9a-fA-F-]{36}$/;
 const SNOWMAN_IMAGE =
   /^([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com\/snowman-command-center@sha256:([0-9a-f]{64})$/;
+const APPROVED_SOURCE_REPOSITORIES = new Set([
+  "xpxpxp-coder/Igloo",
+  "snowman-ai-org/snowman-command-center",
+]);
 
 export const REQUIRED_EVIDENCE = Object.freeze([
   "audit-checkpoint-recovery",
@@ -169,8 +173,8 @@ export function validateManifest(manifest, rawBytes, options = {}) {
   }
 
   requireExactKeys(manifest.source, ["commit_sha", "repository"], "manifest.source");
-  if (manifest.source.repository !== "snowman-ai-org/Igloo") {
-    fail("manifest.source.repository must be snowman-ai-org/Igloo");
+  if (!APPROVED_SOURCE_REPOSITORIES.has(manifest.source.repository)) {
+    fail("manifest.source.repository is not an approved Snowman repository");
   }
   requireString(manifest.source.commit_sha, "manifest.source.commit_sha", COMMIT);
 

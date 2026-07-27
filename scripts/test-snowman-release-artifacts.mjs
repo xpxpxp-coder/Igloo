@@ -26,9 +26,9 @@ const documents = {
     image_uri: image,
     image_digest: digest,
     verified: true,
-    source_repository: "snowman-ai-org/Igloo",
+    source_repository: "xpxpxp-coder/Igloo",
     source_commit_sha: commit,
-    builder_identity: "https://github.com/snowman-ai-org/Igloo/.github/workflows/docker.yml",
+    builder_identity: "https://github.com/xpxpxp-coder/Igloo/.github/workflows/docker.yml",
     build_parameters_redacted: true,
   },
   signature_verification: {
@@ -50,7 +50,7 @@ const documents = {
   sbom: { bomFormat: "CycloneDX", specVersion: "1.6", components: [{ name: "snowman" }] },
   license_notices: {
     schema_version: "snowman.license-notice-inventory.v1",
-    source_repository: "snowman-ai-org/Igloo",
+    source_repository: "xpxpxp-coder/Igloo",
     source_commit_sha: commit,
     notices_retained: true,
     packages: [{ name: "example", version: "1.0.0", license: "Apache-2.0", notice_sha256: "c".repeat(64) }],
@@ -66,7 +66,7 @@ for (const [name, document] of Object.entries(documents)) {
 }
 const descriptor = {
   schema_version: "snowman.release-artifact-set.v1",
-  source_repository: "snowman-ai-org/Igloo",
+  source_repository: "xpxpxp-coder/Igloo",
   source_commit_sha: commit,
   image_uri: image,
   kms_signing_key_arn: kms,

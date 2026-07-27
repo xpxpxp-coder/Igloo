@@ -77,9 +77,9 @@ upload_fixture() {
 }
 
 fixture_dir="$(mktemp -d "${TMPDIR:-/tmp}/buzz-admin-feedback.XXXXXX")"
-search_image="${REPO_ROOT}/docs/assets/screenshots/media-comments.png"
-workspace_image="${REPO_ROOT}/docs/assets/screenshots/channel-thread.png"
-quality_image="${REPO_ROOT}/docs/assets/screenshots/channel-agents.png"
+search_image="${REPO_ROOT}/product/assets/snowman-agent-team.png"
+workspace_image="${REPO_ROOT}/product/assets/snowman-meeting-team.png"
+quality_image="${REPO_ROOT}/desktop/public/onboarding/starter-team/research-evidence.png"
 composer_diagnostics="${fixture_dir}/composer-diagnostics.txt"
 workspace_diagnostics="${fixture_dir}/workspace-diagnostics.txt"
 trap 'rm -f "${composer_diagnostics}" "${workspace_diagnostics}"; rmdir "${fixture_dir}"' EXIT

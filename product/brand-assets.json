@@ -17,6 +17,14 @@
       "alt": "A coordinated team of Snowman AI specialists working together in a midnight-blue command center"
     },
     {
+      "id": "snowman-meeting-team",
+      "path": "product/assets/snowman-meeting-team.png",
+      "sha256": "67dfc739cdf4885fc7f72e7cd569998c9d5ae0c6fe8dfc8f15d0394198565523",
+      "dimensions": "1536x1024",
+      "role": "Meeting-agent and huddle illustration for live conversation, action capture, task handoffs, and follow-through surfaces",
+      "alt": "A human in a live huddle with Snowman AI specialists coordinating action items and work streams"
+    },
+    {
       "id": "snowman-lead",
       "path": "desktop/public/onboarding/starter-team/snowman-lead.png",
       "sha256": "e04edf48fb69e07267b743129338f01b9402487a4d36fa74c7808b195bcab934",

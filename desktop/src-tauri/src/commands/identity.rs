@@ -683,8 +683,8 @@ mod nostr_identity_binding_tests {
     #[test]
     fn snowman_workforce_enrollment_signs_exact_tenant_bound_shape() {
         let keys = Keys::generate();
-        let expires_at = (Utc::now() + Duration::minutes(5))
-            .to_rfc3339_opts(SecondsFormat::Secs, true);
+        let expires_at =
+            (Utc::now() + Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true);
         let event = build_snowman_workforce_enrollment_event(
             &keys,
             "550e8400-e29b-41d4-a716-446655440000",
@@ -704,10 +704,19 @@ mod nostr_identity_binding_tests {
         let tags = tag_values(&event);
         assert_eq!(tags.len(), 10);
         for expected in [
-            vec!["assertion".into(), "550e8400-e29b-41d4-a716-446655440000".into()],
+            vec![
+                "assertion".into(),
+                "550e8400-e29b-41d4-a716-446655440000".into(),
+            ],
             vec!["broker".into(), "snowman-analyst360-identity".into()],
-            vec!["community".into(), "10000000-0000-4000-8000-000000000001".into()],
-            vec!["purpose".into(), "snowman-workforce-session-enrollment".into()],
+            vec![
+                "community".into(),
+                "10000000-0000-4000-8000-000000000001".into(),
+            ],
+            vec![
+                "purpose".into(),
+                "snowman-workforce-session-enrollment".into(),
+            ],
             vec!["protocol".into(), "snowman-workforce-device-proof".into()],
             vec!["version".into(), "1".into()],
         ] {

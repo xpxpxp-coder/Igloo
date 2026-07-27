@@ -70,9 +70,7 @@ fn parse_configured_relay_url(raw: &str) -> anyhow::Result<RelayUrl> {
     }
     let snowman_controlled = parsed.host_str().is_some_and(|host| {
         host.eq_ignore_ascii_case("snowmanai.org")
-            || host
-                .to_ascii_lowercase()
-                .ends_with(".snowmanai.org")
+            || host.to_ascii_lowercase().ends_with(".snowmanai.org")
             || host.eq_ignore_ascii_case("localhost")
     }) || parsed.host().is_some_and(|host| match host {
         url::Host::Ipv4(ip) => ip.is_loopback(),
@@ -80,9 +78,7 @@ fn parse_configured_relay_url(raw: &str) -> anyhow::Result<RelayUrl> {
         url::Host::Domain(_) => false,
     });
     if !snowman_controlled {
-        anyhow::bail!(
-            "relay URL {raw:?} is outside the Snowman-controlled snowmanai.org boundary"
-        );
+        anyhow::bail!("relay URL {raw:?} is outside the Snowman-controlled snowmanai.org boundary");
     }
     raw.parse::<RelayUrl>()
         .map_err(|error| anyhow::anyhow!("invalid iroh relay URL {raw:?}: {error}"))

@@ -297,4 +297,5 @@ of decrypted payloads and MUST NOT log it at INFO level or above.
 
 ## Reference Implementation
 
-[block/sprout PR #421](https://github.com/block/sprout/pull/421)
+Historical upstream reference: Block/Sprout PR #421, recorded in
+[`UPSTREAM_PROVENANCE.md`](../../UPSTREAM_PROVENANCE.md).

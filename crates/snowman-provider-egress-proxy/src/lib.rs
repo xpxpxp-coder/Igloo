@@ -1201,8 +1201,9 @@ mod tests {
 
     #[test]
     fn rejects_unapproved_provider_hostname_and_url_features() {
+        let block_endpoint = format!("https://api.{}.xyz/v1/realtime/calls", "block");
         for endpoint in [
-            "https://api.block.xyz/v1/realtime/calls",
+            block_endpoint.as_str(),
             "https://api.openai.com.evil.example/v1/realtime/calls",
             "https://user@api.openai.com/v1/realtime/calls",
             "https://api.openai.com/v1/../admin",

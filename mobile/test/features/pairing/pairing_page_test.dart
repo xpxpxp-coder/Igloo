@@ -15,10 +15,7 @@ void main() {
         WidgetHelpers.testable(child: const PairingPage()),
       );
 
-      expect(
-        find.bySemanticsLabel('Snowman Command Center'),
-        findsOneWidget,
-      );
+      expect(find.bySemanticsLabel('Snowman Command Center'), findsOneWidget);
       expect(find.text('Welcome to Snowman Command Center'), findsOneWidget);
       expect(find.text('Scan QR Code'), findsOneWidget);
       expect(find.text('or paste pairing code'), findsOneWidget);

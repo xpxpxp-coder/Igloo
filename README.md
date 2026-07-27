@@ -72,8 +72,8 @@ upstream network connection.
 Prerequisites: Docker, Rust 1.95, Node 24, pnpm 10, and `just`.
 
 ```bash
-git clone https://github.com/snowman-ai-org/snowman-command-center.git
-cd snowman-command-center
+git clone https://github.com/xpxpxp-coder/Igloo.git
+cd Igloo
 . ./bin/activate-hermit
 just setup
 just dev

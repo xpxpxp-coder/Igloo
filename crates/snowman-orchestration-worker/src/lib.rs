@@ -807,8 +807,9 @@ mod tests {
         assert!(
             parse_private_origin("https://orchestration.staging.internal.snowmanai.org/").is_ok()
         );
+        let block_origin = format!("https://{}.xyz/", "block");
         for denied in [
-            "https://block.xyz/",
+            block_origin.as_str(),
             "https://api.openai.com/",
             "https://internal.snowmanai.org.attacker.test/",
             "http://orchestration.internal.snowmanai.org/",

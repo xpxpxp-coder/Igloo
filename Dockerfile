@@ -143,7 +143,7 @@ FROM debian:${DEBIAN_VERSION}-slim AS runtime
 # retained in the shipped notices rather than advertising an upstream runtime.
 LABEL org.opencontainers.image.title="Snowman Command Center" \
       org.opencontainers.image.description="Governed intelligence and agent-operations control plane for Snowman 360" \
-      org.opencontainers.image.source="https://github.com/snowman-ai-org/snowman-command-center" \
+      org.opencontainers.image.source="https://github.com/xpxpxp-coder/Igloo" \
       org.opencontainers.image.url="https://snowmanai.org" \
       org.opencontainers.image.documentation="https://snowmanai.org/docs" \
       org.opencontainers.image.licenses="Apache-2.0"

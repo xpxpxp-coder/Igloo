@@ -779,7 +779,7 @@ test("first-community owner can connect an existing hosted community", async ({
         {
           id: "owned-community",
           name: "North Star",
-          normalized_host: "north-star.communities.buzz.xyz",
+          normalized_host: "north-star.communities.snowmanai.org",
         },
       ],
     },
@@ -810,7 +810,7 @@ test("first-community owner can connect an existing hosted community", async ({
         window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
       ),
     )
-    .toContain("wss://north-star.communities.buzz.xyz");
+    .toContain("wss://north-star.communities.snowmanai.org");
   await page.getByTestId("community-profile-back").click();
   await expect(
     page.getByRole("heading", { name: "Choose a community" }),
@@ -899,7 +899,7 @@ test("first-community owner can create and connect a hosted community", async ({
         window.localStorage.getItem("buzz-community-onboarding-transaction.v1"),
       ),
     )
-    .toContain("wss://bee-lab.communities.buzz.xyz");
+    .toContain("wss://bee-lab.communities.snowmanai.org");
 });
 
 test("hosted community address line stays within the card for a long name", async ({
@@ -1232,7 +1232,7 @@ test("first-community shows the scenario cards for localhost", async ({
 
 test("first-community direct join reaches profile", async ({ page }) => {
   await page.route(
-    "https://onboarding.communities.buzz.xyz/api/join-policy",
+    "https://onboarding.communities.snowmanai.org/api/join-policy",
     async (route) => {
       await route.fulfill({ status: 404 });
     },
@@ -1254,7 +1254,7 @@ test("first-community direct join reaches profile", async ({ page }) => {
   await page.getByRole("button", { name: /Join a community/ }).click();
   await page
     .getByTestId("invite-redeem-input")
-    .fill("wss://onboarding.communities.buzz.xyz");
+    .fill("wss://onboarding.communities.snowmanai.org");
   await page.getByTestId("invite-redeem-submit").click();
 
   await expect(
@@ -1290,7 +1290,7 @@ test("first-community direct join cancel returns to request access", async ({
   page,
 }) => {
   await page.route(
-    "https://onboarding.communities.buzz.xyz/api/join-policy",
+    "https://onboarding.communities.snowmanai.org/api/join-policy",
     async (route) => {
       await route.fulfill({ status: 404 });
     },
@@ -1316,7 +1316,7 @@ test("first-community direct join cancel returns to request access", async ({
   await page.getByRole("button", { name: /Join a community/ }).click();
   await page
     .getByTestId("invite-redeem-input")
-    .fill("wss://onboarding.communities.buzz.xyz");
+    .fill("wss://onboarding.communities.snowmanai.org");
   await page.getByTestId("invite-redeem-submit").click();
   await expect(page.getByText("Connecting securely…")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
@@ -1374,7 +1374,7 @@ test("canceling a join to an existing inactive community preserves it", async ({
     },
     {
       pubkey: BLANK_TYLER_IDENTITY.pubkey,
-      relayUrl: "wss://onboarding.communities.buzz.xyz",
+      relayUrl: "wss://onboarding.communities.snowmanai.org",
     },
   );
   await installMockBridge(
@@ -1396,7 +1396,7 @@ test("canceling a join to an existing inactive community preserves it", async ({
         id: "existing-community-join",
         source: "add-community",
         stage: "connecting",
-        relayUrl: "wss://onboarding.communities.buzz.xyz",
+        relayUrl: "wss://onboarding.communities.snowmanai.org",
         communityName: "Existing",
         createdAt: timestamp,
         updatedAt: timestamp,

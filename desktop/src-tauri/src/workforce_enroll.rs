@@ -9,13 +9,10 @@ pub(crate) const VERSION: &str = "1";
 
 fn bounded_identifier(value: &str) -> bool {
     (3..=200).contains(&value.len())
-        && value
-            .bytes()
-            .enumerate()
-            .all(|(index, byte)| {
-                byte.is_ascii_alphanumeric()
-                    || (index > 0 && matches!(byte, b'.' | b'_' | b':' | b'/' | b'-'))
-            })
+        && value.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphanumeric()
+                || (index > 0 && matches!(byte, b'.' | b'_' | b':' | b'/' | b'-'))
+        })
 }
 
 pub(crate) fn validate_request(

@@ -17,7 +17,14 @@ fi
 
 GH_USER=$(gh api user --jq .login)
 BRANCH="agent-screenshots/${GH_USER}"
-REPO="block/buzz"
+REPO="${SNOWMAN_RELEASE_REPOSITORY:-${GITHUB_REPOSITORY:-xpxpxp-coder/Igloo}}"
+case "$REPO" in
+  xpxpxp-coder/Igloo|snowman-ai-org/snowman-command-center) ;;
+  *)
+    echo "error: unsupported Snowman screenshot repository: $REPO" >&2
+    exit 1
+    ;;
+esac
 
 mapfile -t PNGS < <(find "$PNG_DIR" -maxdepth 1 -name "*.png" -type f | sort)
 if [[ ${#PNGS[@]} -eq 0 ]]; then

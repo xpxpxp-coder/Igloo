@@ -620,17 +620,18 @@ mod pairing_relay_tests {
         )
         .expect("resolve legacy pairing relay");
 
-        assert_eq!(resolved, "wss://flint.communities.snowmanai.org/community/pair");
+        assert_eq!(
+            resolved,
+            "wss://flint.communities.snowmanai.org/community/pair"
+        );
     }
 
     #[test]
     fn main_relay_pairing_uses_main_relay_url() {
-        let resolved = resolve_pairing_relay_url(
-            "wss://sprout-oss.stage.blox.sqprod.co",
-            PairingRelay::MainRelay,
-        )
-        .expect("resolve main pairing relay");
+        let resolved =
+            resolve_pairing_relay_url("wss://relay.staging.snowmanai.org", PairingRelay::MainRelay)
+                .expect("resolve main pairing relay");
 
-        assert_eq!(resolved, "wss://sprout-oss.stage.blox.sqprod.co");
+        assert_eq!(resolved, "wss://relay.staging.snowmanai.org");
     }
 }

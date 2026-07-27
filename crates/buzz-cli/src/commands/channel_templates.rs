@@ -83,7 +83,7 @@ pub fn resolve_templates_path(override_path: Option<&str>) -> Result<PathBuf, Cl
 fn load_templates(path: &Path) -> Result<Vec<ChannelTemplateRecord>, CliError> {
     if !path.exists() {
         return Err(CliError::NotFound(format!(
-            "no channel templates store found at {} (create a template in Buzz Desktop first, \
+            "no channel templates store found at {} (create a template in Snowman Command Center first, \
              or pass --templates-file)",
             path.display()
         )));

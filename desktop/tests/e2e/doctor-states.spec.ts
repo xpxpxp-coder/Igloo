@@ -41,7 +41,7 @@ const BUZZ_AGENT_AVAILABLE = {
   default_args: [],
   mcp_command: "buzz-dev-mcp",
   install_hint: "",
-  install_instructions_url: "https://github.com/block/buzz",
+  install_instructions_url: "https://github.com/xpxpxp-coder/Igloo",
   can_auto_install: false,
   underlying_cli_path: null,
   node_required: false,

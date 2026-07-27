@@ -15,7 +15,7 @@ function manifest() {
     generated_at: "2026-07-26T11:00:00Z",
     expires_at: "2026-08-02T11:00:00Z",
     source: {
-      repository: "snowman-ai-org/Igloo",
+      repository: "xpxpxp-coder/Igloo",
       commit_sha: "a".repeat(40),
     },
     image: {

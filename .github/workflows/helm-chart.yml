@@ -24,7 +24,6 @@ on:
       ref:
         description: "Chart tag ref to publish, e.g. chart-v0.1.0 (required when version is set)"
         required: false
-        default: main
   push:
     # No `paths` filter here: GitHub applies a push `paths` filter to tag
     # pushes too, so a `chart-v*` tag whose commit didn't touch a chart file
@@ -121,6 +120,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          ref: ${{ inputs.ref || '' }}
           fetch-depth: 0
 
       - name: Set up Helm
@@ -153,7 +153,8 @@ jobs:
     # a `chart-v*` tag push or a manual rescue dispatch (which
     # carries inputs.version) — never on `main` pushes or PRs, so an in-progress
     # `main` can never overwrite a released chart version. Mirrors docker.yml's
-    # GHCR publish (login with GITHUB_TOKEN, packages: write, fork override var).
+    # GHCR publish using the Snowman-owned package credential when this source
+    # repository is outside the Snowman organization.
     name: publish chart to GHCR
     if: >
       startsWith(github.ref, 'refs/tags/chart-v') ||
@@ -219,8 +220,8 @@ jobs:
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
         with:
           registry: ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ vars.SNOWMAN_GHCR_USERNAME != '' && vars.SNOWMAN_GHCR_USERNAME || github.repository_owner }}
+          password: ${{ secrets.SNOWMAN_GHCR_TOKEN != '' && secrets.SNOWMAN_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Build chart dependencies
         run: helm dependency build deploy/charts/buzz

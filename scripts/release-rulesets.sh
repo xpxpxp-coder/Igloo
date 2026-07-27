@@ -1,22 +1,31 @@
 #!/usr/bin/env bash
 
-readonly RELEASE_TAG_RULESET_ID=14378754
+readonly SNOWMAN_RELEASE_REPOSITORY="${SNOWMAN_RELEASE_REPOSITORY:-${GITHUB_REPOSITORY:-xpxpxp-coder/Igloo}}"
+readonly RELEASE_TAG_RULESET_ID="${SNOWMAN_RELEASE_TAG_RULESET_ID:-}"
+
+case "$SNOWMAN_RELEASE_REPOSITORY" in
+  xpxpxp-coder/Igloo|snowman-ai-org/snowman-command-center) ;;
+  *)
+    echo "Error: unsupported Snowman release repository '$SNOWMAN_RELEASE_REPOSITORY'" >&2
+    return 1 2>/dev/null || exit 1
+    ;;
+esac
 
 fail_release_ruleset() {
   echo "Error: $*" >&2
   return 1
 }
 
-require_canonical_repository() {
+require_release_repository() {
   local origin_url
 
   origin_url="$(git config --get remote.origin.url 2>/dev/null)" || \
-    fail_release_ruleset "origin is required and must point to block/buzz" || return 1
+    fail_release_ruleset "origin is required and must point to $SNOWMAN_RELEASE_REPOSITORY" || return 1
   case "$origin_url" in
-    git@github.com:block/buzz.git|ssh://git@github.com/block/buzz.git|https://github.com/block/buzz.git|https://github.com/block/buzz)
+    "git@github.com:${SNOWMAN_RELEASE_REPOSITORY}.git"|"ssh://git@github.com/${SNOWMAN_RELEASE_REPOSITORY}.git"|"https://github.com/${SNOWMAN_RELEASE_REPOSITORY}.git"|"https://github.com/${SNOWMAN_RELEASE_REPOSITORY}")
       ;;
     *)
-      fail_release_ruleset "origin must point to canonical block/buzz, not '$origin_url'" || return 1
+      fail_release_ruleset "origin must point to approved Snowman release repository $SNOWMAN_RELEASE_REPOSITORY, not '$origin_url'" || return 1
       ;;
   esac
 }
@@ -25,7 +34,9 @@ require_release_tag_ruleset() {
   local ruleset_endpoint state can_bypass rule_types includes excludes
 
   command -v gh >/dev/null 2>&1 || fail_release_ruleset "gh is required" || return 1
-  ruleset_endpoint="repos/block/buzz/rulesets/$RELEASE_TAG_RULESET_ID"
+  [[ "$RELEASE_TAG_RULESET_ID" =~ ^[1-9][0-9]*$ ]] || \
+    fail_release_ruleset "SNOWMAN_RELEASE_TAG_RULESET_ID must name the Snowman repository's active release ruleset" || return 1
+  ruleset_endpoint="repos/$SNOWMAN_RELEASE_REPOSITORY/rulesets/$RELEASE_TAG_RULESET_ID"
 
   state="$(gh api "$ruleset_endpoint" --jq .enforcement)" || \
     fail_release_ruleset "could not verify Release tag ruleset $RELEASE_TAG_RULESET_ID" || return 1

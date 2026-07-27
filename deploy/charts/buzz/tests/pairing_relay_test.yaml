@@ -34,7 +34,7 @@ tests:
       s3.accessKey: a
       s3.secretKey: s
       pairingRelay.enabled: true
-      pairingRelay.url: wss://pairing.buzz.xyz
+      pairingRelay.url: wss://pairing.snowmanai.org
     asserts:
       - equal:
           path: kind
@@ -50,5 +50,5 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: BUZZ_PAIRING_RELAY_URL
-            value: wss://pairing.buzz.xyz
+            value: wss://pairing.snowmanai.org
         template: templates/deployment.yaml

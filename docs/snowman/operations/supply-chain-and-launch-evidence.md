@@ -13,7 +13,9 @@ Before a staging verification window, normalize and retain these six files:
 
 1. the resolved OCI image-index manifest and platform count;
 2. the CycloneDX or SPDX JSON SBOM;
-3. provenance verification bound to `snowman-ai-org/Igloo`, the exact commit,
+3. provenance verification bound to the current approved repository
+   (`xpxpxp-coder/Igloo`, or `snowman-ai-org/snowman-command-center` after the
+   planned ownership migration), the exact commit,
    image digest, and Snowman GitHub builder identity;
 4. KMS signature verification bound to the exact release-signing key and image;
 5. the completed vulnerability report with current scanner database time and

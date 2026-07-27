@@ -155,7 +155,7 @@ Classes are strictly ordered: `silent` < `default` < `time_sensitive` < `urgent`
 
 The executor MUST restrict `urgent` to the descriptor-advertised allow-list of approval-request kinds whose eligibility is decidable from the public event envelope (`invalid: class not permitted for kind`). Urgent DMs are explicitly out of scope for v1: gift-wrapped DM content is opaque to the executor, so no privacy-safe urgency marker exists yet; a future revision may add one.
 
-`silent` remains a matching preference only. The public Buzz APNs profile sends the one fixed reconnect alert and does not expose relay-selected notification classes to the transport boundary.
+`silent` remains a matching preference only. The public Snowman APNs profile sends the one fixed reconnect alert and does not expose relay-selected notification classes to the transport boundary.
 
 Clients MUST NOT register any lease or subscription as a side effect of joining a channel or surface — absent explicit user opt-in the notifiable set is empty.
 
@@ -224,7 +224,7 @@ Common invariant, all transports: the application payload is a transport-owned r
 
 ### APNs
 
-The APNs application body is the exact UTF-8 byte constant `{"aps":{"alert":{"body":"Reconnect to your relay now"},"mutable-content":1}}`. It has no custom member, event identifier, unread count, or relay-supplied byte. The constant mutable-content flag lets the Buzz Notification Service Extension compute a local badge and, when separately authorized data is available, replace the generic text; the gateway does not carry that data. The gateway MUST send that exact body for every accepted APNs attempt; it MUST NOT serialize any relay request, endpoint grant, provider response, or generic JSON value into the body. `apns-topic`, environment, credentials, push type `alert`, and priority `10` come only from gateway configuration. `apns-id` is a canonical UUID and `apns-expiration` is bounded by the endpoint capability and a gateway-local ceiling.
+The APNs application body is the exact UTF-8 byte constant `{"aps":{"alert":{"body":"Reconnect to your relay now"},"mutable-content":1}}`. It has no custom member, event identifier, unread count, or relay-supplied byte. The constant mutable-content flag lets the Snowman Notification Service Extension compute a local badge and, when separately authorized data is available, replace the generic text; the gateway does not carry that data. The gateway MUST send that exact body for every accepted APNs attempt; it MUST NOT serialize any relay request, endpoint grant, provider response, or generic JSON value into the body. `apns-topic`, environment, credentials, push type `alert`, and priority `10` come only from gateway configuration. `apns-id` is a canonical UUID and `apns-expiration` is bounded by the endpoint capability and a gateway-local ceiling.
 
 ### FCM
 
@@ -258,9 +258,9 @@ A pubkey-only client cannot create, replace, or revoke a lease. If a platform en
 
 Implementations MUST NOT interpret this section as NIP-26 delegation. A future specification may define a narrowly scoped installation authorization for unattended endpoint rotation, but such a capability is neither required nor implied here.
 
-## Public APNs Gateway Profile (Buzz, normative)
+## Public APNs Gateway Profile (Snowman, normative)
 
-This section registers the public last-hop profile served at `https://push.buzz.xyz`. It is an optional profile of NIP-PL, but every requirement in this section is normative for implementations that use it. The gateway is stateful: it retains installation authority, encrypted APNs-token custody, relay delegations, replay reservations, and endpoint quotas. The relay remains the executor and retains lease acceptance, matching, tenant authorization, endpoint uniqueness, coalescing, durable jobs/retries, and lease-generation invalidation.
+This section registers the public last-hop profile served at `https://push.snowmanai.org`. It is an optional profile of NIP-PL, but every requirement in this section is normative for implementations that use it. The gateway is stateful: it retains installation authority, encrypted APNs-token custody, relay delegations, replay reservations, and endpoint quotas. The relay remains the executor and retains lease acceptance, matching, tenant authorization, endpoint uniqueness, coalescing, durable jobs/retries, and lease-generation invalidation.
 
 ### Registered values and lease mapping
 
@@ -311,7 +311,7 @@ Request members, in any request order:
 `expires_at` MUST satisfy `now < expires_at <= now + configured_max_installation_lifetime`; the selected profile MUST be enabled. The exact transcript is domain `buzz.push.enroll.v1` followed by this ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/installations","challenge_id":"<uuid>","challenge":"<challenge>","key_id":"<standard-base64>","app_profile":"<registered-profile>","endpoint":"<lowercase-hex>","endpoint_epoch":1,"expires_at":<unix-seconds>}
+{"v":1,"audience":"https://push.snowmanai.org/v1/installations","challenge_id":"<uuid>","challenge":"<challenge>","key_id":"<standard-base64>","app_profile":"<registered-profile>","endpoint":"<lowercase-hex>","endpoint_epoch":1,"expires_at":<unix-seconds>}
 ```
 
 The gateway verifies Apple's attestation chain, configured application identifier, production AAGUID, key identifier, and transcript. Apple documents no APNs-token-to-App-Attest-key binding; token provenance at enrollment is an explicit bootstrap assumption. It then stores only encrypted token custody plus its fingerprint. Success `201`:
@@ -333,7 +333,7 @@ Invalid attestation is `401 invalid_attestation`; a consumed/expired challenge o
 `not_before <= now + 300`, `not_before < expires_at`, and `expires_at <= min(now + configured_max_grant_lifetime, installation.expires_at)`. The endpoint epoch MUST equal the current installation epoch. For each `(installation_handle, relay_pubkey)`, generation MUST strictly increase. Transcript domain `buzz.push.delegate.v1`; ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/delegations","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"generation":<integer>,"relay_pubkey":"<hex>","not_before":<integer>,"expires_at":<integer>}
+{"v":1,"audience":"https://push.snowmanai.org/v1/delegations","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"generation":<integer>,"relay_pubkey":"<hex>","not_before":<integer>,"expires_at":<integer>}
 ```
 
 Success `201`: `{"endpoint_grant":"<opaque-capability>"}`. The sealed grant contains no APNs token. Grant-key rotation MUST retain decrypt-only predecessor keys through the maximum lifetime of grants they issued.
@@ -349,7 +349,7 @@ Success `201`: `{"endpoint_grant":"<opaque-capability>"}`. The sealed grant cont
 `new_endpoint_epoch` MUST equal `endpoint_epoch + 1` without overflow. Transcript domain `buzz.push.rotate-endpoint.v1`; ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/installations/endpoint","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"new_endpoint_epoch":<integer>,"endpoint":"<lowercase-hex>"}
+{"v":1,"audience":"https://push.snowmanai.org/v1/installations/endpoint","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"new_endpoint_epoch":<integer>,"endpoint":"<lowercase-hex>"}
 ```
 
 A successful atomic rotation invalidates every grant sealed to the old epoch and returns `200 {"status":"rotated"}`.
@@ -365,7 +365,7 @@ A successful atomic rotation invalidates every grant sealed to the old epoch and
 Transcript domain `buzz.push.revoke-delegation.v1`; ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/delegations/revoke","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","relay_pubkey":"<hex>","generation":<integer>}
+{"v":1,"audience":"https://push.snowmanai.org/v1/delegations/revoke","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","relay_pubkey":"<hex>","generation":<integer>}
 ```
 
 The generation identifies the current delegation generation. Success is `200 {"status":"revoked"}`.
@@ -379,14 +379,14 @@ The generation identifies the current delegation generation. Success is `200 {"s
 `new_endpoint_epoch` MUST equal `endpoint_epoch + 1` without overflow. Transcript domain `buzz.push.revoke-installation.v1`; ordered object:
 
 ```json
-{"v":1,"audience":"https://push.buzz.xyz/v1/installations/revoke","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"new_endpoint_epoch":<integer>}
+{"v":1,"audience":"https://push.snowmanai.org/v1/installations/revoke","challenge_id":"<uuid>","challenge":"<challenge>","installation_handle":"<uuid>","endpoint_epoch":<integer>,"new_endpoint_epoch":<integer>}
 ```
 
 Success is `200 {"status":"revoked"}`. The revocation atomically invalidates the installation and every delegation.
 
 ### Relay delivery
 
-`POST /v1/deliveries/apns` has the exact externally configured URL `https://push.buzz.xyz/v1/deliveries/apns`. Request:
+`POST /v1/deliveries/apns` has the exact externally configured URL `https://push.snowmanai.org/v1/deliveries/apns`. Request:
 
 ```json
 {"v":1,"endpoint_grant":"<opaque-capability>","request_id":"<uuid>","expires_at":<unix-seconds>}
@@ -409,7 +409,7 @@ Responses:
 
 The gateway performs one APNs request, except that an APNs expired-provider-token response permits one credential refresh and one retry. The application body is always the exact constant registered in the APNs transport profile above; no request or grant field enters it.
 
-## Implementation Notes (Buzz, non-normative)
+## Implementation Notes (Snowman, non-normative)
 
 Per `RESEARCH/PUSH_RELAY_INTEGRATION.md` (pinned SHA `88c089d`): the lease matcher hooks the generic post-storage dispatch seam (`buzz-relay/src/handlers/event.rs:245 dispatch_persistent_event`), not `handle_side_effects`; Redis pub/sub is community-scoped routing precedent but not the durable offline-matching source; `event_mentions` is a ready indexed primitive for self-`#p` and needs-action subscriptions but is **not** authorization — private-channel wakes re-check same-community visibility at match/send time. Known footgun: some internal producers bypass `dispatch_persistent_event`; implementation must centralize durable dispatch or add push dispatch at each internal publish path.
 
@@ -439,4 +439,4 @@ Zombie leases (e.g. `#h` after leaving a channel) are neutralized by match-time 
 - NIP-11 `supported_extensions`: contains `"nip-pl"` pre-numbering; descriptor object `push` as specified in Executor Discovery
 - Classes: `silent`, `default`, `time_sensitive`, `urgent`
 - `h_grammar` values: `"uuid-v4-lowercase"` (initial entry; origins may register additional grammars with this NIP)
-- Public APNs gateway profile: base URL `https://push.buzz.xyz`; app profiles `buzz-ios-production`, `buzz-ios-sandbox`; wire version `1`
+- Public APNs gateway profile: base URL `https://push.snowmanai.org`; app profiles `buzz-ios-production`, `buzz-ios-sandbox`; wire version `1`

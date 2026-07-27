@@ -1509,7 +1509,7 @@ mod tests {
 
     #[test]
     fn codex_network_env_wss_url() {
-        let result = codex_network_env("codex-acp", "wss://sprout-oss.stage.blox.sqprod.co");
+        let result = codex_network_env("codex-acp", "wss://relay.staging.snowmanai.org");
         assert_eq!(
             result,
             Some(("CODEX_CONFIG".to_string(), CODEX_CONFIG_JSON.to_string()))

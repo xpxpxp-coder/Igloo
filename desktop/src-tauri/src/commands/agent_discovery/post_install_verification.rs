@@ -1,7 +1,7 @@
 use crate::managed_agents::{AcpAvailabilityStatus, InstallStepResult};
 
 pub(super) fn run(runtime_id: &str, steps: &mut Vec<InstallStepResult>) {
-    // Observe PATH changes and binaries added after Buzz launched.
+    // Observe PATH changes and binaries added after Snowman Command Center launched.
     crate::managed_agents::refresh_login_shell_path();
     crate::managed_agents::clear_resolve_cache();
 
@@ -28,7 +28,7 @@ fn failure(
         success: false,
         stdout: String::new(),
         stderr: format!(
-            "The installer finished, but Buzz still could not use {runtime_id} (observed: {observed})."
+            "The installer finished, but Snowman Command Center still could not use {runtime_id} (observed: {observed})."
         ),
         exit_code: None,
         hint: Some(

@@ -10,6 +10,10 @@ const COMMIT = /^[0-9a-f]{40}$/;
 const KMS_KEY = /^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key\/[0-9a-fA-F-]{36}$/;
 const IMAGE = /^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com\/snowman-command-center@sha256:([0-9a-f]{64})$/;
 const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
+const APPROVED_SOURCE_REPOSITORIES = new Set([
+  "xpxpxp-coder/Igloo",
+  "snowman-ai-org/snowman-command-center",
+]);
 const ARTIFACT_NAMES = Object.freeze([
   "image_manifest",
   "license_notices",
@@ -93,8 +97,8 @@ export function verifyReleaseArtifacts(descriptor, descriptorPath) {
   if (descriptor.schema_version !== "snowman.release-artifact-set.v1") {
     fail("descriptor.schema_version is invalid");
   }
-  if (descriptor.source_repository !== "snowman-ai-org/Igloo") {
-    fail("descriptor.source_repository must be snowman-ai-org/Igloo");
+  if (!APPROVED_SOURCE_REPOSITORIES.has(descriptor.source_repository)) {
+    fail("descriptor.source_repository is not an approved Snowman repository");
   }
   if (typeof descriptor.source_commit_sha !== "string" || !COMMIT.test(descriptor.source_commit_sha)) {
     fail("descriptor.source_commit_sha is invalid");
@@ -140,7 +144,9 @@ export function verifyReleaseArtifacts(descriptor, descriptorPath) {
     provenance.source_commit_sha !== descriptor.source_commit_sha ||
     provenance.build_parameters_redacted !== true ||
     typeof provenance.builder_identity !== "string" ||
-    !provenance.builder_identity.startsWith("https://github.com/snowman-ai-org/")
+    !provenance.builder_identity.startsWith(
+      `https://github.com/${descriptor.source_repository}/.github/workflows/docker.yml`,
+    )
   ) {
     fail("provenance is not a verified Snowman source/build binding");
   }
