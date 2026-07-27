@@ -15,7 +15,7 @@ type SortOrder = "newest" | "oldest" | "name";
 
 function ListItemSkeleton() {
   return (
-    <div className="py-6">
+    <div aria-hidden="true" className="py-6">
       <div className="flex items-center gap-2">
         <div className="h-4 w-4 shrink-0 animate-pulse rounded bg-black/10 dark:bg-white/10" />
         <div className="h-5 w-48 animate-pulse rounded bg-black/10 dark:bg-white/10" />
@@ -130,11 +130,17 @@ export function ReposPage() {
 
   if (isLoading) {
     return (
-      <div className="flex w-full flex-1 gap-8 bg-[#F3F3F3] px-4 py-8 dark:bg-[#171717]">
+      <div
+        aria-busy="true"
+        aria-live="polite"
+        className="flex w-full flex-1 gap-8 bg-[#F3F3F3] px-4 py-8 dark:bg-[#171717]"
+        role="status"
+      >
         <div className="min-w-0 flex-1">
           <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-black dark:text-white">
             <BookMarked className="h-4 w-4" /> Repositories
           </h2>
+          <span className="sr-only">Loading repositories</span>
           <div className="divide-y">
             {["a", "b", "c", "d", "e"].map((key) => (
               <ListItemSkeleton key={key} />

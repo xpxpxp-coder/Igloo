@@ -744,6 +744,9 @@ export function AppShell() {
                 className="buzz-huddle-shell relative h-dvh overflow-hidden overscroll-none"
                 data-huddle-open={isHuddleDrawerOpen}
               >
+                <a className="snowman-skip-link" href="#snowman-main-content">
+                  Skip to main content
+                </a>
                 <div
                   className={cn(
                     "buzz-huddle-app-surface z-10 flex min-h-0 flex-row overflow-hidden bg-background",
@@ -917,6 +920,8 @@ export function AppShell() {
                         <MainInsetProvider mainInsetRef={mainInsetRef}>
                           <SidebarInset
                             ref={mainInsetRef}
+                            id="snowman-main-content"
+                            tabIndex={-1}
                             className="isolate min-h-0 min-w-0 overflow-hidden bg-sidebar"
                             data-buzz-glass-inset
                             data-buzz-shadow-viewport

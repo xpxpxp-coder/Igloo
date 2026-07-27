@@ -6,7 +6,8 @@
     "brand:generate": "node scripts/generate-snowman-product.mjs",
     "brand:check": "node scripts/generate-snowman-product.mjs --check",
     "brand:surfaces": "node scripts/check-snowman-brand.mjs",
-    "check": "pnpm brand:check && pnpm brand:surfaces && pnpm -r check"
+    "ui:accessibility": "node scripts/check-snowman-ui-accessibility.mjs",
+    "check": "pnpm brand:check && pnpm brand:surfaces && pnpm ui:accessibility && pnpm -r check"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6"

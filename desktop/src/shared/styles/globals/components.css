@@ -1,4 +1,23 @@
 @layer components {
+  .snowman-skip-link {
+    position: fixed;
+    left: 0.75rem;
+    top: 0.75rem;
+    z-index: 1000;
+    border-radius: 0.5rem;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    padding: 0.625rem 0.875rem;
+    box-shadow: 0 0 0 2px hsl(var(--ring));
+    transform: translateY(calc(-100% - 1rem));
+    transition: transform var(--motion-duration-fast)
+      var(--motion-ease-standard);
+  }
+
+  .snowman-skip-link:focus-visible {
+    transform: translateY(0);
+  }
+
   .buzz-side-panel-enter {
     animation: buzz-side-panel-enter 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
     transform-origin: right center;
@@ -142,6 +161,10 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
+    .snowman-skip-link {
+      transition: none;
+    }
+
     .buzz-side-panel-enter {
       animation: none;
       will-change: auto;

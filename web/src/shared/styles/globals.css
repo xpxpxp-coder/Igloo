@@ -98,4 +98,43 @@
     @apply bg-background text-foreground antialiased;
     font-family: "Inter Variable", Inter, "Avenir Next", "Segoe UI", sans-serif;
   }
+
+  :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 3px;
+  }
+
+  .snowman-skip-link {
+    position: fixed;
+    left: 0.75rem;
+    top: 0.75rem;
+    z-index: 1000;
+    border-radius: 0.5rem;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    padding: 0.625rem 0.875rem;
+    box-shadow: 0 0 0 2px hsl(var(--ring));
+    transform: translateY(calc(-100% - 1rem));
+    transition: transform 180ms ease;
+  }
+
+  .snowman-skip-link:focus-visible {
+    transform: translateY(0);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html:focus-within {
+      scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-delay: 0ms !important;
+      animation-duration: 1ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 1ms !important;
+    }
+  }
 }

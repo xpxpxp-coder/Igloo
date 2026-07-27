@@ -49,11 +49,16 @@ class AgentActivitySheet extends HookConsumerWidget {
           sc.hasClients) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (sc.hasClients) {
-            sc.animateTo(
-              sc.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 150),
-              curve: Curves.easeOut,
-            );
+            final destination = sc.position.maxScrollExtent;
+            if (MediaQuery.disableAnimationsOf(context)) {
+              sc.jumpTo(destination);
+            } else {
+              sc.animateTo(
+                destination,
+                duration: const Duration(milliseconds: 150),
+                curve: Curves.easeOut,
+              );
+            }
           }
         });
       }
@@ -155,56 +160,81 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (connection == ObserverConnectionState.error) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(LucideIcons.circleX, size: 24, color: context.colors.error),
-            const SizedBox(height: Grid.xxs),
-            Text(
-              'Error: ${errorMessage ?? 'Unknown error'}',
-              style: context.textTheme.bodySmall?.copyWith(
-                color: context.colors.error,
-              ),
-              textAlign: TextAlign.center,
+      return Semantics(
+        container: true,
+        liveRegion: true,
+        label: 'Agent activity error: ${errorMessage ?? 'Unknown error'}',
+        child: ExcludeSemantics(
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  LucideIcons.circleX,
+                  size: 24,
+                  color: context.colors.error,
+                ),
+                const SizedBox(height: Grid.xxs),
+                Text(
+                  'Error: ${errorMessage ?? 'Unknown error'}',
+                  style: context.textTheme.bodySmall?.copyWith(
+                    color: context.colors.error,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       );
     }
 
     if (connection == ObserverConnectionState.idle) {
-      return Center(
-        child: Text(
-          'Not connected',
-          style: context.textTheme.bodySmall?.copyWith(
-            color: context.colors.onSurfaceVariant,
+      return Semantics(
+        container: true,
+        liveRegion: true,
+        label: 'Agent activity is not connected',
+        child: ExcludeSemantics(
+          child: Center(
+            child: Text(
+              'Not connected',
+              style: context.textTheme.bodySmall?.copyWith(
+                color: context.colors.onSurfaceVariant,
+              ),
+            ),
           ),
         ),
       );
     }
 
     // connecting or open — show spinner
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 24,
-            height: 24,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: context.colors.onSurfaceVariant,
-            ),
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      label: 'Waiting for agent activity',
+      child: ExcludeSemantics(
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: context.colors.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: Grid.xxs),
+              Text(
+                'Waiting for activity\u2026',
+                style: context.textTheme.bodySmall?.copyWith(
+                  color: context.colors.onSurfaceVariant,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: Grid.xxs),
-          Text(
-            'Waiting for activity\u2026',
-            style: context.textTheme.bodySmall?.copyWith(
-              color: context.colors.onSurfaceVariant,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -227,32 +257,39 @@ class _ConnectionBadge extends StatelessWidget {
       ObserverConnectionState.error => (context.colors.error, 'Error'),
     };
 
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: Grid.xxs,
-        vertical: Grid.quarter,
-      ),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      label: 'Agent activity connection: $label',
+      child: ExcludeSemantics(
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: Grid.xxs,
+            vertical: Grid.quarter,
           ),
-          const SizedBox(width: Grid.half),
-          Text(
-            label,
-            style: context.textTheme.labelSmall?.copyWith(
-              color: color,
-              fontWeight: FontWeight.w600,
-            ),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
           ),
-        ],
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: Grid.half),
+              Text(
+                label,
+                style: context.textTheme.labelSmall?.copyWith(
+                  color: color,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

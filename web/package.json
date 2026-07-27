@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node ../scripts/check-snowman-ui-budgets.mjs web dist",
     "build:e2e": "tsc && vite build --mode e2e",
     "typecheck": "tsc --noEmit",
     "check:file-sizes": "node ./scripts/check-file-sizes.mjs",

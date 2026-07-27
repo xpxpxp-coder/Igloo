@@ -64,7 +64,11 @@ function StateView<T>({
   children: (data: T) => ReactNode;
 }) {
   if (resource.loading && !resource.data)
-    return <div className="state">Loading…</div>;
+    return (
+      <div aria-busy="true" aria-live="polite" className="state" role="status">
+        Loading…
+      </div>
+    );
   if (resource.error && !resource.data) {
     const forbidden =
       resource.error instanceof ApiFailure && resource.error.status === 403;
@@ -796,6 +800,9 @@ export function App() {
   );
   return (
     <div className="app">
+      <a className="skip-link" href="#snowman-operations-main">
+        Skip to main content
+      </a>
       <header className="app-header">
         <Link href="/reports" className="brand">
           <span className="brand-mark">
@@ -812,7 +819,9 @@ export function App() {
           </Link>
         </nav>
       </header>
-      <main>{content}</main>
+      <main id="snowman-operations-main" tabIndex={-1}>
+        {content}
+      </main>
     </div>
   );
 }

@@ -240,7 +240,13 @@ export function RepoDetailPage() {
     }
   }, [error]);
 
-  if (isLoading) return <DetailSkeleton />;
+  if (isLoading)
+    return (
+      <div aria-busy="true" aria-live="polite" role="status">
+        <span className="sr-only">Loading repository details</span>
+        <DetailSkeleton />
+      </div>
+    );
 
   if (!repo) {
     return (
@@ -304,7 +310,10 @@ export function RepoDetailPage() {
 
         {/* Clone/browse error banner */}
         {browseError && (
-          <div className="mt-6 rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <div
+            className="mt-6 rounded-md border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+            role="alert"
+          >
             Failed to load repository contents:{" "}
             {browseError instanceof Error
               ? browseError.message
