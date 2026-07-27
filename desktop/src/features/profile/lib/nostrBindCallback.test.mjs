@@ -39,6 +39,18 @@ test("buildNostrBindCallbackUrl replaces an existing fragment", () => {
   assert.equal(new URL(result).hash, "#buzz_bind=v1.c2lnbmVk");
 });
 
+test("buildNostrBindCallbackUrl supports the Snowman enrollment fragment", () => {
+  const result = buildNostrBindCallbackUrl(
+    "https://analyst360.snowmanai.org/?snowman_enrollment=challenge",
+    "signed",
+    "snowman_enrollment",
+  );
+  assert.equal(
+    new URL(result).hash,
+    "#snowman_enrollment=v1.c2lnbmVk",
+  );
+});
+
 test("buildNostrBindCallbackUrl rejects callback URLs beyond the opener ceiling", () => {
   assert.throws(
     () =>

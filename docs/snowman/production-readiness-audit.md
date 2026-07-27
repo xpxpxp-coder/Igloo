@@ -56,6 +56,10 @@ the highest risks without changing the production-readiness verdict:
 - serialized, receipt-preserving human enrollment retries that recover from a
   lost HTTP response without creating a second session, while rejecting any
   assertion reuse whose authority, body, identity, device, or proof differs;
+- a Snowman desktop enrollment protocol that signs the exact assertion,
+  broker, community, purpose, nonce, human verification code, Snowman origin,
+  expiry, protocol, and version; external origins and cross-origin callbacks
+  fail before device signing;
 - tenant-scoped durable work requests/tasks, model-per-specialist routes,
   fenced leases, retry/dead-letter recovery, exact-snapshot approvals, immutable
   context references, and hard token/cost ledgers;

@@ -29,6 +29,7 @@ mod secret_store;
 mod shutdown;
 mod templates;
 mod util;
+mod workforce_enroll;
 use app_state::{build_app_state, resolve_persisted_identity, AppState};
 use builderlab::*;
 use commands::*;
@@ -708,6 +709,7 @@ pub fn run() {
             discover_managed_agent_prereqs,
             sign_event,
             sign_nostr_identity_binding,
+            sign_snowman_workforce_enrollment,
             sign_out,
             decrypt_observer_event,
             build_observer_control_event,

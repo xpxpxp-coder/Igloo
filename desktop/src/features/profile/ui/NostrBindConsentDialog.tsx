@@ -11,7 +11,10 @@ import type { NostrBindDeepLinkPayload } from "@/shared/deep-link";
 import { listenForNostrBindDeepLinks } from "@/shared/deep-link";
 import { OnboardingSlideTransition } from "@/features/onboarding/ui/OnboardingSlideTransition";
 import { buildNostrBindCallbackUrl } from "@/features/profile/lib/nostrBindCallback";
-import { signNostrIdentityBinding } from "@/features/profile/lib/nostrIdentityBinding";
+import {
+  signNostrIdentityBinding,
+  signSnowmanWorkforceEnrollment,
+} from "@/features/profile/lib/nostrIdentityBinding";
 import { cn } from "@/shared/lib/cn";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { Button } from "@/shared/ui/button";
@@ -32,6 +35,7 @@ const VERIFICATION_CODE_MISMATCH_MESSAGE =
 const COPY_BUTTON_LABEL_CLASS =
   "col-start-1 row-start-1 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:translate-y-0 motion-reduce:duration-0";
 const NOSTR_BIND_PREVIEW_PAYLOAD: NostrBindDeepLinkPayload = {
+  bindingKind: "nostr_identity",
   challengeId: "550e8400-e29b-41d4-a716-446655440000",
   nonce: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567",
   verificationCode: "123456",
@@ -133,9 +137,12 @@ async function notifySignedResponseReady(callbackUrl: string | undefined) {
 async function returnSignedResponseToBrowser(
   callbackUrl: string,
   signedResponse: string,
+  fragmentKey: string,
 ): Promise<string | null> {
   try {
-    await openUrl(buildNostrBindCallbackUrl(callbackUrl, signedResponse));
+    await openUrl(
+      buildNostrBindCallbackUrl(callbackUrl, signedResponse, fragmentKey),
+    );
     return null;
   } catch (error) {
     console.warn("return signed nostr binding response failed:", error);
@@ -537,15 +544,34 @@ export function NostrBindConsentDialog() {
     setError(null);
     setCopyFailed(false);
     try {
-      const signed = isPreview
-        ? NOSTR_BIND_PREVIEW_SIGNED_RESPONSE
-        : await signNostrIdentityBinding({
-            challengeId: payload.challengeId,
-            nonce: payload.nonce,
-            verificationCode: enteredVerificationCode,
-            origin: payload.origin,
-            expiresAt: payload.expiresAt,
-          });
+      let signed: string;
+      if (isPreview) {
+        signed = NOSTR_BIND_PREVIEW_SIGNED_RESPONSE;
+      } else if (payload.bindingKind === "snowman_workforce_session") {
+        if (!payload.broker || !payload.community || !payload.purpose) {
+          throw new Error("Snowman workforce enrollment link is incomplete.");
+        }
+        signed = await signSnowmanWorkforceEnrollment({
+          assertionId: payload.challengeId,
+          broker: payload.broker,
+          community: payload.community,
+          purpose: payload.purpose,
+          nonce: payload.nonce,
+          verificationCode: enteredVerificationCode,
+          origin: payload.origin,
+          expiresAt: payload.expiresAt,
+          protocol: "snowman-workforce-device-proof",
+          version: "1",
+        });
+      } else {
+        signed = await signNostrIdentityBinding({
+          challengeId: payload.challengeId,
+          nonce: payload.nonce,
+          verificationCode: enteredVerificationCode,
+          origin: payload.origin,
+          expiresAt: payload.expiresAt,
+        });
+      }
       if (activeSignAttemptRef.current !== attempt) {
         return;
       }
@@ -555,6 +581,9 @@ export function NostrBindConsentDialog() {
         const callbackError = await returnSignedResponseToBrowser(
           payload.callbackUrl,
           signed,
+          payload.bindingKind === "snowman_workforce_session"
+            ? "snowman_enrollment"
+            : "buzz_bind",
         );
         if (activeSignAttemptRef.current !== attempt) {
           return;

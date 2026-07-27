@@ -243,8 +243,8 @@ requireFragment(
 );
 requireFragment(
   "crates/buzz-db/src/workforce.rs",
-  "proactive action would exceed the request cost ceiling",
-  "proactive work must reserve against the originating request budget",
+  "proactive action would exceed a request cost or token ceiling",
+  "proactive work must reserve against the originating request cost and token budgets",
 );
 requireFragment(
   "crates/snowman-workforce/src/lib.rs",

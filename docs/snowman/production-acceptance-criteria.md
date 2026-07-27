@@ -39,6 +39,10 @@ evidence for a runtime, recovery, accessibility, or operational claim.
   nonce/state/PKCE, authentication time, and tenant binding fail closed.
 - A human-to-Nostr binding is explicit, tenant-scoped, auditable, revocable, and
   protected against reassignment.
+- The hosted browser issues a short-lived challenge bound to the live workforce
+  session, tenant/project, broker, community, and Snowman HTTPS origin; the
+  desktop signs the nonce, verification code, expiry, and exact enrollment
+  scope, then returns the proof only in a same-origin URL fragment.
 - A response-loss retry with the same enrollment assertion and proof returns
   the original durable session receipt; reuse with any changed authority,
   identity, device, request body, or proof fails closed.

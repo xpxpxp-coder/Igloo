@@ -17,9 +17,13 @@ function encodeBase64Url(value: string): string {
 export function buildNostrBindCallbackUrl(
   callbackUrl: string,
   signedResponse: string,
+  fragmentKey = CALLBACK_FRAGMENT_KEY,
 ): string {
   const url = new URL(callbackUrl);
-  url.hash = `${CALLBACK_FRAGMENT_KEY}=${CALLBACK_PAYLOAD_VERSION}.${encodeBase64Url(signedResponse)}`;
+  if (!/^[a-z][a-z0-9_]{2,63}$/.test(fragmentKey)) {
+    throw new Error("Invalid callback fragment key.");
+  }
+  url.hash = `${fragmentKey}=${CALLBACK_PAYLOAD_VERSION}.${encodeBase64Url(signedResponse)}`;
   const result = url.toString();
   if (result.length > MAX_CALLBACK_URL_LENGTH) {
     throw new Error("Signed response is too large to return to the browser.");

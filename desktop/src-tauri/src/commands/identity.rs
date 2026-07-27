@@ -9,6 +9,7 @@ use crate::{
     models::IdentityInfo,
     nostr_bind,
     relay::{self, relay_api_base_url_with_override, relay_ws_url_with_override},
+    workforce_enroll,
 };
 
 /// Encode `pubkey` as npub bech32 and truncate it for display: first 10 chars
@@ -437,6 +438,101 @@ pub async fn sign_nostr_identity_binding(
     .map_err(|e| format!("spawn_blocking failed: {e}"))?
 }
 
+pub(crate) fn build_snowman_workforce_enrollment_event(
+    keys: &Keys,
+    assertion_id: &str,
+    broker: &str,
+    community: &str,
+    purpose: &str,
+    nonce: &str,
+    verification_code: &str,
+    origin: &str,
+    expires_at: &str,
+    protocol: &str,
+    version: &str,
+) -> Result<Event, String> {
+    workforce_enroll::validate_signing_request(
+        assertion_id,
+        broker,
+        community,
+        purpose,
+        nonce,
+        verification_code,
+        origin,
+        expires_at,
+        protocol,
+        version,
+    )?;
+    let tags = vec![
+        nostr_bind_tag("assertion", assertion_id)?,
+        nostr_bind_tag("broker", broker)?,
+        nostr_bind_tag("community", community)?,
+        nostr_bind_tag("purpose", purpose)?,
+        nostr_bind_tag("nonce", nonce)?,
+        nostr_bind_tag("verification_code", verification_code)?,
+        nostr_bind_tag("origin", origin)?,
+        nostr_bind_tag("expires_at", expires_at)?,
+        nostr_bind_tag("protocol", protocol)?,
+        nostr_bind_tag("version", version)?,
+    ];
+    EventBuilder::new(Kind::Custom(nostr_bind::KIND), nostr_bind::CONTENT)
+        .tags(tags)
+        .sign_with_keys(keys)
+        .map_err(|error| format!("sign failed: {error}"))
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn sign_snowman_workforce_enrollment(
+    assertion_id: String,
+    broker: String,
+    community: String,
+    purpose: String,
+    nonce: String,
+    verification_code: String,
+    origin: String,
+    expires_at: String,
+    protocol: String,
+    version: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    workforce_enroll::validate_signing_request(
+        &assertion_id,
+        &broker,
+        &community,
+        &purpose,
+        &nonce,
+        &verification_code,
+        &origin,
+        &expires_at,
+        &protocol,
+        &version,
+    )?;
+    let keys = state
+        .keys
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        build_snowman_workforce_enrollment_event(
+            &keys,
+            &assertion_id,
+            &broker,
+            &community,
+            &purpose,
+            &nonce,
+            &verification_code,
+            &origin,
+            &expires_at,
+            &protocol,
+            &version,
+        )
+        .map(|event| event.as_json())
+    })
+    .await
+    .map_err(|error| format!("spawn_blocking failed: {error}"))?
+}
+
 #[tauri::command]
 pub async fn create_auth_event(
     challenge: String,
@@ -501,8 +597,9 @@ pub async fn nip44_decrypt_from_self(
 
 #[cfg(test)]
 mod nostr_identity_binding_tests {
-    use super::build_nostr_identity_binding_event;
+    use super::{build_nostr_identity_binding_event, build_snowman_workforce_enrollment_event};
     use crate::nostr_bind;
+    use chrono::{Duration, SecondsFormat, Utc};
     use nostr::{JsonUtil, Keys};
 
     fn tag_values(event: &nostr::Event) -> Vec<Vec<String>> {
@@ -581,5 +678,62 @@ mod nostr_identity_binding_tests {
         .unwrap_err();
 
         assert_eq!(error, "expires_at is expired");
+    }
+
+    #[test]
+    fn snowman_workforce_enrollment_signs_exact_tenant_bound_shape() {
+        let keys = Keys::generate();
+        let expires_at = (Utc::now() + Duration::minutes(5))
+            .to_rfc3339_opts(SecondsFormat::Secs, true);
+        let event = build_snowman_workforce_enrollment_event(
+            &keys,
+            "550e8400-e29b-41d4-a716-446655440000",
+            "snowman-analyst360-identity",
+            "10000000-0000-4000-8000-000000000001",
+            "snowman-workforce-session-enrollment",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567",
+            "123456",
+            "https://analyst360.snowmanai.org",
+            &expires_at,
+            "snowman-workforce-device-proof",
+            "1",
+        )
+        .unwrap();
+        assert!(event.verify_id());
+        assert!(event.verify_signature());
+        let tags = tag_values(&event);
+        assert_eq!(tags.len(), 10);
+        for expected in [
+            vec!["assertion".into(), "550e8400-e29b-41d4-a716-446655440000".into()],
+            vec!["broker".into(), "snowman-analyst360-identity".into()],
+            vec!["community".into(), "10000000-0000-4000-8000-000000000001".into()],
+            vec!["purpose".into(), "snowman-workforce-session-enrollment".into()],
+            vec!["protocol".into(), "snowman-workforce-device-proof".into()],
+            vec!["version".into(), "1".into()],
+        ] {
+            assert!(tags.contains(&expected));
+        }
+    }
+
+    #[test]
+    fn snowman_workforce_enrollment_rejects_external_origin() {
+        let error = build_snowman_workforce_enrollment_event(
+            &Keys::generate(),
+            "550e8400-e29b-41d4-a716-446655440000",
+            "snowman-analyst360-identity",
+            "10000000-0000-4000-8000-000000000001",
+            "snowman-workforce-session-enrollment",
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567",
+            "123456",
+            "https://outside.example",
+            "2999-01-01T00:00:00Z",
+            "snowman-workforce-device-proof",
+            "1",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "workforce enrollment origin must be Snowman controlled"
+        );
     }
 }

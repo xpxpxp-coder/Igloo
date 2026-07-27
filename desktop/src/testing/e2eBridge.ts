@@ -9402,6 +9402,41 @@ export function maybeInstallE2eTauriMocks() {
           sig: "e2e-signed-nostr-binding",
         });
       }
+      case "sign_snowman_workforce_enrollment": {
+        const request = payload as {
+          assertionId: string;
+          broker: string;
+          community: string;
+          purpose: string;
+          nonce: string;
+          verificationCode: string;
+          origin: string;
+          expiresAt: string;
+          protocol: string;
+          version: string;
+        };
+        const activeIdentity = identity ?? DEFAULT_MOCK_IDENTITY;
+        return JSON.stringify({
+          id: "e2e-signed-snowman-workforce-enrollment",
+          pubkey: activeIdentity.pubkey,
+          created_at: Math.floor(Date.now() / 1000),
+          kind: 24243,
+          tags: [
+            ["assertion", request.assertionId],
+            ["broker", request.broker],
+            ["community", request.community],
+            ["purpose", request.purpose],
+            ["nonce", request.nonce],
+            ["verification_code", request.verificationCode],
+            ["origin", request.origin],
+            ["expires_at", request.expiresAt],
+            ["protocol", request.protocol],
+            ["version", request.version],
+          ],
+          content: "",
+          sig: "e2e-signed-snowman-workforce-enrollment",
+        });
+      }
       case "sign_out":
         // Production wipes local state and restarts the app. In the browser
         // harness there is nothing to wipe; resolving is enough — specs

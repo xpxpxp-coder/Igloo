@@ -6,7 +6,7 @@
 //! device-possession proof. Tenant, role, capabilities, assurance, lifetime,
 //! and stable identity are all derived or constrained by the receiver.
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use aws_sdk_kms::primitives::Blob;
 use aws_sdk_kms::types::{MessageType, SigningAlgorithmSpec};
@@ -40,6 +40,8 @@ const REVOCATION_CONTRACT_VERSION: &str = "snowman.workforce-session-revocation.
 const OPERATION: &str = "sessions.enroll";
 const REVOCATION_OPERATION: &str = "sessions.revoke";
 const DEVICE_PROOF_PURPOSE: &str = "snowman-workforce-session-enrollment";
+const DEVICE_PROOF_PROTOCOL: &str = "snowman-workforce-device-proof";
+const DEVICE_PROOF_VERSION: &str = "1";
 const MAX_BODY_BYTES: usize = 32 * 1024;
 const MAX_ASSERTION_AGE_SECONDS: i64 = 90;
 const MAX_FUTURE_SKEW_SECONDS: i64 = 30;
@@ -557,24 +559,66 @@ async fn validate_device_proof(
     {
         return Err(unauthorized("workforce device proof is not fresh"));
     }
+    let mut fields = HashMap::new();
+    if request.device_proof.tags.len() != 10 {
+        return Err(unauthorized(
+            "workforce device proof is not bound to this enrollment",
+        ));
+    }
+    for tag in request.device_proof.tags.iter() {
+        let values = tag.as_slice();
+        if values.len() != 2
+            || fields
+                .insert(values[0].to_string(), values[1].to_string())
+                .is_some()
+        {
+            return Err(unauthorized(
+                "workforce device proof is not bound to this enrollment",
+            ));
+        }
+    }
     let expected = [
         ("assertion", request.assertion_id.to_string()),
         ("broker", request.broker_id.clone()),
         ("community", community.to_string()),
         ("purpose", DEVICE_PROOF_PURPOSE.to_string()),
+        ("protocol", DEVICE_PROOF_PROTOCOL.to_string()),
+        ("version", DEVICE_PROOF_VERSION.to_string()),
     ];
-    if request.device_proof.tags.len() != expected.len()
-        || expected.iter().any(|(name, value)| {
-            request
-                .device_proof
-                .tags
-                .iter()
-                .filter(|tag| {
-                    let values = tag.as_slice();
-                    values.len() == 2 && values[0] == *name && values[1] == *value
-                })
-                .count()
-                != 1
+    let nonce = fields.get("nonce").map(String::as_str).unwrap_or_default();
+    let verification_code = fields
+        .get("verification_code")
+        .map(String::as_str)
+        .unwrap_or_default();
+    let origin = fields.get("origin").map(String::as_str).unwrap_or_default();
+    let expires_at = fields
+        .get("expires_at")
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+    let origin = url::Url::parse(origin).ok();
+    let origin_is_snowman = origin.as_ref().is_some_and(|value| {
+        let host = value.host_str().unwrap_or_default();
+        value.scheme() == "https"
+            && value.username().is_empty()
+            && value.password().is_none()
+            && value.port().is_none()
+            && value.path() == "/"
+            && value.query().is_none()
+            && value.fragment().is_none()
+            && (host == "snowmanai.org" || host.ends_with(".snowmanai.org"))
+    });
+    if expected
+        .iter()
+        .any(|(name, value)| fields.get(*name) != Some(value))
+        || nonce.len() != 43
+        || !nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        || verification_code.len() != 6
+        || !verification_code.bytes().all(|byte| byte.is_ascii_digit())
+        || !origin_is_snowman
+        || expires_at.is_none_or(|expiry| {
+            expiry <= now || expiry - now > Duration::seconds(MAX_DEVICE_PROOF_AGE_SECONDS + 30)
         })
     {
         return Err(unauthorized(
