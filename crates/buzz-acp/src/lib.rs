@@ -35,7 +35,7 @@ use config::{
 };
 use filter::SubscriptionRule;
 use futures_util::FutureExt;
-use nostr::{PublicKey, ToBech32};
+use nostr::PublicKey;
 use pool::{
     AgentPool, ControlSignal, IdleSwitchResult, OwnedAgent, PromptContext, PromptOutcome,
     PromptResult, PromptSource, SessionState, TimeoutKind,
@@ -4150,36 +4150,14 @@ fn build_mcp_servers(config: &Config) -> Vec<McpServer> {
             .to_string(),
         command: config.mcp_command.clone(),
         args: vec![],
-        env: {
-            let mut env = vec![
-                EnvVar {
-                    name: "BUZZ_RELAY_URL".into(),
-                    value: config.relay_url.clone(),
-                },
-                EnvVar {
-                    name: "BUZZ_PRIVATE_KEY".into(),
-                    // bech32 encoding of a valid secret key is infallible.
-                    // Panic here is correct: injecting a bogus secret would cause
-                    // delayed, hard-to-diagnose agent failures downstream.
-                    value: config
-                        .keys
-                        .secret_key()
-                        .to_bech32()
-                        .expect("secret key bech32 encoding should never fail"),
-                },
-            ];
-            // Forward BUZZ_AUTH_TAG (NIP-OA owner attestation credential)
-            // so the MCP server can attach it to every signed event.
-            if let Ok(auth_tag) = std::env::var("BUZZ_AUTH_TAG") {
-                if !auth_tag.is_empty() {
-                    env.push(EnvVar {
-                        name: "BUZZ_AUTH_TAG".into(),
-                        value: auth_tag,
-                    });
-                }
-            }
-            env
-        },
+        // MCP tools receive only the relay address. Signing remains in the
+        // harness until a purpose-specific, capability-bound action broker is
+        // implemented; agent-controlled tools never receive the relay nsec or
+        // owner attestation credential.
+        env: vec![EnvVar {
+            name: "BUZZ_RELAY_URL".into(),
+            value: config.relay_url.clone(),
+        }],
     }]
 }
 
@@ -5000,40 +4978,24 @@ mod build_mcp_servers_tests {
             names.contains(&"BUZZ_RELAY_URL"),
             "missing BUZZ_RELAY_URL; got {names:?}"
         );
-        assert!(
-            names.contains(&"BUZZ_PRIVATE_KEY"),
-            "missing BUZZ_PRIVATE_KEY; got {names:?}"
-        );
+        assert_eq!(names, vec!["BUZZ_RELAY_URL"]);
     }
 
     #[test]
-    fn session_new_mcp_server_forwards_buzz_auth_tag() {
+    fn session_new_mcp_server_never_forwards_signing_authority() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("BUZZ_AUTH_TAG", "test-attestation-tag");
+        std::env::set_var("BUZZ_PRIVATE_KEY", "nsec1must-not-cross");
         let config = test_config();
         let servers = build_mcp_servers(&config);
         std::env::remove_var("BUZZ_AUTH_TAG");
+        std::env::remove_var("BUZZ_PRIVATE_KEY");
 
         let server = &servers[0];
-        let auth_tag_env = server.env.iter().find(|e| e.name == "BUZZ_AUTH_TAG");
-        assert!(
-            auth_tag_env.is_some(),
-            "BUZZ_AUTH_TAG should be forwarded when set"
-        );
-        assert_eq!(auth_tag_env.unwrap().value, "test-attestation-tag");
-    }
-
-    #[test]
-    fn session_new_mcp_server_skips_empty_buzz_auth_tag() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("BUZZ_AUTH_TAG", "");
-        let config = test_config();
-        let servers = build_mcp_servers(&config);
-        std::env::remove_var("BUZZ_AUTH_TAG");
-
-        let server = &servers[0];
-        let has_auth_tag = server.env.iter().any(|e| e.name == "BUZZ_AUTH_TAG");
-        assert!(!has_auth_tag, "empty BUZZ_AUTH_TAG should not be forwarded");
+        assert!(server
+            .env
+            .iter()
+            .all(|entry| { entry.name != "BUZZ_AUTH_TAG" && entry.name != "BUZZ_PRIVATE_KEY" }));
     }
 
     #[test]

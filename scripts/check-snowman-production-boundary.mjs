@@ -29,6 +29,9 @@ const runtimeAuthorityFiles = [
   "crates/buzz-dev-mcp/src/shim.rs",
   "crates/buzz-dev-mcp/src/view_image.rs",
   "crates/buzz-agent/src/config.rs",
+  "crates/buzz-acp/src/config.rs",
+  "crates/buzz-acp/src/acp.rs",
+  "crates/buzz-acp/src/lib.rs",
   "crates/buzz-workflow/src/schema.rs",
   "crates/buzz-db/src/workforce.rs",
   "crates/buzz-db/src/workforce_identity.rs",
@@ -221,6 +224,32 @@ requireFragment(
   "DisallowedModelOverride",
   "per-agent model overrides must remain governed by the approved catalog",
 );
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  'sws_obj.insert("network_access".to_string(), serde_json::Value::Bool(false));',
+  "Codex agent tools must retain the final deny-network overlay",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  "const SENSITIVE_AGENT_ENV_KEYS",
+  "ACP agent children must remove relay, cloud, and provider credentials",
+);
+const acpSource = read("crates/buzz-acp/src/lib.rs");
+const mcpStart = acpSource.indexOf("fn build_mcp_servers");
+const mcpEnd = acpSource.indexOf("\n}\n\n", mcpStart);
+const mcpBuilder =
+  mcpStart >= 0 && mcpEnd > mcpStart
+    ? acpSource.slice(mcpStart, mcpEnd)
+    : "";
+if (
+  !mcpBuilder.includes("MCP tools receive only the relay address") ||
+  mcpBuilder.includes('name: "BUZZ_PRIVATE_KEY"') ||
+  mcpBuilder.includes('name: "BUZZ_AUTH_TAG"')
+) {
+  failures.push(
+    "crates/buzz-acp/src/lib.rs: MCP configuration must not receive relay signing authority",
+  );
+}
 requireFragment(
   "crates/snowman-workforce/src/lib.rs",
   "ExecuteAutomatically",

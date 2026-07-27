@@ -11,6 +11,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [ADR 0002: governed, durable AI workforce](adr/0002-governed-ai-workforce.md)
 - [ADR 0003: Snowman-only runtime and egress](adr/0003-snowman-only-runtime-boundary.md)
 - [ADR 0004: private specialist model fleet](adr/0004-private-specialist-model-fleet.md)
+- [ADR 0005: ACP execution arm and optional runtime adapters](adr/0005-acp-execution-arm.md)
 - [Production acceptance criteria](production-acceptance-criteria.md)
 - [External dependency and data-egress register](external-dependency-register.md)
 - [Available resource and reuse inventory](resource-inventory.md)

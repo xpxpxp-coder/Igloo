@@ -20,6 +20,54 @@ use crate::usage::{TurnUsage, UsageTracker};
 /// Lines exceeding this limit are rejected to prevent OOM from rogue agents.
 const MAX_LINE_SIZE: usize = 10_000_000; // 10 MB
 
+/// Long-lived identities and provider/cloud credentials belong to the harness
+/// or a purpose-specific Snowman broker, never the untrusted ACP subprocess.
+const SENSITIVE_AGENT_ENV_KEYS: &[&str] = &[
+    "BUZZ_PRIVATE_KEY",
+    "NOSTR_PRIVATE_KEY",
+    "BUZZ_AUTH_TAG",
+    "BUZZ_API_TOKEN",
+    "BUZZ_ACP_PRIVATE_KEY",
+    "BUZZ_ACP_API_TOKEN",
+    "SNOWMAN_AGENT_SHELL_CAPABILITY",
+    "SNOWMAN_AGENT_NETWORK_CAPABILITY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_COMPAT_API_KEY",
+    "OPENAI_COMPAT_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "DATABRICKS_TOKEN",
+    "DATABRICKS_HOST",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_API_KEY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "SSH_AUTH_SOCK",
+    "SSH_AGENT_PID",
+    "GIT_ASKPASS",
+    "GIT_SSH_COMMAND",
+    "KUBECONFIG",
+    "DOCKER_HOST",
+];
+
+fn is_sensitive_agent_env(key: &str) -> bool {
+    SENSITIVE_AGENT_ENV_KEYS
+        .iter()
+        .any(|sensitive| sensitive.eq_ignore_ascii_case(key))
+}
+
 /// An MCP server configuration passed to `session/new`.
 ///
 /// Corresponds to the `McpServerStdio` variant in the ACP schema.
@@ -242,8 +290,8 @@ fn deep_merge(
 /// 3. **Parent-env precedence** — if `parent_codex_config` is `Some`, its keys are
 ///    deep-merged into the result (parent wins on colliding keys at every nesting level;
 ///    unrelated keys from either side survive).
-/// 4. **Forced overlay** — `sandbox_workspace_write.network_access = true` is applied
-///    last so relay access is guaranteed regardless of operator / persona config.
+/// 4. **Forced overlay** — `sandbox_workspace_write.network_access = false` is applied
+///    last so parent/persona configuration cannot widen tool egress.
 ///
 /// When `has_generated_codex_config` is false, the function returns `None` and the
 /// caller handles any persona-supplied `CODEX_CONFIG` with ordinary operator-wins
@@ -324,18 +372,18 @@ pub(crate) fn build_codex_config_env(
         }
     }
 
-    // Force sandbox_workspace_write.network_access = true (our invariant, always wins).
+    // Force sandbox_workspace_write.network_access = false (our invariant, always wins).
     let sws_entry = base
         .entry("sandbox_workspace_write")
         .or_insert_with(|| serde_json::json!({}));
     match sws_entry {
         serde_json::Value::Object(sws_obj) => {
-            sws_obj.insert("network_access".to_string(), serde_json::Value::Bool(true));
+            sws_obj.insert("network_access".to_string(), serde_json::Value::Bool(false));
         }
         other => {
             return Err(AcpError::Protocol(format!(
                 "CODEX_CONFIG sandbox_workspace_write is not an object (got {}); \
-                 cannot set network_access=true",
+                 cannot set network_access=false",
                 other
             )));
         }
@@ -401,7 +449,7 @@ impl AcpClient {
     ///
     /// `has_generated_codex_config` must be true when `codex_network_env()` successfully
     /// injected a `CODEX_CONFIG` entry into `extra_env`.  The spawn path uses it to
-    /// trigger the recursive merge + forced `network_access=true` in
+    /// trigger the recursive merge + forced `network_access=false` in
     /// `build_codex_config_env`.  Pass `false` for test spawns and non-Codex agents.
     ///
     /// After spawning, call [`initialize`](Self::initialize) before any other method.
@@ -423,13 +471,17 @@ impl AcpClient {
             // Callers MUST still call shutdown().await for guaranteed cleanup.
             .kill_on_drop(true);
 
+        for key in SENSITIVE_AGENT_ENV_KEYS {
+            cmd.env_remove(key);
+        }
+
         // Per-persona env vars (e.g., GOOSE_PROVIDER, BUZZ_AGENT_PROVIDER).
         // For most keys, operator precedence wins: skip injection if already set
         // in the parent environment.
         //
         // CODEX_CONFIG is handled specially via build_codex_config_env:
         //   • has_generated_codex_config=true: merge all CODEX_CONFIG entries + parent
-        //     recursively and force network_access=true.
+        //     recursively and force network_access=false.
         //   • has_generated_codex_config=false: return None; any persona-supplied
         //     CODEX_CONFIG falls through to the normal operator-wins loop below.
         let has_codex_config = extra_env.iter().any(|(k, _)| k == "CODEX_CONFIG");
@@ -448,6 +500,13 @@ impl AcpClient {
         let codex_merge_active = codex_config_value.is_some();
 
         for (key, value) in extra_env {
+            if is_sensitive_agent_env(key) {
+                tracing::warn!(
+                    key,
+                    "refusing to forward sensitive environment key to ACP agent"
+                );
+                continue;
+            }
             if key == "CODEX_CONFIG" && codex_merge_active {
                 // Handled by build_codex_config_env; skip here to avoid double-setting.
                 continue;
@@ -2009,6 +2068,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn acp_agent_environment_denylist_covers_identity_cloud_and_provider_secrets() {
+        for key in [
+            "BUZZ_PRIVATE_KEY",
+            "nostr_private_key",
+            "AWS_SESSION_TOKEN",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "OPENAI_API_KEY",
+            "OPENAI_COMPAT_BASE_URL",
+            "ANTHROPIC_API_KEY",
+            "GITHUB_TOKEN",
+            "CLOUDFLARE_API_TOKEN",
+            "HTTPS_PROXY",
+            "SSH_AUTH_SOCK",
+            "SNOWMAN_AGENT_SHELL_CAPABILITY",
+        ] {
+            assert!(is_sensitive_agent_env(key), "missing denylist entry: {key}");
+        }
+        assert!(!is_sensitive_agent_env("BUZZ_ACP_MODEL"));
+        assert!(!is_sensitive_agent_env("SNOWMAN_MODEL_GATEWAY_SOCKET"));
+    }
+
+    #[test]
     fn stop_reason_parses_all_known_values() {
         assert_eq!(StopReason::from_str("end_turn"), Some(StopReason::EndTurn));
         assert_eq!(
@@ -3492,7 +3573,7 @@ mod tests {
             .collect()
     }
 
-    const GENERATED: &str = r#"{"sandbox_workspace_write":{"network_access":true}}"#;
+    const GENERATED: &str = r#"{"sandbox_workspace_write":{"network_access":false}}"#;
 
     #[test]
     fn build_codex_config_env_returns_none_when_no_codex_config_in_extra_env() {
@@ -3516,10 +3597,10 @@ mod tests {
             .unwrap()
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        // network_access forced true even though only one entry in extra_env.
+        // network_access is forced false even though only one entry is generated.
         assert_eq!(
-            v["sandbox_workspace_write"]["network_access"], true,
-            "network_access must be forced true with signal=true"
+            v["sandbox_workspace_write"]["network_access"], false,
+            "network_access must be forced false with signal=true"
         );
         // Operator key preserved via deep_merge.
         assert_eq!(
@@ -3559,18 +3640,18 @@ mod tests {
 
     #[test]
     fn build_codex_config_env_sets_network_access_from_scratch() {
-        // Persona + generated overlay, signal=true: network_access is forced true.
+        // Persona + generated overlay: network_access is forced false.
         let persona = r#"{}"#;
         let extra = env(&[("CODEX_CONFIG", persona), ("CODEX_CONFIG", GENERATED)]);
         let merged = build_codex_config_env(&extra, None, true).unwrap().unwrap();
         let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        assert_eq!(v["sandbox_workspace_write"]["network_access"], true);
+        assert_eq!(v["sandbox_workspace_write"]["network_access"], false);
     }
 
     #[test]
     fn build_codex_config_env_persona_keys_survive_merge() {
         // Persona has CODEX_CONFIG with unrelated keys; generated overlay must
-        // force network_access=true without erasing persona keys.
+        // force network_access=false without erasing persona keys.
         let persona_cfg = r#"{"some_feature":{"enabled":true}}"#;
         // Config::from_args appends generated AFTER persona env vars.
         let extra = env(&[("CODEX_CONFIG", persona_cfg), ("CODEX_CONFIG", GENERATED)]);
@@ -3581,8 +3662,8 @@ mod tests {
             "persona key must survive merge"
         );
         assert_eq!(
-            v["sandbox_workspace_write"]["network_access"], true,
-            "network_access must be forced true"
+            v["sandbox_workspace_write"]["network_access"], false,
+            "network_access must be forced false"
         );
     }
 
@@ -3591,7 +3672,7 @@ mod tests {
         // Persona has sandbox_workspace_write.persona_only; parent has
         // sandbox_workspace_write.parent_only.  A flat top-level spread would drop
         // persona_only.  deep_merge must preserve both nested keys, and
-        // network_access must be forced true last.
+        // network_access must be forced false last.
         let persona_cfg = r#"{"sandbox_workspace_write":{"persona_only":"keep_me"}}"#;
         let extra = env(&[("CODEX_CONFIG", persona_cfg), ("CODEX_CONFIG", GENERATED)]);
         let parent = r#"{"sandbox_workspace_write":{"parent_only":"also_here"}}"#;
@@ -3610,8 +3691,8 @@ mod tests {
         );
         // Forced last.
         assert_eq!(
-            v["sandbox_workspace_write"]["network_access"], true,
-            "network_access must be forced true"
+            v["sandbox_workspace_write"]["network_access"], false,
+            "network_access must be forced false"
         );
     }
 
@@ -3619,7 +3700,7 @@ mod tests {
     fn build_codex_config_env_parent_env_wins_on_collisions_persona_keys_survive() {
         // Parent env has CODEX_CONFIG with some keys; persona has different keys.
         // Parent wins on collision; unrelated persona keys survive.
-        // network_access is always forced true.
+        // network_access is always forced false.
         let persona_cfg = r#"{"persona_key":"persona_val","shared_key":"persona_version"}"#;
         // Config::from_args appends generated AFTER persona env vars.
         let extra = env(&[("CODEX_CONFIG", persona_cfg), ("CODEX_CONFIG", GENERATED)]);
@@ -3643,24 +3724,24 @@ mod tests {
             v["shared_key"], "parent_version",
             "parent must win on colliding key"
         );
-        // network_access always true (forced last)
-        assert_eq!(v["sandbox_workspace_write"]["network_access"], true);
+        // network_access always false (forced last)
+        assert_eq!(v["sandbox_workspace_write"]["network_access"], false);
     }
 
     #[test]
     fn build_codex_config_env_parent_has_existing_sandbox_other_keys_survive() {
         // Parent env has sandbox_workspace_write with extra keys; after merge
-        // those extra keys survive alongside network_access=true.
+        // those extra keys survive alongside network_access=false.
         let persona = r#"{}"#;
         let extra = env(&[("CODEX_CONFIG", persona), ("CODEX_CONFIG", GENERATED)]);
         let parent =
-            r#"{"sandbox_workspace_write":{"network_access":false,"other_sandbox_key":"val"}}"#;
+            r#"{"sandbox_workspace_write":{"network_access":true,"other_sandbox_key":"val"}}"#;
         let merged = build_codex_config_env(&extra, Some(parent), true)
             .unwrap()
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        // network_access forced true even though parent set false
-        assert_eq!(v["sandbox_workspace_write"]["network_access"], true);
+        // network_access forced false even though parent attempted to enable it.
+        assert_eq!(v["sandbox_workspace_write"]["network_access"], false);
         // other_sandbox_key survives (parent's sws merged, then network_access forced)
         assert_eq!(v["sandbox_workspace_write"]["other_sandbox_key"], "val");
     }

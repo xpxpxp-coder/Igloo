@@ -30,7 +30,7 @@ evidence, and systematic Snowman branding.
 | Human authentication | Hardening required | `crates/buzz-auth/src/lib.rs` explicitly has no JWT/IdP dependency; NIP-42 possession is the human identity proof | Add workforce OIDC binding, short sessions, device/session inventory, lifecycle, and revocation. |
 | Human authorization | Hardening required | `AuthService::verify_auth_event` grants `Scope::all_known()`; `scope.rs` includes admin scopes | Replace possession-implies-all with tenant-scoped Snowman roles and capabilities. Membership remains a resource boundary, not the whole authorization model. |
 | Agent identity | Hardening required | `desktop/src-tauri/src/managed_agents/runtime.rs` injects an agent Nostr private key and owner metadata | Issue a distinct service identity per agent/runtime/workspace; bind it to tenant, owner, capabilities, TTL, and revocation state. |
-| Agent shell/file tools | Hardening required, high risk | `crates/buzz-dev-mcp/src/shell.rs` accepts an arbitrary command, selects a host shell, permits an arbitrary workdir, and intentionally inherits `BUZZ_PRIVATE_KEY` | Disable by default. Require an external sandbox boundary, deny-by-default capabilities, scoped filesystem, constrained egress/AWS access, secret brokering, approvals, and audit. |
+| Agent shell/file tools | Hardening required, high risk | `crates/buzz-dev-mcp/src/shell.rs` accepts an arbitrary command and selects a host shell, but shell is now default-off/workspace-contained and the ACP/MCP child boundary removes relay, cloud, and provider credentials | Keep disabled by default. Require the external Snowman AWS sandbox, brokered signed actions, scoped filesystem, constrained egress, approvals, and complete audit before production use. |
 | Workflow engine | Partially proven | `crates/buzz-workflow/src/{schema,executor}.rs`; transactional command handling in `crates/buzz-relay/src/handlers/command_executor.rs` | Retain only after risk classification and approval policy are enforced end to end. |
 | Workflow approvals | Hardening required | Approval records/grant/deny/resume exist in `command_executor.rs`; approver syntax currently supports `any` or one pubkey, while role-like specs are rejected | Bind approvers to Snowman identity and capability policy; prevent self-approval where independence is required; expire and audit all decisions. |
 | Workflow action completeness | Vision only for named actions | `executor.rs` returns `NotImplemented` for `SendDm` and `SetChannelTopic` | Do not advertise or accept these actions until implemented and tested, or reject them at definition validation. |
@@ -73,6 +73,9 @@ the highest risks without changing the production-readiness verdict:
   destination enforcement with an automated production-boundary scanner;
 - default-off agent shell/network access, workspace containment, ambient secret
   removal, and direct provider endpoint rejection; and
+- ACP agent children no longer inherit relay signing/owner credentials, cloud
+  or direct model-provider secrets; MCP receives only the relay address, and
+  Codex tool network access is forced off after persona/parent config merging;
 - definition-time rejection of unimplemented workflow actions and unsafe
   webhook destinations/credential headers; and
 - a default-off Analyst lifecycle-event ingress with host-derived community

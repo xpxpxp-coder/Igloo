@@ -106,11 +106,11 @@ All configuration is via environment variables (or CLI flags — every env var h
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `BUZZ_PRIVATE_KEY` | **yes** | — | Agent's Nostr private key (`nsec1...`). Used for relay auth and agent identity. |
+| `BUZZ_PRIVATE_KEY` | **yes** | — | Harness-owned Nostr key (`nsec1...`) used for relay auth and agent identity; it is not forwarded to the ACP or MCP subprocess. |
 | `BUZZ_RELAY_URL` | no | `ws://localhost:3000` | Relay WebSocket URL. |
 | `BUZZ_ACP_AGENT_COMMAND` | no | `goose` | Agent binary to spawn. |
 | `BUZZ_ACP_AGENT_ARGS` | no | `acp` | Agent arguments (comma-separated). |
-| `BUZZ_ACP_MCP_COMMAND` | no | `""` (empty) | Path to an optional MCP server binary to provide to the agent subprocess. |
+| `BUZZ_ACP_MCP_COMMAND` | no | `""` (empty) | Path to an optional credential-free MCP server binary to provide to the agent subprocess. |
 | `BUZZ_ACP_IDLE_TIMEOUT` | no | `620` | Idle timeout: max seconds of silence before cancelling a turn. Resets on any agent stdout activity. |
 | `BUZZ_ACP_MAX_TURN_DURATION` | no | `7200` | Absolute wall-clock cap per turn (safety valve). |
 | `BUZZ_API_TOKEN` | no | — | API token (required if relay enforces token auth). |
@@ -118,6 +118,12 @@ All configuration is via environment variables (or CLI flags — every env var h
 **Note:** `BUZZ_ACP_AGENT_ARGS` splits on commas. For args with values, use: `-c,key="value"`.
 
 **Legacy env vars:** `BUZZ_ACP_PRIVATE_KEY`, `BUZZ_ACP_API_TOKEN`, and `BUZZ_ACP_TURN_TIMEOUT` (replaced by `BUZZ_ACP_IDLE_TIMEOUT`) are still accepted as fallbacks.
+
+The harness removes relay/owner credentials, cloud/provider secrets, proxy and
+credential-agent variables, and broker-only tool grants before spawning the ACP
+runtime. MCP receives only `BUZZ_RELAY_URL`; signed relay actions require a
+separate capability-bound broker. Codex tool networking is forced off after
+persona and parent configuration are merged.
 
 ### Parallel Agents & Heartbeat
 

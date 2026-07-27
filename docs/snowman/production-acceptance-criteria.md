@@ -64,6 +64,10 @@ evidence for a runtime, recovery, accessibility, or operational claim.
 
 - Each agent/runtime/workspace has a unique tenant-bound service identity,
   short-lived credential, owner, capability set, and revocation path.
+- Production ACP specialists run only in the Snowman AWS execution sandbox;
+  desktop-local agents remain a development surface. Optional OpenClaw, Hermes,
+  or other adapters must pass the same pinned-artifact, provenance, capability,
+  data-boundary, sandbox, quality, revocation, and audit gates.
 - `buzz-dev-mcp` shell/file mutation is disabled by default in production.
 - Any enabled execution runs inside a proven sandbox with scoped mounts,
   resource/time limits, process isolation, deny-by-default egress, no ambient AWS
