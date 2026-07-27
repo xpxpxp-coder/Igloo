@@ -284,6 +284,38 @@ class AwsFoundationContractTests(unittest.TestCase):
         ):
             self.assertIn(fragment, source)
 
+    def test_agent_coordinator_is_exact_private_and_hard_dormant(self) -> None:
+        source = (ROOT / "agent_coordinator.tf").read_text(encoding="utf-8")
+        network = (ROOT / "network.tf").read_text(encoding="utf-8")
+        preflight = (ROOT / "preflight.tf").read_text(encoding="utf-8")
+        for fragment in (
+            'resource "aws_kms_key" "agent_job_token"',
+            'key_usage                          = "GENERATE_VERIFY_MAC"',
+            'customer_master_key_spec           = "HMAC_256"',
+            'actions   = ["kms:GenerateMac"]',
+            'actions   = ["ecs:RunTask"]',
+            'actions = ["ecs:DescribeTasks", "ecs:StopTask"]',
+            'actions   = ["iam:PassRole"]',
+            'variable = "iam:PassedToService"',
+            'entryPoint             = ["/usr/local/bin/snowman-agent-coordinator"]',
+            'readonlyRootFilesystem = true',
+            'capabilities       = { drop = ["ALL"] }',
+            'SNOWMAN_AGENT_COORDINATOR_DATABASE_URL',
+            ':database_url::',
+            'SNOWMAN_AGENT_COORDINATOR_NETWORK_POLICY", value = "private-snowman-only"',
+            'enable_execute_command = false',
+            'assign_public_ip = false',
+            'condition     = var.agent_coordinator_desired_count == 0',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, source)
+        self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
+        self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
+        self.assertIn('resource "aws_vpc_security_group_ingress_rule" "database_from_agent_coordinator"', network)
+        self.assertIn('resource "aws_vpc_security_group_ingress_rule" "agent_coordinator_from_worker"', network)
+        self.assertIn('"ecs"', network)
+        self.assertIn('var.agent_coordinator_desired_count == 0', preflight)
+
     def test_model_gateway_is_kms_bound_private_and_hard_dormant(self) -> None:
         source = (ROOT / "model_gateway.tf").read_text(encoding="utf-8")
         data_plane = (ROOT / "data_plane.tf").read_text(encoding="utf-8")

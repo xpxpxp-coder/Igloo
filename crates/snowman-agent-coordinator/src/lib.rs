@@ -24,6 +24,9 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+/// Private authenticated HTTP service that owns coordinator activation.
+pub mod service;
+
 /// Coordinator contract version.
 pub const COORDINATOR_SCHEMA: &str = "snowman.agent.coordinator.v1";
 const TOKEN_DOMAIN: &[u8] = b"snowman.agent.job-token.v1\0";
@@ -176,6 +179,13 @@ pub struct LaunchReceipt {
     pub launched: bool,
 }
 
+/// Minimal ECS lifecycle observation; no container diagnostics are retained.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskObservation {
+    /// ECS lifecycle state such as `PROVISIONING`, `RUNNING`, or `STOPPED`.
+    pub last_status: String,
+}
+
 /// Stable, non-sensitive coordinator failure classes.
 #[derive(Debug, thiserror::Error)]
 pub enum CoordinatorError {
@@ -279,6 +289,13 @@ pub trait EcsControl: Send + Sync {
         job_token: &str,
     ) -> Result<String, CoordinatorError>;
 
+    /// Observe only the lifecycle state of the exact task.
+    async fn describe_task(
+        &self,
+        cluster_arn: &str,
+        task_arn: &str,
+    ) -> Result<TaskObservation, CoordinatorError>;
+
     /// Stop the exact task after cancellation, expiry, or revocation.
     async fn stop_task(
         &self,
@@ -367,6 +384,38 @@ impl EcsControl for AwsEcsControl {
         Ok(task_arn.to_owned())
     }
 
+    async fn describe_task(
+        &self,
+        cluster_arn: &str,
+        task_arn: &str,
+    ) -> Result<TaskObservation, CoordinatorError> {
+        if !valid_cluster_arn(cluster_arn) || !valid_task_arn_for_cluster(task_arn, cluster_arn) {
+            return Err(CoordinatorError::InvalidRequest);
+        }
+        let output = self
+            .client
+            .describe_tasks()
+            .cluster(cluster_arn)
+            .tasks(task_arn)
+            .send()
+            .await
+            .map_err(|_| CoordinatorError::Ecs)?;
+        if !output.failures().is_empty() || output.tasks().len() != 1 {
+            return Err(CoordinatorError::Ecs);
+        }
+        let task = &output.tasks()[0];
+        if task.task_arn() != Some(task_arn) {
+            return Err(CoordinatorError::Ecs);
+        }
+        let last_status = task
+            .last_status()
+            .filter(|value| valid_ecs_status(value))
+            .ok_or(CoordinatorError::Ecs)?;
+        Ok(TaskObservation {
+            last_status: last_status.to_owned(),
+        })
+    }
+
     async fn stop_task(
         &self,
         cluster_arn: &str,
@@ -443,6 +492,7 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
             .begin()
             .await
             .map_err(|_| CoordinatorError::Database)?;
+        authorize_requester(&mut transaction, tenant_id, &request).await?;
         record_auth_event(&mut transaction, tenant_id, &request).await?;
         issue_job_in_transaction(
             &mut transaction,
@@ -534,6 +584,115 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
                 Err(CoordinatorError::Busy) => {}
                 Err(error) => return Err(error),
             }
+        }
+        Ok(reconciled)
+    }
+
+    /// Recheck active job/lease authority, stop revoked work, and synchronize
+    /// terminal ECS lifecycle state with the durable launch evidence.
+    pub async fn reconcile_running_tasks(&self, limit: u32) -> Result<usize, CoordinatorError> {
+        if !(1..=100).contains(&limit) {
+            return Err(CoordinatorError::InvalidRequest);
+        }
+        let rows = sqlx::query(
+            "SELECT l.community_id,l.job_id,l.ecs_cluster_arn,l.ecs_task_arn,l.status launch_status,\
+             j.status job_status,j.deadline_at,j.token_revoked_at,t.status task_status,\
+             r.status request_status,l.generation,lease.generation lease_generation,\
+             lease.expires_at lease_expires_at FROM snowman_agent_launches l \
+             JOIN snowman_agent_jobs j ON j.community_id=l.community_id AND j.job_id=l.job_id \
+             JOIN snowman_work_tasks t ON t.community_id=l.community_id AND t.task_id=l.task_id \
+             JOIN snowman_work_requests r ON r.community_id=l.community_id AND r.request_id=l.request_id \
+             LEFT JOIN snowman_task_leases lease \
+               ON lease.community_id=l.community_id AND lease.task_id=l.task_id \
+             WHERE l.status IN ('running','stopping') AND l.reconcile_after<=NOW() \
+             ORDER BY l.reconcile_after,l.community_id,l.launch_id LIMIT $1",
+        )
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| CoordinatorError::Database)?;
+        let mut reconciled = 0;
+        for row in rows {
+            let tenant_id: Uuid = row
+                .try_get("community_id")
+                .map_err(|_| CoordinatorError::Database)?;
+            let job_id: Uuid = row
+                .try_get("job_id")
+                .map_err(|_| CoordinatorError::Database)?;
+            let cluster_arn: String = row
+                .try_get("ecs_cluster_arn")
+                .map_err(|_| CoordinatorError::Database)?;
+            let task_arn: String = row
+                .try_get("ecs_task_arn")
+                .map_err(|_| CoordinatorError::Database)?;
+            if !valid_task_arn_for_cluster(&task_arn, &cluster_arn) {
+                return Err(CoordinatorError::Conflict);
+            }
+            let launch_status: String = row
+                .try_get("launch_status")
+                .map_err(|_| CoordinatorError::Database)?;
+            let job_status: String = row
+                .try_get("job_status")
+                .map_err(|_| CoordinatorError::Database)?;
+            let task_status: String = row
+                .try_get("task_status")
+                .map_err(|_| CoordinatorError::Database)?;
+            let request_status: String = row
+                .try_get("request_status")
+                .map_err(|_| CoordinatorError::Database)?;
+            let deadline_at: DateTime<Utc> = row
+                .try_get("deadline_at")
+                .map_err(|_| CoordinatorError::Database)?;
+            let token_revoked_at: Option<DateTime<Utc>> = row
+                .try_get("token_revoked_at")
+                .map_err(|_| CoordinatorError::Database)?;
+            let generation: i64 = row
+                .try_get("generation")
+                .map_err(|_| CoordinatorError::Database)?;
+            let lease_generation: Option<i64> = row
+                .try_get("lease_generation")
+                .map_err(|_| CoordinatorError::Database)?;
+            let lease_expires_at: Option<DateTime<Utc>> = row
+                .try_get("lease_expires_at")
+                .map_err(|_| CoordinatorError::Database)?;
+            let deadline_expired = deadline_at <= Utc::now();
+            let authority_revoked = launch_status == "stopping"
+                || token_revoked_at.is_some()
+                || !matches!(job_status.as_str(), "issued" | "started")
+                || !matches!(task_status.as_str(), "leased" | "running")
+                || !matches!(request_status.as_str(), "running" | "reviewing")
+                || lease_generation != Some(generation)
+                || lease_expires_at.is_none_or(|expiry| expiry <= Utc::now());
+            if deadline_expired || authority_revoked {
+                stop_revoked_task(
+                    &self.pool,
+                    &self.ecs,
+                    tenant_id,
+                    job_id,
+                    &cluster_arn,
+                    &task_arn,
+                    deadline_expired,
+                )
+                .await?;
+                reconciled += 1;
+                continue;
+            }
+            let observation = self.ecs.describe_task(&cluster_arn, &task_arn).await?;
+            if observation.last_status == "STOPPED" {
+                synchronize_stopped_task(&self.pool, tenant_id, job_id, &job_status).await?;
+            } else {
+                sqlx::query(
+                    "UPDATE snowman_agent_launches SET last_observed_at=NOW(),\
+                     reconcile_after=NOW()+INTERVAL '30 seconds',updated_at=NOW() \
+                     WHERE community_id=$1 AND job_id=$2 AND status='running'",
+                )
+                .bind(tenant_id)
+                .bind(job_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|_| CoordinatorError::Database)?;
+            }
+            reconciled += 1;
         }
         Ok(reconciled)
     }
@@ -713,12 +872,42 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
     }
 }
 
+async fn authorize_requester(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    request: &VerifiedLaunchRequest,
+) -> Result<(), CoordinatorError> {
+    let authorized: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM snowman_work_tasks t \
+         JOIN snowman_workforce_identities i \
+           ON i.community_id=t.community_id AND i.identity_id=t.service_identity_id \
+         JOIN snowman_workforce_key_bindings k \
+           ON k.community_id=i.community_id AND k.identity_id=i.identity_id \
+         WHERE t.community_id=$1 AND t.request_id=$2 AND t.task_id=$3 \
+           AND k.pubkey=$4 AND k.binding_type='service_runtime' \
+           AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>NOW()) \
+           AND i.identity_type='service' AND i.status='active' \
+           AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at>NOW()))",
+    )
+    .bind(tenant_id)
+    .bind(request.snapshot.request_id)
+    .bind(request.snapshot.task_id)
+    .bind(request.requester_pubkey.as_slice())
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|_| CoordinatorError::Database)?;
+    if !authorized {
+        return Err(CoordinatorError::InvalidRequest);
+    }
+    Ok(())
+}
+
 async fn record_auth_event(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant_id: Uuid,
     request: &VerifiedLaunchRequest,
 ) -> Result<(), CoordinatorError> {
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO snowman_agent_coordinator_auth_events \
          (community_id,auth_event_id,request_sha256,requester_pubkey,observed_at,expires_at) \
          VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",
@@ -732,6 +921,11 @@ async fn record_auth_event(
     .execute(&mut **transaction)
     .await
     .map_err(|_| CoordinatorError::Database)?;
+    if inserted.rows_affected() != 1 {
+        // A retry must carry a freshly signed NIP-98 event. Accepting the same
+        // event twice would contradict the recorded authentication freshness.
+        return Err(CoordinatorError::AuthenticationConflict);
+    }
     let row = sqlx::query(
         "SELECT request_sha256,requester_pubkey FROM snowman_agent_coordinator_auth_events \
          WHERE community_id=$1 AND auth_event_id=$2",
@@ -784,7 +978,7 @@ async fn persist_launch(
     .map_err(|_| CoordinatorError::Database)?;
     let row = sqlx::query(
         "SELECT launch_id,task_id,generation,runtime_profile,ecs_cluster_arn,\
-         task_definition_arn,client_token_sha256,requester_pubkey,auth_event_id \
+         task_definition_arn,client_token_sha256,requester_pubkey \
          FROM snowman_agent_launches WHERE community_id=$1 AND job_id=$2",
     )
     .bind(spec.coordinates.tenant_id)
@@ -814,9 +1008,7 @@ async fn persist_launch(
             .try_get::<Vec<u8>, _>("requester_pubkey")
             .ok()
             .as_deref()
-            == Some(request.requester_pubkey.as_slice())
-        && row.try_get::<Vec<u8>, _>("auth_event_id").ok().as_deref()
-            == Some(request.auth_event_id.as_slice());
+            == Some(request.requester_pubkey.as_slice());
     if !matches {
         return Err(CoordinatorError::Conflict);
     }
@@ -921,6 +1113,108 @@ async fn expire_unobserved_launch<E: EcsControl>(
     )
     .bind(spec.coordinates.tenant_id)
     .bind(spec.coordinates.job_id)
+    .execute(pool)
+    .await
+    .map_err(|_| CoordinatorError::Database)?;
+    Ok(())
+}
+
+async fn stop_revoked_task<E: EcsControl>(
+    pool: &PgPool,
+    ecs: &E,
+    tenant_id: Uuid,
+    job_id: Uuid,
+    cluster_arn: &str,
+    task_arn: &str,
+    deadline_expired: bool,
+) -> Result<(), CoordinatorError> {
+    let mut transaction = pool.begin().await.map_err(|_| CoordinatorError::Database)?;
+    sqlx::query(
+        "UPDATE snowman_agent_jobs SET status=$3,token_revoked_at=COALESCE(token_revoked_at,NOW()),\
+         updated_at=NOW() WHERE community_id=$1 AND job_id=$2 AND status IN ('issued','started')",
+    )
+    .bind(tenant_id)
+    .bind(job_id)
+    .bind(if deadline_expired { "expired" } else { "cancelled" })
+    .execute(&mut *transaction)
+    .await
+    .map_err(|_| CoordinatorError::Database)?;
+    sqlx::query(
+        "UPDATE snowman_agent_launches SET status='stopping',stop_requested_at=COALESCE(stop_requested_at,NOW()),\
+         failure_code=$3,reconcile_after=NOW(),updated_at=NOW() \
+         WHERE community_id=$1 AND job_id=$2 AND status IN ('running','stopping')",
+    )
+    .bind(tenant_id)
+    .bind(job_id)
+    .bind(if deadline_expired {
+        "deadline_expired"
+    } else {
+        "authority_revoked"
+    })
+    .execute(&mut *transaction)
+    .await
+    .map_err(|_| CoordinatorError::Database)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| CoordinatorError::Database)?;
+    ecs.stop_task(
+        cluster_arn,
+        task_arn,
+        if deadline_expired {
+            "Snowman job deadline expired"
+        } else {
+            "Snowman job authority revoked"
+        },
+    )
+    .await?;
+    let job_status: String = sqlx::query_scalar(
+        "SELECT status FROM snowman_agent_jobs WHERE community_id=$1 AND job_id=$2",
+    )
+    .bind(tenant_id)
+    .bind(job_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| CoordinatorError::Database)?;
+    synchronize_stopped_task(pool, tenant_id, job_id, &job_status).await
+}
+
+async fn synchronize_stopped_task(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    job_id: Uuid,
+    observed_job_status: &str,
+) -> Result<(), CoordinatorError> {
+    let launch_status = match observed_job_status {
+        "succeeded" => "succeeded",
+        "failed" => "failed",
+        "cancelled" => "cancelled",
+        "expired" => "expired",
+        _ => {
+            sqlx::query(
+                "UPDATE snowman_agent_jobs SET status='failed',token_revoked_at=COALESCE(token_revoked_at,NOW()),\
+                 updated_at=NOW() WHERE community_id=$1 AND job_id=$2 AND status IN ('issued','started')",
+            )
+            .bind(tenant_id)
+            .bind(job_id)
+            .execute(pool)
+            .await
+            .map_err(|_| CoordinatorError::Database)?;
+            "failed"
+        }
+    };
+    let broker_terminal = matches!(observed_job_status, "succeeded" | "failed");
+    sqlx::query(
+        "UPDATE snowman_agent_launches SET status=$3,stopped_at=COALESCE(stopped_at,NOW()),\
+         last_observed_at=NOW(),failure_code=CASE WHEN $4 THEN NULL \
+         WHEN $3='failed' AND failure_code IS NULL THEN 'unexpected_task_stop' \
+         ELSE failure_code END,updated_at=NOW() \
+         WHERE community_id=$1 AND job_id=$2 AND status IN ('running','stopping')",
+    )
+    .bind(tenant_id)
+    .bind(job_id)
+    .bind(launch_status)
+    .bind(broker_terminal)
     .execute(pool)
     .await
     .map_err(|_| CoordinatorError::Database)?;
@@ -1105,6 +1399,13 @@ fn valid_stop_reason(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+}
+
+fn valid_ecs_status(value: &str) -> bool {
+    (3..=32).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
 }
 
 fn valid_failure_code(value: &str) -> bool {

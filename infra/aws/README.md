@@ -12,13 +12,18 @@ and fixed-content in-product reminder service. It
 also defines credentialless, one-shot ACP agent task definitions and a distinct
 deny-by-default executor/broker network boundary. The matching one-shot
 executor client exists in source, but no reviewed adapter image, action tools,
-model-token path, or task-launch coordinator is active. The private job broker
+model-token path, or agent service is active. The private job broker
 exists in source and in a hard-dormant ECS deployment contract: a protected
 internal TLS NLB, executor-SG-only ingress, split-horizon Snowman DNS, a
 task-role-free non-root service, and database-only application egress. This root
 also defines a separate KMS-encrypted broker runtime secret populated only by
 the one-shot bootstrap; no relay task can read that secret, and the broker
-execution role reads only its `database_url` field. It
+execution role reads only its `database_url` field. A separate hard-dormant
+coordinator now provides NIP-98/service-key-bound launch, KMS HMAC job-token
+derivation, exact revision-scoped ECS authority, crash/expiry/cancellation
+reconciliation, worker-only internal TLS ingress, and RDS/private-AWS-endpoint
+egress. It cannot access the relay, Analyst, model, artifact, connector, or
+public network. It
 fails before resource creation when the caller is in the wrong account, the
 management account is targeted, production shares the Analyst 360 workload
 account, the image is mutable or outside the exact Snowman ECR repository,
@@ -88,7 +93,7 @@ root is deployable:
    Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
    delivery, and tested recovery;
 3. staged recurring-trigger lost-response/restart proof; the agent runtime
-   image, broker action catalog, model-token path, exact `RunTask` coordinator, and live sandbox
+   image, broker action catalog, model-token path, worker/coordinator completion wiring, and live sandbox
    adversarial proof; pinned specialist model images/weights and staged
    activation of the separate `aws-inference`
    endpoint/component root; private ingress for the now-defined model-gateway

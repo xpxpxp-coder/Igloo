@@ -17,6 +17,8 @@ output "production_boundary" {
     reminder_profile_count                = length(var.reminder_profiles)
     agent_broker_desired_count            = var.agent_broker_desired_count
     agent_broker_private_ingress_enabled  = var.agent_broker_private_ingress_enabled
+    agent_coordinator_desired_count       = var.agent_coordinator_desired_count
+    agent_coordinator_ingress_enabled     = var.agent_coordinator_private_ingress_enabled
     workforce_private_ingress_enabled     = var.workforce_private_ingress_enabled
     workforce_private_hostnames           = sort(tolist(var.workforce_private_hostnames))
     workforce_api_enabled                 = var.workforce_api_enabled
@@ -37,6 +39,16 @@ output "agent_broker_private_ingress" {
     nlb_arn          = aws_lb.agent_broker_private[0].arn
     tls_listener_arn = aws_lb_listener.agent_broker_private[0].arn
     target_group_arn = aws_lb_target_group.agent_broker_private[0].arn
+  } : null
+}
+
+output "agent_coordinator_private_ingress" {
+  description = "Private, workforce-only Snowman agent-coordinator TLS endpoint."
+  value = var.agent_coordinator_private_ingress_enabled ? {
+    hostname         = var.agent_coordinator_private_dns_name
+    nlb_arn          = aws_lb.agent_coordinator_private[0].arn
+    tls_listener_arn = aws_lb_listener.agent_coordinator_private[0].arn
+    target_group_arn = aws_lb_target_group.agent_coordinator_private[0].arn
   } : null
 }
 
@@ -122,16 +134,18 @@ output "operations_posture" {
 output "dormant_compute_posture" {
   description = "Relay task and roles are defined but no service or desired runtime is activated."
   value = {
-    bootstrap_task_definition_arn        = aws_ecs_task_definition.bootstrap.arn
-    bootstrap_execution_role_arn         = aws_iam_role.bootstrap_execution.arn
-    bootstrap_task_role_arn              = aws_iam_role.bootstrap_task.arn
-    relay_task_definition_arn            = aws_ecs_task_definition.relay.arn
-    relay_execution_role_arn             = aws_iam_role.relay_execution.arn
-    relay_task_role_arn                  = aws_iam_role.relay_task.arn
-    relay_runtime_secret_arn             = aws_secretsmanager_secret.relay_runtime.arn
-    agent_broker_runtime_secret_arn      = aws_secretsmanager_secret.agent_broker_runtime.arn
-    agent_coordinator_runtime_secret_arn = aws_secretsmanager_secret.agent_coordinator_runtime.arn
-    agent_broker_task_definition_arn     = aws_ecs_task_definition.agent_broker.arn
+    bootstrap_task_definition_arn         = aws_ecs_task_definition.bootstrap.arn
+    bootstrap_execution_role_arn          = aws_iam_role.bootstrap_execution.arn
+    bootstrap_task_role_arn               = aws_iam_role.bootstrap_task.arn
+    relay_task_definition_arn             = aws_ecs_task_definition.relay.arn
+    relay_execution_role_arn              = aws_iam_role.relay_execution.arn
+    relay_task_role_arn                   = aws_iam_role.relay_task.arn
+    relay_runtime_secret_arn              = aws_secretsmanager_secret.relay_runtime.arn
+    agent_broker_runtime_secret_arn       = aws_secretsmanager_secret.agent_broker_runtime.arn
+    agent_coordinator_runtime_secret_arn  = aws_secretsmanager_secret.agent_coordinator_runtime.arn
+    agent_broker_task_definition_arn      = aws_ecs_task_definition.agent_broker.arn
+    agent_coordinator_task_definition_arn = aws_ecs_task_definition.agent_coordinator.arn
+    agent_job_token_hmac_key_arn          = aws_kms_key.agent_job_token.arn
     agent_runtime_task_definitions = {
       for name, task in aws_ecs_task_definition.agent_executor : name => task.arn
     }

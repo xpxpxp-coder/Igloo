@@ -23,6 +23,7 @@ class AwsPreflightContractTests(unittest.TestCase):
             "var.worker_desired_count == 0",
             "var.reminder_desired_count == 0",
             "var.agent_broker_desired_count == 0",
+            "var.agent_coordinator_desired_count == 0",
             "var.model_gateway_desired_count == 0",
             "Runtime desired counts remain hard-zero",
             "!var.external_model_processors_enabled",

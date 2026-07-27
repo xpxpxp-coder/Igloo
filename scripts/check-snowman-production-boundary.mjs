@@ -111,6 +111,7 @@ const runtimeAuthorityFiles = [
   "infra/aws/compute.tf",
   "infra/aws/agent_executor.tf",
   "infra/aws/agent_broker.tf",
+  "infra/aws/agent_coordinator.tf",
   "infra/aws/operations.tf",
   "infra/aws/outputs.tf",
 ];
@@ -528,6 +529,27 @@ if (/^\s*task_role_arn\s*=/m.test(agentBrokerTerraform)) {
     "infra/aws/agent_broker.tf: the serving broker must not receive an AWS task role",
   );
 }
+const agentCoordinatorTerraform = read("infra/aws/agent_coordinator.tf");
+if (/cidr_ipv4\s*=\s*"0\.0\.0\.0\/0"|assign_public_ip\s*=\s*true/m.test(agentCoordinatorTerraform)) {
+  failures.push(
+    "infra/aws/agent_coordinator.tf: the coordinator must not receive a public network path",
+  );
+}
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  'actions   = ["kms:GenerateMac"]',
+  "the coordinator must derive tokens using only the exact HMAC KMS key",
+);
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  'variable = "iam:PassedToService"',
+  "the coordinator may pass agent execution roles only to ECS tasks",
+);
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  'condition     = var.agent_coordinator_desired_count == 0',
+  "the coordinator must remain hard dormant pending staging evidence",
+);
 if (/cidr_ipv4\s*=\s*"0\.0\.0\.0\/0"|assign_public_ip\s*=\s*true/m.test(agentBrokerTerraform)) {
   failures.push(
     "infra/aws/agent_broker.tf: the broker must not receive a public network path",

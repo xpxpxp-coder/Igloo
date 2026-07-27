@@ -166,6 +166,48 @@ variable "agent_broker_private_dns_name" {
   }
 }
 
+variable "agent_coordinator_desired_count" {
+  type        = number
+  description = "Desired trusted agent-coordinator tasks. The baseline remains hard dormant."
+  default     = 0
+  validation {
+    condition     = var.agent_coordinator_desired_count >= 0 && var.agent_coordinator_desired_count <= 2
+    error_message = "agent_coordinator_desired_count must be between 0 and 2."
+  }
+}
+
+variable "agent_coordinator_private_ingress_enabled" {
+  type        = bool
+  description = "Create the cost-bearing internal TLS NLB and split-horizon DNS for the coordinator."
+  default     = false
+}
+
+variable "agent_coordinator_tls_certificate_arn" {
+  type        = string
+  description = "Exact Command Center account ACM certificate for the private coordinator hostname."
+  default     = ""
+  validation {
+    condition = (
+      !var.agent_coordinator_private_ingress_enabled ||
+      can(regex("^arn:aws(?:-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/[0-9a-fA-F-]{36}$", var.agent_coordinator_tls_certificate_arn))
+    )
+    error_message = "Private agent-coordinator ingress requires an exact ACM certificate ARN."
+  }
+}
+
+variable "agent_coordinator_private_dns_name" {
+  type        = string
+  description = "Exact Snowman split-horizon hostname for the private agent coordinator."
+  default     = ""
+  validation {
+    condition = (
+      var.agent_coordinator_private_dns_name == "" ||
+      can(regex("^coordinator(?:[.]staging)?[.]internal[.]snowmanai[.]org$", lower(var.agent_coordinator_private_dns_name)))
+    )
+    error_message = "agent_coordinator_private_dns_name must be empty or the exact staging or production Snowman private coordinator hostname."
+  }
+}
+
 variable "agent_model_gateway_url" {
   type        = string
   description = "Private Snowman model-gateway origin used by one-shot agent sandboxes."

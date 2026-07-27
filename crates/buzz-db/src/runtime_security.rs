@@ -191,7 +191,8 @@ pub async fn provision_agent_coordinator_role(
          GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
          GRANT SELECT ON TABLE snowman_work_requests, snowman_work_tasks,\n\
            snowman_task_leases, snowman_workforce_identities,\n\
-           snowman_workforce_capability_grants, snowman_model_routes\n\
+           snowman_workforce_key_bindings, snowman_workforce_capability_grants,\n\
+           snowman_model_routes\n\
            TO {role_identifier};\n\
          GRANT SELECT, INSERT, UPDATE ON TABLE snowman_agent_jobs,\n\
            snowman_agent_launches TO {role_identifier};\n\
@@ -248,6 +249,7 @@ pub async fn verify_agent_coordinator_role(pool: &PgPool, expected_role: &str) -
          AND has_table_privilege(current_user,'snowman_work_requests','SELECT') \
          AND has_table_privilege(current_user,'snowman_work_tasks','SELECT') \
          AND has_table_privilege(current_user,'snowman_task_leases','SELECT') \
+         AND has_table_privilege(current_user,'snowman_workforce_key_bindings','SELECT') \
          AND has_table_privilege(current_user,'snowman_workforce_capability_grants','SELECT') \
          AND has_table_privilege(current_user,'snowman_model_routes','SELECT') \
          AND NOT has_table_privilege(current_user,'snowman_work_tasks','INSERT') \

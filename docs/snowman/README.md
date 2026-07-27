@@ -26,6 +26,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Workforce human identity bridge](workforce-human-identity.md)
 - [Private model gateway](model-gateway.md)
 - [Private agent job broker](agent-broker.md)
+- [Private agent launch coordinator](agent-coordinator.md)
 - [Private inference fleet](../../infra/aws-inference/README.md)
 
 These documents distinguish three states:

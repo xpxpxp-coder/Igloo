@@ -111,7 +111,7 @@ run "dormant_staging_foundation" {
     error_message = "Valkey must use short-lived IAM authentication."
   }
   assert {
-    condition     = length(aws_vpc_endpoint.interface) == 9
+    condition     = length(aws_vpc_endpoint.interface) == 10
     error_message = "Every required private AWS service endpoint must exist."
   }
   assert {

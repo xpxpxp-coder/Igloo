@@ -10,6 +10,7 @@ locals {
   interface_endpoint_services = toset([
     "ecr.api",
     "ecr.dkr",
+    "ecs",
     "logs",
     "kms",
     "secretsmanager",
@@ -162,6 +163,18 @@ resource "aws_security_group" "agent_broker" {
 resource "aws_security_group" "agent_broker_ingress" {
   name        = "${local.workload_name}-agent-broker-ingress"
   description = "Internal TLS ingress reachable only by one-shot Snowman agent tasks"
+  vpc_id      = aws_vpc.command_center.id
+}
+
+resource "aws_security_group" "agent_coordinator" {
+  name        = "${local.workload_name}-agent-coordinator"
+  description = "Trusted crash-fenced Snowman agent launch coordinator"
+  vpc_id      = aws_vpc.command_center.id
+}
+
+resource "aws_security_group" "agent_coordinator_ingress" {
+  name        = "${local.workload_name}-agent-coordinator-ingress"
+  description = "Internal TLS ingress reachable only by Snowman workforce workers"
   vpc_id      = aws_vpc.command_center.id
 }
 
@@ -403,6 +416,60 @@ resource "aws_vpc_security_group_egress_rule" "agent_broker_to_database" {
   description                  = "No relay, Analyst, model, object, connector, or public route"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "agent_coordinator_from_worker" {
+  security_group_id            = aws_security_group.agent_coordinator_ingress.id
+  referenced_security_group_id = aws_security_group.worker.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "NIP-98 launch requests from assigned Snowman workforce services"
+}
+
+resource "aws_vpc_security_group_egress_rule" "worker_to_agent_coordinator" {
+  security_group_id            = aws_security_group.worker.id
+  referenced_security_group_id = aws_security_group.agent_coordinator_ingress.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "Private launch API only"
+}
+
+resource "aws_vpc_security_group_egress_rule" "agent_coordinator_ingress_to_task" {
+  security_group_id            = aws_security_group.agent_coordinator_ingress.id
+  referenced_security_group_id = aws_security_group.agent_coordinator.id
+  from_port                    = 8080
+  to_port                      = 8080
+  ip_protocol                  = "tcp"
+  description                  = "TLS-terminating NLB to the coordinator task only"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "agent_coordinator_from_ingress" {
+  security_group_id            = aws_security_group.agent_coordinator.id
+  referenced_security_group_id = aws_security_group.agent_coordinator_ingress.id
+  from_port                    = 8080
+  to_port                      = 8080
+  ip_protocol                  = "tcp"
+  description                  = "Private NLB traffic and readiness probes only"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "database_from_agent_coordinator" {
+  security_group_id            = aws_security_group.database.id
+  referenced_security_group_id = aws_security_group.agent_coordinator.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "Issue/reconcile-only coordinator database identity"
+}
+
+resource "aws_vpc_security_group_egress_rule" "agent_coordinator_to_database" {
+  security_group_id            = aws_security_group.agent_coordinator.id
+  referenced_security_group_id = aws_security_group.database.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "No relay, Analyst, model, object, connector, or public route"
+}
+
 resource "aws_vpc_security_group_ingress_rule" "inference_from_model_gateway" {
   security_group_id            = aws_security_group.inference.id
   referenced_security_group_id = aws_security_group.model_gateway.id
@@ -475,6 +542,7 @@ resource "aws_vpc_security_group_ingress_rule" "endpoints_from_services" {
     trigger       = aws_security_group.trigger.id
     reminder      = aws_security_group.reminder.id
     agent_broker  = aws_security_group.agent_broker.id
+    coordinator   = aws_security_group.agent_coordinator.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -512,6 +580,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_endpoints" {
     trigger       = aws_security_group.trigger.id
     reminder      = aws_security_group.reminder.id
     agent_broker  = aws_security_group.agent_broker.id
+    coordinator   = aws_security_group.agent_coordinator.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -531,6 +600,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_udp" {
     trigger       = aws_security_group.trigger.id
     reminder      = aws_security_group.reminder.id
     agent_broker  = aws_security_group.agent_broker.id
+    coordinator   = aws_security_group.agent_coordinator.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }
@@ -550,6 +620,7 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_tcp" {
     trigger       = aws_security_group.trigger.id
     reminder      = aws_security_group.reminder.id
     agent_broker  = aws_security_group.agent_broker.id
+    coordinator   = aws_security_group.agent_coordinator.id
     model_gateway = aws_security_group.model_gateway.id
     inference     = aws_security_group.inference.id
   }

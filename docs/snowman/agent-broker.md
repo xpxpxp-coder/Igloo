@@ -2,9 +2,9 @@
 
 Status: source service, shared contracts, durable schema, issuance function,
 dedicated database-role bootstrap, KMS-encrypted runtime-secret substrate,
-hard-dormant private TLS ECS/NLB deployment definition, atomic coordinator
-issuance/launch library, and local contract/IaC tests implemented; coordinator
-service ingress/reconciliation, action tools, model credentials, applied AWS
+hard-dormant private TLS ECS/NLB deployment definition, private authenticated
+coordinator service and AWS substrate, and local contract/IaC tests implemented;
+worker wiring/running-task reconciliation, action tools, model credentials, applied AWS
 deployment, and staged proof remain.
 
 ## Boundary
