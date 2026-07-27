@@ -216,37 +216,43 @@ pub async fn enroll_human_session(
             }
         })?;
 
-    if let Some(audit_tx) = &state.audit_tx {
-        if let Err(error) = audit_tx
-            .send(NewAuditEntry {
-                community_id: tenant.community(),
-                action: AuditAction::AuthSuccess,
-                actor_pubkey: Some(device_pubkey.to_vec()),
-                object_id: Some(enrolled.session_id.to_string()),
-                detail: json!({
-                    "authentication_method": "snowman_google_workspace",
-                    "broker_id": request.broker_id,
-                    "identity_id": enrolled.identity_id,
-                    "role": enrolled.role,
-                    "assurance_level": broker.assurance_level,
-                    "assurance_evidence_sha256": hex::encode(&broker.assurance_evidence_sha256),
-                    "provider_subject_excluded": true,
-                    "raw_email_excluded": true,
-                    "token_excluded": true
-                }),
-            })
-            .await
-        {
-            tracing::error!(%error, "workforce enrollment audit channel closed");
-            metrics::counter!("buzz_audit_send_errors_total").increment(1);
+    if !enrolled.replayed {
+        if let Some(audit_tx) = &state.audit_tx {
+            if let Err(error) = audit_tx
+                .send(NewAuditEntry {
+                    community_id: tenant.community(),
+                    action: AuditAction::AuthSuccess,
+                    actor_pubkey: Some(device_pubkey.to_vec()),
+                    object_id: Some(enrolled.session_id.to_string()),
+                    detail: json!({
+                        "authentication_method": "snowman_google_workspace",
+                        "broker_id": request.broker_id,
+                        "identity_id": enrolled.identity_id,
+                        "role": enrolled.role,
+                        "assurance_level": broker.assurance_level,
+                        "assurance_evidence_sha256": hex::encode(&broker.assurance_evidence_sha256),
+                        "provider_subject_excluded": true,
+                        "raw_email_excluded": true,
+                        "token_excluded": true
+                    }),
+                })
+                .await
+            {
+                tracing::error!(%error, "workforce enrollment audit channel closed");
+                metrics::counter!("buzz_audit_send_errors_total").increment(1);
+            }
         }
     }
-    metrics::counter!(
-        "snowman_workforce_human_enrollments_total",
-        "role" => enrolled.role.clone(),
-        "assurance" => enrollment.assurance_level.clone()
-    )
-    .increment(1);
+    if enrolled.replayed {
+        metrics::counter!("snowman_workforce_human_enrollment_replays_total").increment(1);
+    } else {
+        metrics::counter!(
+            "snowman_workforce_human_enrollments_total",
+            "role" => enrolled.role.clone(),
+            "assurance" => enrollment.assurance_level.clone()
+        )
+        .increment(1);
+    }
     Ok((
         StatusCode::CREATED,
         Json(json!({

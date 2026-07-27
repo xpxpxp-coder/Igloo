@@ -53,6 +53,9 @@ the highest risks without changing the production-readiness verdict:
 
 - governed relay role scopes plus active workforce human-session or
   capability-bounded service-identity resolution;
+- serialized, receipt-preserving human enrollment retries that recover from a
+  lost HTTP response without creating a second session, while rejecting any
+  assertion reuse whose authority, body, identity, device, or proof differs;
 - tenant-scoped durable work requests/tasks, model-per-specialist routes,
   fenced leases, retry/dead-letter recovery, exact-snapshot approvals, immutable
   context references, and hard token/cost ledgers;

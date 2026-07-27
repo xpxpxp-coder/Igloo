@@ -88,6 +88,47 @@ pub struct EnrolledHumanWorkforceSession {
     pub expires_at: DateTime<Utc>,
     /// Effective tenant role.
     pub role: String,
+    /// True when an identical, previously committed assertion was replayed.
+    pub replayed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct StoredHumanEnrollmentReceipt {
+    broker_id: String,
+    identity_id: Uuid,
+    session_id: Uuid,
+    provider_subject_sha256: Vec<u8>,
+    device_pubkey: Vec<u8>,
+    assertion_body_sha256: Vec<u8>,
+    device_proof_event_id: Vec<u8>,
+    role: String,
+    assurance_level: String,
+    authenticated_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+}
+
+impl StoredHumanEnrollmentReceipt {
+    fn matches(&self, enrollment: &NewHumanWorkforceSession) -> bool {
+        self.broker_id == enrollment.broker_id
+            && self.identity_id == enrollment.identity_id
+            && self.provider_subject_sha256 == enrollment.provider_subject_sha256
+            && self.device_pubkey == enrollment.device_pubkey
+            && self.assertion_body_sha256 == enrollment.assertion_body_sha256
+            && self.device_proof_event_id == enrollment.device_proof_event_id
+            && self.role == enrollment.role
+            && self.assurance_level == enrollment.assurance_level
+            && self.authenticated_at == enrollment.authenticated_at
+    }
+
+    fn into_result(self) -> EnrolledHumanWorkforceSession {
+        EnrolledHumanWorkforceSession {
+            identity_id: self.identity_id,
+            session_id: self.session_id,
+            expires_at: self.expires_at,
+            role: self.role,
+            replayed: true,
+        }
+    }
 }
 
 /// Validated, authority-signed revocation of a human identity or session set.
@@ -193,6 +234,56 @@ pub async fn enroll_human_workforce_session(
         ));
     }
     let mut tx = pool.begin().await?;
+
+    // Serialize the first use and any response-loss retry for this exact
+    // tenant/assertion pair. The advisory lock closes the race where two
+    // requests both observe no receipt before either transaction commits.
+    let assertion_lock = format!("{}:{}", community_id, enrollment.assertion_id);
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(assertion_lock)
+        .execute(&mut *tx)
+        .await?;
+    let existing = sqlx::query(
+        r#"
+        SELECT broker_id, identity_id, session_id, provider_subject_sha256,
+               device_pubkey, assertion_body_sha256, device_proof_event_id,
+               role, assurance_level, authenticated_at, expires_at
+        FROM snowman_workforce_enrollment_receipts
+        WHERE community_id=$1 AND assertion_id=$2
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(enrollment.assertion_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .map(
+        |row| -> std::result::Result<StoredHumanEnrollmentReceipt, sqlx::Error> {
+            Ok(StoredHumanEnrollmentReceipt {
+                broker_id: row.try_get("broker_id")?,
+                identity_id: row.try_get("identity_id")?,
+                session_id: row.try_get("session_id")?,
+                provider_subject_sha256: row.try_get("provider_subject_sha256")?,
+                device_pubkey: row.try_get("device_pubkey")?,
+                assertion_body_sha256: row.try_get("assertion_body_sha256")?,
+                device_proof_event_id: row.try_get("device_proof_event_id")?,
+                role: row.try_get("role")?,
+                assurance_level: row.try_get("assurance_level")?,
+                authenticated_at: row.try_get("authenticated_at")?,
+                expires_at: row.try_get("expires_at")?,
+            })
+        },
+    )
+    .transpose()?;
+    if let Some(receipt) = existing {
+        if receipt.matches(enrollment) {
+            tx.commit().await?;
+            return Ok(receipt.into_result());
+        }
+        return Err(DbError::InvalidData(
+            "Snowman workforce enrollment assertion was already used with different authority"
+                .into(),
+        ));
+    }
 
     let identity = sqlx::query_scalar::<_, Uuid>(
         r#"
@@ -416,6 +507,7 @@ pub async fn enroll_human_workforce_session(
         session_id: enrollment.session_id,
         expires_at: enrollment.expires_at,
         role: enrollment.role.clone(),
+        replayed: false,
     })
 }
 
@@ -797,6 +889,66 @@ pub async fn active_service_identity_has_capability(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn enrollment() -> NewHumanWorkforceSession {
+        let enrolled_at = DateTime::parse_from_rfc3339("2026-07-26T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        NewHumanWorkforceSession {
+            assertion_id: Uuid::from_u128(1),
+            broker_id: "snowman-analyst360-identity".to_string(),
+            identity_id: Uuid::from_u128(2),
+            session_id: Uuid::from_u128(3),
+            provider_subject_sha256: [4; 32],
+            display_name: "Snowman Owner".to_string(),
+            role: "owner".to_string(),
+            assurance_level: "mfa".to_string(),
+            authenticated_at: enrolled_at,
+            expires_at: enrolled_at + chrono::Duration::hours(1),
+            device_pubkey: [5; 32],
+            device_proof_event_id: [6; 32],
+            assertion_body_sha256: [7; 32],
+            capabilities: vec!["workforce.requests.create".to_string()],
+            enrolled_at,
+        }
+    }
+
+    fn receipt(enrollment: &NewHumanWorkforceSession) -> StoredHumanEnrollmentReceipt {
+        StoredHumanEnrollmentReceipt {
+            broker_id: enrollment.broker_id.clone(),
+            identity_id: enrollment.identity_id,
+            session_id: Uuid::from_u128(99),
+            provider_subject_sha256: enrollment.provider_subject_sha256.to_vec(),
+            device_pubkey: enrollment.device_pubkey.to_vec(),
+            assertion_body_sha256: enrollment.assertion_body_sha256.to_vec(),
+            device_proof_event_id: enrollment.device_proof_event_id.to_vec(),
+            role: enrollment.role.clone(),
+            assurance_level: enrollment.assurance_level.clone(),
+            authenticated_at: enrollment.authenticated_at,
+            expires_at: enrollment.expires_at,
+        }
+    }
+
+    #[test]
+    fn identical_enrollment_retry_returns_the_original_session() {
+        let enrollment = enrollment();
+        let receipt = receipt(&enrollment);
+        assert!(receipt.matches(&enrollment));
+        let result = receipt.into_result();
+        assert!(result.replayed);
+        assert_eq!(result.session_id, Uuid::from_u128(99));
+    }
+
+    #[test]
+    fn enrollment_assertion_reuse_with_changed_proof_is_rejected() {
+        let enrollment = enrollment();
+        let receipt = receipt(&enrollment);
+        let changed = NewHumanWorkforceSession {
+            device_proof_event_id: [8; 32],
+            ..enrollment
+        };
+        assert!(!receipt.matches(&changed));
+    }
 
     #[tokio::test]
     async fn malformed_pubkey_fails_before_database_access() {

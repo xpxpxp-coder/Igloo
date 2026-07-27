@@ -39,6 +39,9 @@ evidence for a runtime, recovery, accessibility, or operational claim.
   nonce/state/PKCE, authentication time, and tenant binding fail closed.
 - A human-to-Nostr binding is explicit, tenant-scoped, auditable, revocable, and
   protected against reassignment.
+- A response-loss retry with the same enrollment assertion and proof returns
+  the original durable session receipt; reuse with any changed authority,
+  identity, device, request body, or proof fails closed.
 - Google provider tokens, email addresses, raw provider subjects, Analyst
   cookies, and client data never cross the human-enrollment boundary; deployed
   network capture, database inspection, and audit reconciliation prove it.
