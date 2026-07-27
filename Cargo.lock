@@ -8888,6 +8888,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "snowman-agent-executor"
+version = "0.1.0"
+dependencies = [
+ "buzz-acp",
+ "chrono",
+ "hex",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "snowman-analyst-client"
 version = "0.1.0"
 dependencies = [

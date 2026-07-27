@@ -10,8 +10,9 @@ managed substrate, a hard-dormant relay service, per-identity workforce
 task/service contracts, a separate maintenance scheduler, recurring trigger,
 and fixed-content in-product reminder service. It
 also defines credentialless, one-shot ACP agent task definitions and a distinct
-deny-by-default executor/broker network boundary; it does not yet provide the
-executor image, action broker, or task-launch coordinator. It
+deny-by-default executor/broker network boundary. The matching one-shot
+executor client exists in source, but no reviewed adapter image, action broker,
+model-token path, or task-launch coordinator is active. It
 fails before resource creation when the caller is in the wrong account, the
 management account is targeted, production shares the Analyst 360 workload
 account, the image is mutable or outside the exact Snowman ECR repository,
@@ -80,8 +81,8 @@ root is deployable:
 2. live proof of the implemented database/runtime/workforce bootstrap; AWS
    Backup vault-lock plans, restore targets, CloudTrail/object-lock audit
    delivery, and tested recovery;
-3. staged recurring-trigger lost-response/restart proof; the agent executor
-   binary, job-token/action broker, exact `RunTask` coordinator, and live sandbox
+3. staged recurring-trigger lost-response/restart proof; the agent runtime
+   image, job-token/action broker, model-token path, exact `RunTask` coordinator, and live sandbox
    adversarial proof; pinned specialist model images/weights and staged
    activation of the separate `aws-inference`
    endpoint/component root; private ingress for the now-defined model-gateway

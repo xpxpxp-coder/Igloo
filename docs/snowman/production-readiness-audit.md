@@ -81,6 +81,11 @@ the highest risks without changing the production-readiness verdict:
   task role entirely, expose only bounded scratch mounts, and use a dedicated
   security group that can reach only the future private broker, model gateway,
   VPC DNS, and isolated ECR/log endpoints; no agent service is created;
+- the matching relay-independent executor now validates a digest-verified,
+  tenant/job/generation/runtime/model/deadline-bound snapshot, rejects local
+  adapter permission escalation, captures only bounded final-answer text, and
+  returns idempotent start/result receipts without receiving a relay or AWS
+  task credential;
 - definition-time rejection of unimplemented workflow actions and unsafe
   webhook destinations/credential headers; and
 - a default-off Analyst lifecycle-event ingress with host-derived community
@@ -111,7 +116,7 @@ the highest risks without changing the production-readiness verdict:
 These are implementation foundations, not staged proof. OIDC assertion exchange,
 private integration routing, live database/bootstrap evidence, recurring
 partition rotation and authenticated-edge bypass tests,
-proactive execution, the executor binary/action broker and live sandbox proof,
+proactive execution, adapter image/action broker/model-token path and live sandbox proof,
 KMS audit checkpoints, staged
 recovery/load/isolation exercises, comprehensive branding, accessibility, UAT,
 and launch evidence remain open gates.

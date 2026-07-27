@@ -81,16 +81,26 @@ same minimization and no-egress enforcement.
 
 ## Remaining activation gates
 
-This source boundary is not yet an executable production sandbox. Activation
-still requires:
+The `snowman-agent-executor` binary now implements the credentialless one-shot
+client side of this contract: exact Snowman origins, proxy/redirect denial,
+bounded digest-verified snapshot retrieval, runtime/model/job/generation and
+deadline checks, immutable image-manifest checks, fail-closed ACP model
+selection, adapter-local permission rejection, bounded final-answer capture,
+and idempotent start/result receipts. It accepts no relay key, AWS task
+credential, direct provider credential, or arbitrary executable/MCP path.
 
-- the `snowman-agent-executor` one-shot binary and separately pinned adapter
-  images (including any evaluated OpenClaw or Hermes adapter);
+This is not yet an executable production sandbox because the server and image
+halves remain dormant. Activation still requires:
+
+- separately pinned adapter images (including any evaluated OpenClaw or Hermes
+  adapter) that package the executor and exact immutable runtime manifest;
 - the job-token issuer/action broker, private listener/DNS, revocation, action
   receipts, and approval enforcement;
 - coordinator `RunTask`/`StopTask` logic with exact task-definition and
   `iam:PassRole` restrictions outside the untrusted task;
 - a broker-authenticated model-gateway path for agent principals;
+- a short-lived model-gateway credential that is distinct from the job token
+  and cannot reach a direct model provider;
 - sandbox cancellation, timeout, process-tree, scratch-destruction, log
   redaction, prompt-injection, credential-exfiltration, DNS, redirect, and
   destination-denial tests; and

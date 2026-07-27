@@ -31,6 +31,7 @@ const runtimeAuthorityFiles = [
   "crates/buzz-agent/src/config.rs",
   "crates/buzz-acp/src/config.rs",
   "crates/buzz-acp/src/acp.rs",
+  "crates/buzz-acp/src/oneshot.rs",
   "crates/buzz-acp/src/lib.rs",
   "crates/buzz-workflow/src/schema.rs",
   "crates/buzz-db/src/workforce.rs",
@@ -41,6 +42,7 @@ const runtimeAuthorityFiles = [
   "crates/snowman-analyst-client/src/lib.rs",
   "crates/snowman-workforce-worker/src/lib.rs",
   "crates/snowman-workforce-worker/src/main.rs",
+  "crates/snowman-agent-executor/src/main.rs",
   "crates/snowman-bootstrap/src/main.rs",
   "crates/buzz-db/src/runtime_security.rs",
   "crates/buzz-pubsub/src/connection.rs",
@@ -229,6 +231,51 @@ requireFragment(
   "crates/buzz-acp/src/acp.rs",
   'sws_obj.insert("network_access".to_string(), serde_json::Value::Bool(false));',
   "Codex agent tools must retain the final deny-network overlay",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  "PermissionPolicy::RejectOnce",
+  "governed ACP execution must reject adapter-local permission escalation",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  '"SNOWMAN_AGENT_JOB_TOKEN"',
+  "ACP adapters must not inherit the purpose-bound job credential",
+);
+requireFragment(
+  "crates/buzz-acp/src/oneshot.rs",
+  "AcpClient::spawn_governed(",
+  "the one-shot executor must suppress adapter-controlled diagnostic output",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  "Stdio::null()",
+  "governed ACP children must not copy prompt or tool content to container stderr",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  ".no_proxy()",
+  "the one-shot executor must not inherit an ambient proxy route",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  ".redirect(Policy::none())",
+  "the one-shot executor must reject broker redirects",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  'const MANIFEST_PATH: &str = "/opt/snowman/runtime/manifest.json";',
+  "the one-shot executor must load only the immutable image manifest",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  'with_env_filter("snowman_agent_executor=info,buzz_acp=info,acp::wire=off")',
+  "the one-shot executor must not accept ambient content-bearing log directives",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  'Some(Path::new("/opt/snowman/runtime/bin"))',
+  "runtime manifests must use an adapter directly inside the immutable runtime directory",
 );
 requireFragment(
   "crates/buzz-acp/src/acp.rs",

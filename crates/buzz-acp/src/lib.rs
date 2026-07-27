@@ -5,6 +5,7 @@ mod config;
 mod engram_fetch;
 mod filter;
 mod observer;
+pub mod oneshot;
 mod pool;
 mod pool_lifecycle;
 mod queue;
