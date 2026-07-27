@@ -128,14 +128,6 @@ jobs:
         with:
           version: v3.16.4
 
-      - name: Set up Python (for chart-testing)
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.12"
-
-      - name: Set up chart-testing
-        uses: helm/chart-testing-action@0d28d3144d3a25ea2cc349d6e59901c4ff469b3b  # v2.7.0
-
       - name: Create kind cluster
         uses: helm/kind-action@0025e74a8c7512023d06dc019c617aa3cf561fde  # v1.10.0
         with:
