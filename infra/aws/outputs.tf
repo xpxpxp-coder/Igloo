@@ -122,15 +122,16 @@ output "operations_posture" {
 output "dormant_compute_posture" {
   description = "Relay task and roles are defined but no service or desired runtime is activated."
   value = {
-    bootstrap_task_definition_arn    = aws_ecs_task_definition.bootstrap.arn
-    bootstrap_execution_role_arn     = aws_iam_role.bootstrap_execution.arn
-    bootstrap_task_role_arn          = aws_iam_role.bootstrap_task.arn
-    relay_task_definition_arn        = aws_ecs_task_definition.relay.arn
-    relay_execution_role_arn         = aws_iam_role.relay_execution.arn
-    relay_task_role_arn              = aws_iam_role.relay_task.arn
-    relay_runtime_secret_arn         = aws_secretsmanager_secret.relay_runtime.arn
-    agent_broker_runtime_secret_arn  = aws_secretsmanager_secret.agent_broker_runtime.arn
-    agent_broker_task_definition_arn = aws_ecs_task_definition.agent_broker.arn
+    bootstrap_task_definition_arn        = aws_ecs_task_definition.bootstrap.arn
+    bootstrap_execution_role_arn         = aws_iam_role.bootstrap_execution.arn
+    bootstrap_task_role_arn              = aws_iam_role.bootstrap_task.arn
+    relay_task_definition_arn            = aws_ecs_task_definition.relay.arn
+    relay_execution_role_arn             = aws_iam_role.relay_execution.arn
+    relay_task_role_arn                  = aws_iam_role.relay_task.arn
+    relay_runtime_secret_arn             = aws_secretsmanager_secret.relay_runtime.arn
+    agent_broker_runtime_secret_arn      = aws_secretsmanager_secret.agent_broker_runtime.arn
+    agent_coordinator_runtime_secret_arn = aws_secretsmanager_secret.agent_coordinator_runtime.arn
+    agent_broker_task_definition_arn     = aws_ecs_task_definition.agent_broker.arn
     agent_runtime_task_definitions = {
       for name, task in aws_ecs_task_definition.agent_executor : name => task.arn
     }

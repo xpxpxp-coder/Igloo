@@ -95,17 +95,25 @@ broker returns only digest-bound snapshots and accepts only bounded exact start
 and result receipts under a one-job token. It is a separate private service,
 not a relay or Block endpoint.
 
-This is not yet an executable production sandbox because deployment,
-coordination, tools, and model authorization remain dormant. Activation still
+The coordinator library now atomically commits job and launch evidence, records
+one-time authenticated-request evidence, derives a recoverable job-bound token
+using KMS HMAC without storing its plaintext, and launches exactly one pinned
+Fargate task with a deterministic ECS client token. Its production ECS call
+sets private subnets, one executor security group, public IP disabled, ECS Exec
+disabled, and only tenant ID, job ID, and job token container overrides. The
+token is not reused as a model credential.
+
+This is not yet an executable production sandbox because service deployment,
+full reconciliation, tools, and model credentials remain dormant. Activation still
 requires:
 
 - separately pinned adapter images (including any evaluated OpenClaw or Hermes
   adapter) that package the executor and exact immutable runtime manifest;
-- staged proof of the now-defined broker database-role/secret bootstrap; the
-  coordinator role, private broker service/listener, cancellation/expiration/
+- staged proof of the now-defined broker/coordinator database-role/secret bootstrap;
+  the private coordinator service, private broker service/listener, cancellation/expiration/
   purge, capability-specific action receipts, and approval enforcement;
-- coordinator `RunTask`/`StopTask` logic with exact task-definition and
-  `iam:PassRole` restrictions outside the untrusted task;
+- due-launch and running-task reconciliation with cancellation/expiry/token
+  revocation, plus exact coordinator task-role/`iam:PassRole` restrictions;
 - a broker-authenticated model-gateway path for agent principals;
 - a short-lived model-gateway credential that is distinct from the job token
   and cannot reach a direct model provider;

@@ -2,8 +2,9 @@
 
 Status: source service, shared contracts, durable schema, issuance function,
 dedicated database-role bootstrap, KMS-encrypted runtime-secret substrate,
-hard-dormant private TLS ECS/NLB deployment definition, and local contract/IaC
-tests implemented; coordinator, action tools, model authorization, applied AWS
+hard-dormant private TLS ECS/NLB deployment definition, atomic coordinator
+issuance/launch library, and local contract/IaC tests implemented; coordinator
+service ingress/reconciliation, action tools, model credentials, applied AWS
 deployment, and staged proof remain.
 
 ## Boundary
@@ -29,8 +30,8 @@ The shared `snowman-agent-contract` crate binds every snapshot and receipt to:
 - one tenant UUID and workspace UUID;
 - one workforce request, task, service identity, and fenced lease generation;
 - one digest-reviewed runtime and evaluated model catalog ID;
-- one classification, sorted exact capability set, deadline, and token/cost
-  budget; and
+- one classification, evidence-bearing PII prohibition/minimization result,
+  sorted exact capability set, deadline, and token/cost budget; and
 - one minimized system-policy and request/evidence-reference projection.
 
 Raw Aptive datasets, rows, transcripts, provider URLs, relay keys, AWS
@@ -38,8 +39,12 @@ credentials, connector credentials, and provider credentials are prohibited.
 
 ## Runtime protocol
 
-The trusted coordinator calls the library-only `issue_job` function after it
-claims a live workforce task. Issuance is idempotent for the exact job,
+The trusted coordinator uses the transaction-scoped issuance function after it
+validates a live workforce task. Job and launch evidence commit atomically.
+Issuance now requires an active, unrevoked service identity, active capability
+grants for every task capability plus `workforce.tasks.execute`, and an active
+model route allowed for the specialist role and data classification. Issuance
+is idempotent for the exact job,
 snapshot, token digest, task, and generation; a different retry conflicts.
 The opaque token is stored only as SHA-256 and is delivered to the one-shot
 task as a container override.
@@ -60,16 +65,19 @@ receipt digest matches. Terminal jobs cannot read the snapshot again.
 
 The serving broker database identity is verified as exact-role,
 connect/usage-only, no-DDL, and `SELECT`/`UPDATE` only on
-`snowman_agent_jobs`. The general relay runtime role is explicitly revoked from
-that table so the public/collaboration process cannot mint, read, or alter agent
-job authority.
+`snowman_agent_jobs`. A separate coordinator role can read only workforce
+authority/model policy and insert/update job, launch, and anti-replay evidence;
+it cannot read collaboration events, change workforce authority, or delete
+evidence. The general relay runtime role is explicitly revoked from all three
+agent authority/evidence tables.
 
 ## Remaining activation gates
 
-- Run and prove the now-defined broker-role/secret bootstrap and dormant private
-  TLS service plan, then provision the separate coordinator role.
-- Implement the coordinator's exact ECS `RunTask`/`StopTask` authority, random
-  token generation, crash reconciliation, cancellation, expiration, and purge.
+- Run and prove the now-defined broker/coordinator role bootstrap and dormant
+  private TLS service plan.
+- Promote the coordinator library into its private authenticated service and
+  finish due-launch reconciliation, cancellation, expiration, terminal task
+  observation, token revocation, and retention/purge evidence.
 - Add capability-specific action endpoints and MCP tools. Every action must
   recheck the active lease, approval, destination, canonical digest, and spend;
   arbitrary shell/network access is not an action capability.

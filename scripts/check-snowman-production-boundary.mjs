@@ -45,6 +45,8 @@ const runtimeAuthorityFiles = [
   "crates/snowman-agent-contract/src/lib.rs",
   "crates/snowman-agent-broker/src/lib.rs",
   "crates/snowman-agent-broker/src/main.rs",
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "crates/snowman-agent-coordinator/src/main.rs",
   "crates/snowman-agent-executor/src/main.rs",
   "crates/snowman-bootstrap/src/main.rs",
   "crates/buzz-db/src/runtime_security.rs",
@@ -58,6 +60,7 @@ const runtimeAuthorityFiles = [
   "migrations/0031_snowman_context_packet_manifests.sql",
   "migrations/0032_snowman_proactive_actions.sql",
   "migrations/0043_snowman_agent_jobs.sql",
+  "migrations/0044_snowman_agent_launches.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -301,6 +304,41 @@ requireFragment(
   "crates/snowman-agent-broker/src/lib.rs",
   "issue.job_token.zeroize();",
   "the trusted coordinator must erase the raw job token before database I/O",
+);
+requireFragment(
+  "crates/snowman-agent-contract/src/lib.rs",
+  "pii_prohibited",
+  "every agent snapshot must carry the global PII prohibition",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "!snapshot.data_policy.pii_prohibited",
+  "job issuance must reject any snapshot not covered by the PII prohibition",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  ".assign_public_ip(AssignPublicIp::Disabled)",
+  "the coordinator must explicitly disable public IPs on every one-shot task",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  ".enable_execute_command(false)",
+  "the coordinator must explicitly disable ECS Exec on every one-shot task",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "issue_job_in_transaction",
+  "job and launch evidence must commit atomically",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "MacAlgorithmSpec::HmacSha256",
+  "recoverable one-job credentials must derive from the exact KMS HMAC key",
+);
+requireFragment(
+  "migrations/0044_snowman_agent_launches.sql",
+  "PRIMARY KEY (community_id, launch_id)",
+  "agent launch evidence must lead with the tenant boundary",
 );
 requireFragment(
   "crates/snowman-agent-broker/src/main.rs",

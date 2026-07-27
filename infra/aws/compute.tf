@@ -34,6 +34,13 @@ resource "aws_secretsmanager_secret" "agent_broker_runtime" {
   recovery_window_in_days = 30
 }
 
+resource "aws_secretsmanager_secret" "agent_coordinator_runtime" {
+  name                    = "/snowman/command-center/${var.environment}/agent-coordinator-runtime"
+  description             = "Private agent coordinator database URL populated only by the governed bootstrap"
+  kms_key_id              = aws_kms_key.data.arn
+  recovery_window_in_days = 30
+}
+
 resource "aws_iam_role" "relay_execution" {
   name               = "${local.workload_name}-relay-execution"
   assume_role_policy = data.aws_iam_policy_document.ecs_task_trust.json
@@ -217,6 +224,7 @@ data "aws_iam_policy_document" "bootstrap_task" {
     resources = [
       aws_secretsmanager_secret.relay_runtime.arn,
       aws_secretsmanager_secret.agent_broker_runtime.arn,
+      aws_secretsmanager_secret.agent_coordinator_runtime.arn,
     ]
   }
   dynamic "statement" {
@@ -292,6 +300,8 @@ resource "aws_ecs_task_definition" "bootstrap" {
         { name = "SNOWMAN_RUNTIME_DB_ROLE", value = "snowman_relay_runtime" },
         { name = "SNOWMAN_AGENT_BROKER_RUNTIME_SECRET_ARN", value = aws_secretsmanager_secret.agent_broker_runtime.arn },
         { name = "SNOWMAN_AGENT_BROKER_DB_ROLE", value = "snowman_agent_broker" },
+        { name = "SNOWMAN_AGENT_COORDINATOR_RUNTIME_SECRET_ARN", value = aws_secretsmanager_secret.agent_coordinator_runtime.arn },
+        { name = "SNOWMAN_AGENT_COORDINATOR_DB_ROLE", value = "snowman_agent_coordinator" },
         { name = "SNOWMAN_WORKFORCE_BOOTSTRAP_MANIFEST", value = local.workforce_bootstrap_manifest },
       ]
       logConfiguration = {

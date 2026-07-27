@@ -521,7 +521,23 @@ pub struct IssueOutcome {
 /// Validate and idempotently persist a purpose-bound job from a currently
 /// active workforce lease. This function is for the trusted coordinator, not
 /// the untrusted executor or broker HTTP surface.
-pub async fn issue_job(pool: &PgPool, mut issue: IssueJob) -> Result<IssueOutcome, IssueError> {
+pub async fn issue_job(pool: &PgPool, issue: IssueJob) -> Result<IssueOutcome, IssueError> {
+    let mut transaction = pool.begin().await.map_err(|_| IssueError::Database)?;
+    let outcome = issue_job_in_transaction(&mut transaction, issue).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| IssueError::Database)?;
+    Ok(outcome)
+}
+
+/// Validate and idempotently persist a purpose-bound job inside the caller's
+/// transaction. The coordinator uses this entry point so job issuance and its
+/// crash-recovery launch record commit atomically.
+pub async fn issue_job_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    mut issue: IssueJob,
+) -> Result<IssueOutcome, IssueError> {
     validate_snapshot_for_issue(&issue.snapshot, &issue.job_token)?;
     let community_id =
         Uuid::parse_str(&issue.snapshot.tenant_id).map_err(|_| IssueError::Invalid)?;
@@ -549,12 +565,41 @@ pub async fn issue_job(pool: &PgPool, mut issue: IssueJob) -> Result<IssueOutcom
           ON r.community_id=t.community_id AND r.request_id=t.request_id
         JOIN snowman_task_leases l
           ON l.community_id=t.community_id AND l.task_id=t.task_id
+        JOIN snowman_workforce_identities i
+          ON i.community_id=t.community_id AND i.identity_id=t.service_identity_id
+        JOIN snowman_model_routes m
+          ON m.community_id=t.community_id AND m.model_id=t.model_id
         WHERE t.community_id=$1 AND t.task_id=$3 AND t.request_id=$4
           AND l.generation=$5 AND l.worker_identity_id=t.service_identity_id
           AND l.expires_at >= $14 AND t.status IN ('leased','running')
           AND r.status IN ('running','reviewing')
+          AND i.identity_type='service' AND i.status='active'
+          AND (i.expires_at IS NULL OR i.expires_at >= $14)
+          AND i.revoked_at IS NULL
           AND t.model_id=$15 AND t.specialist_role=$16 AND r.classification=$17
+          AND m.status='active' AND $16=ANY(m.suited_roles)
+          AND $17=ANY(m.allowed_classifications)
+          AND m.max_context_tokens >= $8 + $9
           AND t.required_capabilities @> $7 AND t.required_capabilities <@ $7
+          AND NOT EXISTS (
+            SELECT 1 FROM unnest($7::TEXT[]) required(capability)
+            WHERE NOT EXISTS (
+              SELECT 1 FROM snowman_workforce_capability_grants g
+              WHERE g.community_id=t.community_id
+                AND g.identity_id=t.service_identity_id
+                AND g.capability=required.capability
+                AND g.revoked_at IS NULL
+                AND (g.expires_at IS NULL OR g.expires_at >= $14)
+            )
+          )
+          AND EXISTS (
+            SELECT 1 FROM snowman_workforce_capability_grants g
+            WHERE g.community_id=t.community_id
+              AND g.identity_id=t.service_identity_id
+              AND g.capability='workforce.tasks.execute'
+              AND g.revoked_at IS NULL
+              AND (g.expires_at IS NULL OR g.expires_at >= $14)
+          )
           AND $8 <= r.max_input_tokens AND $8 >= t.expected_input_tokens
           AND $9 <= t.max_output_tokens AND $10 <= t.max_cost_microusd
           AND (t.deadline_at IS NULL OR t.deadline_at >= $14)
@@ -580,7 +625,7 @@ pub async fn issue_job(pool: &PgPool, mut issue: IssueJob) -> Result<IssueOutcom
     .bind(&issue.snapshot.model_id)
     .bind(&issue.snapshot.specialist_role)
     .bind(classification)
-    .fetch_optional(pool)
+    .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| IssueError::Database)?;
     if inserted.is_some() {
@@ -596,7 +641,7 @@ pub async fn issue_job(pool: &PgPool, mut issue: IssueJob) -> Result<IssueOutcom
     .bind(community_id)
     .bind(issue.snapshot.task_id)
     .bind(generation)
-    .fetch_optional(pool)
+    .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| IssueError::Database)?
     .ok_or(IssueError::Conflict)?;
@@ -650,6 +695,8 @@ fn validate_snapshot_for_issue(snapshot: &JobSnapshot, token: &str) -> Result<()
         || snapshot.model_id.contains("://")
         || snapshot.specialist_role.is_empty()
         || snapshot.specialist_role.len() > 64
+        || !snapshot.data_policy.pii_prohibited
+        || !valid_sha256(&snapshot.data_policy.minimization_evidence_sha256)
         || snapshot.system_prompt.is_empty()
         || snapshot.system_prompt.len() > 64 * 1024
         || snapshot.prompt.is_empty()
@@ -707,6 +754,13 @@ fn valid_capability(value: &str) -> bool {
                     character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
                 })
         })
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn valid_role(value: &str) -> bool {
@@ -845,6 +899,10 @@ mod tests {
             model_id: "snowman-research-v1".into(),
             specialist_role: "research_evidence".into(),
             classification: Classification::Confidential,
+            data_policy: snowman_agent_contract::AgentDataPolicy {
+                pii_prohibited: true,
+                minimization_evidence_sha256: "ab".repeat(32),
+            },
             system_prompt: "Snowman policy".into(),
             prompt: "Minimized request".into(),
             capability_grants: vec!["artifact.draft".into()],
@@ -861,6 +919,9 @@ mod tests {
         assert!(validate_snapshot_for_issue(&snapshot, &"t".repeat(64)).is_err());
         snapshot.model_id = "snowman-research-v1".into();
         snapshot.tenant_id = "aptive".into();
+        assert!(validate_snapshot_for_issue(&snapshot, &"t".repeat(64)).is_err());
+        snapshot.tenant_id = community.to_string();
+        snapshot.data_policy.pii_prohibited = false;
         assert!(validate_snapshot_for_issue(&snapshot, &"t".repeat(64)).is_err());
     }
 

@@ -31,6 +31,16 @@ pub enum Classification {
     Restricted,
 }
 
+/// Mandatory handling policy for every executor-visible snapshot.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentDataPolicy {
+    /// Must remain true: direct identifiers and PII are not agent inputs.
+    pub pii_prohibited: bool,
+    /// SHA-256 evidence from the governed minimization/redaction boundary.
+    pub minimization_evidence_sha256: String,
+}
+
 /// Immutable, tenant- and lease-bound input to one fresh agent process.
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -57,6 +67,8 @@ pub struct JobSnapshot {
     pub specialist_role: String,
     /// Governed data classification.
     pub classification: Classification,
+    /// Evidence-bearing prohibition on PII in the executor projection.
+    pub data_policy: AgentDataPolicy,
     /// Trusted Snowman runtime policy, separate from untrusted input.
     pub system_prompt: String,
     /// Minimized request and evidence-reference projection.

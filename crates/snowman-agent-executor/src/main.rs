@@ -10,7 +10,7 @@ use reqwest::{header, redirect::Policy, Client, Response};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(test)]
-use snowman_agent_contract::Classification;
+use snowman_agent_contract::{AgentDataPolicy, Classification};
 use snowman_agent_contract::{
     BrokerAck, JobSnapshot, ResultReceipt, RuntimeOutcome, StartedReceipt, BROKER_ACK_SCHEMA,
     JOB_RESULT_SCHEMA, JOB_SNAPSHOT_SCHEMA, JOB_STARTED_SCHEMA,
@@ -377,6 +377,8 @@ fn validate_snapshot(snapshot: &JobSnapshot, config: &Config) -> Result<(), Erro
         || !valid_identifier(&snapshot.model_id, 256)
         || snapshot.model_id.contains("://")
         || !valid_identifier(&snapshot.specialist_role, 64)
+        || !snapshot.data_policy.pii_prohibited
+        || !valid_sha256(&snapshot.data_policy.minimization_evidence_sha256)
         || snapshot.system_prompt.is_empty()
         || snapshot.system_prompt.len() > 64 * 1024
         || snapshot.prompt.is_empty()
@@ -531,6 +533,10 @@ mod tests {
             model_id: "snowman-research-v1".into(),
             specialist_role: "research_evidence".into(),
             classification: Classification::Confidential,
+            data_policy: AgentDataPolicy {
+                pii_prohibited: true,
+                minimization_evidence_sha256: "ab".repeat(32),
+            },
             system_prompt: "Follow the governed Snowman policy.".into(),
             prompt: "Prepare the bounded work product.".into(),
             capability_grants: vec!["artifact.draft".into()],
@@ -575,6 +581,10 @@ mod tests {
 
         let mut value = snapshot();
         value.model_id = "https://api.openai.com/model".into();
+        assert!(validate_snapshot(&value, &config).is_err());
+
+        let mut value = snapshot();
+        value.data_policy.pii_prohibited = false;
         assert!(validate_snapshot(&value, &config).is_err());
 
         let mut value = snapshot();

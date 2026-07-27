@@ -135,6 +135,8 @@ class AwsFoundationContractTests(unittest.TestCase):
             'sid    = "ReconcileExactWorkforceIdentitySecrets"',
             'resources = local.workforce_identity_secret_arns',
             'SNOWMAN_WORKFORCE_BOOTSTRAP_MANIFEST", value = local.workforce_bootstrap_manifest',
+            'SNOWMAN_AGENT_COORDINATOR_RUNTIME_SECRET_ARN", value =',
+            'SNOWMAN_AGENT_COORDINATOR_DB_ROLE", value = "snowman_agent_coordinator"',
             'SNOWMAN_PARTITION_MAINTENANCE_MODE", value = "external"',
             'RELAY_OWNER_PUBKEY", valueFrom =',
         ):

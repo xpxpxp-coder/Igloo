@@ -1059,8 +1059,21 @@ async fn main() -> anyhow::Result<()> {
     let agent_broker_secret_arn = required_env("SNOWMAN_AGENT_BROKER_RUNTIME_SECRET_ARN")?;
     let agent_broker_role = required_env("SNOWMAN_AGENT_BROKER_DB_ROLE")?;
     buzz_db::runtime_security::validate_role_name(&agent_broker_role)?;
-    if agent_broker_role == runtime_role {
-        bail!("agent broker and relay database roles must be distinct");
+    let agent_coordinator_secret_arn =
+        required_env("SNOWMAN_AGENT_COORDINATOR_RUNTIME_SECRET_ARN")?;
+    let agent_coordinator_role = required_env("SNOWMAN_AGENT_COORDINATOR_DB_ROLE")?;
+    buzz_db::runtime_security::validate_role_name(&agent_coordinator_role)?;
+    if [
+        runtime_role.as_str(),
+        agent_broker_role.as_str(),
+        agent_coordinator_role.as_str(),
+    ]
+    .into_iter()
+    .collect::<std::collections::BTreeSet<_>>()
+    .len()
+        != 3
+    {
+        bail!("relay, agent broker, and agent coordinator database roles must be distinct");
     }
     let owner_pubkey = required_env("SNOWMAN_RELAY_OWNER_PUBKEY")?.to_ascii_lowercase();
     validate_owner_pubkey(&owner_pubkey)?;
@@ -1110,6 +1123,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Zeroizing::new(random_hex())
     };
+    let existing_agent_coordinator =
+        existing_database_runtime_secret(&secrets, &agent_coordinator_secret_arn).await?;
+    let mut agent_coordinator_password = if let Some(existing) = &existing_agent_coordinator {
+        let parsed = url::Url::parse(&existing.database_url)
+            .context("agent coordinator DATABASE_URL is not a URL")?;
+        Zeroizing::new(decoded_url_password(&parsed)?)
+    } else {
+        Zeroizing::new(random_hex())
+    };
 
     let admin = PgPoolOptions::new()
         .max_connections(1)
@@ -1129,6 +1151,12 @@ async fn main() -> anyhow::Result<()> {
         &admin,
         &agent_broker_role,
         &agent_broker_password,
+    )
+    .await?;
+    buzz_db::runtime_security::provision_agent_coordinator_role(
+        &admin,
+        &agent_coordinator_role,
+        &agent_coordinator_password,
     )
     .await?;
     buzz_db::partition::ensure_future_partitions(&admin, 6).await?;
@@ -1156,6 +1184,24 @@ async fn main() -> anyhow::Result<()> {
     buzz_db::runtime_security::verify_agent_broker_role(&agent_broker, &agent_broker_role).await?;
     agent_broker.close().await;
 
+    let agent_coordinator_url = database_url(
+        &master,
+        &database,
+        &agent_coordinator_role,
+        &agent_coordinator_password,
+    )?;
+    let agent_coordinator = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&agent_coordinator_url)
+        .await
+        .context("could not verify the provisioned agent coordinator identity")?;
+    buzz_db::runtime_security::verify_agent_coordinator_role(
+        &agent_coordinator,
+        &agent_coordinator_role,
+    )
+    .await?;
+    agent_coordinator.close().await;
+
     let document = RelayRuntimeSecret {
         database_url: runtime_url.to_string(),
         relay_private_key,
@@ -1182,9 +1228,22 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("could not write the governed agent broker runtime secret")?;
 
+    let mut agent_coordinator_document = serde_json::to_string(&DatabaseRuntimeSecret {
+        database_url: agent_coordinator_url.to_string(),
+    })?;
+    secrets
+        .put_secret_value()
+        .secret_id(&agent_coordinator_secret_arn)
+        .secret_string(agent_coordinator_document.clone())
+        .send()
+        .await
+        .context("could not write the governed agent coordinator runtime secret")?;
+
     encoded.zeroize();
     agent_broker_document.zeroize();
+    agent_coordinator_document.zeroize();
     agent_broker_password.zeroize();
+    agent_coordinator_password.zeroize();
     runtime_password.zeroize();
     master.password.zeroize();
     if let Some(receipt) = workforce_receipt {
