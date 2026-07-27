@@ -2,9 +2,10 @@
 
 Status: enrollment, signed session/global/identity revocation, Analyst logout
 propagation, and the least-privilege AWS key boundary are implemented in source.
-Production activation remains blocked on client UX, durable retry operation,
-live private routing, current Google Workspace MFA-policy evidence, and staged
-adversarial proof.
+Analyst's isolated crash-fenced retry worker is also implemented in source.
+Production activation remains blocked on client UX, deploying and exercising
+that retry service, live private routing, current Google Workspace MFA-policy
+evidence, and staged adversarial proof.
 
 ## Decision
 
@@ -103,7 +104,7 @@ re-enrollment.
 
 ## Remaining production evidence
 
-- operate and prove durable retry for unconfirmed revocations, plus the admin
+- deploy and prove durable retry for unconfirmed revocations, plus the admin
   workforce-removal and key-rotation UX;
 - build the desktop/web/mobile enrollment and session/device management UX;
 - prove device-count, replay, stale-authentication, stale-MFA, role downgrade,
