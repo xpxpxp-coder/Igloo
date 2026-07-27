@@ -143,6 +143,7 @@ output "dormant_compute_posture" {
     relay_runtime_secret_arn              = aws_secretsmanager_secret.relay_runtime.arn
     agent_broker_runtime_secret_arn       = aws_secretsmanager_secret.agent_broker_runtime.arn
     agent_coordinator_runtime_secret_arn  = aws_secretsmanager_secret.agent_coordinator_runtime.arn
+    model_gateway_runtime_secret_arn      = aws_secretsmanager_secret.model_gateway_runtime.arn
     agent_broker_task_definition_arn      = aws_ecs_task_definition.agent_broker.arn
     agent_coordinator_task_definition_arn = aws_ecs_task_definition.agent_coordinator.arn
     agent_job_token_hmac_key_arn          = aws_kms_key.agent_job_token.arn

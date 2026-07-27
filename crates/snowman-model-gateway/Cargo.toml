@@ -14,6 +14,7 @@ aws-sdk-sagemakerruntime = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
 buzz-pubsub = { path = "../buzz-pubsub" }
+buzz-db = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
@@ -24,12 +25,14 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 snowman-aws-auth = { path = "../snowman-aws-auth" }
 snowman-agent-contract = { path = "../snowman-agent-contract" }
+sqlx = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tower-http = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+uuid = { workspace = true }
 
 [lib]
 name = "snowman_model_gateway"

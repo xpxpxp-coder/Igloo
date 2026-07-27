@@ -1063,17 +1063,21 @@ async fn main() -> anyhow::Result<()> {
         required_env("SNOWMAN_AGENT_COORDINATOR_RUNTIME_SECRET_ARN")?;
     let agent_coordinator_role = required_env("SNOWMAN_AGENT_COORDINATOR_DB_ROLE")?;
     buzz_db::runtime_security::validate_role_name(&agent_coordinator_role)?;
+    let model_gateway_secret_arn = required_env("SNOWMAN_MODEL_GATEWAY_RUNTIME_SECRET_ARN")?;
+    let model_gateway_role = required_env("SNOWMAN_MODEL_GATEWAY_DB_ROLE")?;
+    buzz_db::runtime_security::validate_role_name(&model_gateway_role)?;
     if [
         runtime_role.as_str(),
         agent_broker_role.as_str(),
         agent_coordinator_role.as_str(),
+        model_gateway_role.as_str(),
     ]
     .into_iter()
     .collect::<std::collections::BTreeSet<_>>()
     .len()
-        != 3
+        != 4
     {
-        bail!("relay, agent broker, and agent coordinator database roles must be distinct");
+        bail!("relay, agent broker, agent coordinator, and model gateway database roles must be distinct");
     }
     let owner_pubkey = required_env("SNOWMAN_RELAY_OWNER_PUBKEY")?.to_ascii_lowercase();
     validate_owner_pubkey(&owner_pubkey)?;
@@ -1132,6 +1136,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Zeroizing::new(random_hex())
     };
+    let existing_model_gateway =
+        existing_database_runtime_secret(&secrets, &model_gateway_secret_arn).await?;
+    let mut model_gateway_password = if let Some(existing) = &existing_model_gateway {
+        let parsed = url::Url::parse(&existing.database_url)
+            .context("model gateway DATABASE_URL is not a URL")?;
+        Zeroizing::new(decoded_url_password(&parsed)?)
+    } else {
+        Zeroizing::new(random_hex())
+    };
 
     let admin = PgPoolOptions::new()
         .max_connections(1)
@@ -1157,6 +1170,12 @@ async fn main() -> anyhow::Result<()> {
         &admin,
         &agent_coordinator_role,
         &agent_coordinator_password,
+    )
+    .await?;
+    buzz_db::runtime_security::provision_model_gateway_role(
+        &admin,
+        &model_gateway_role,
+        &model_gateway_password,
     )
     .await?;
     buzz_db::partition::ensure_future_partitions(&admin, 6).await?;
@@ -1202,6 +1221,21 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     agent_coordinator.close().await;
 
+    let model_gateway_url = database_url(
+        &master,
+        &database,
+        &model_gateway_role,
+        &model_gateway_password,
+    )?;
+    let model_gateway = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&model_gateway_url)
+        .await
+        .context("could not verify the provisioned model gateway identity")?;
+    buzz_db::runtime_security::verify_model_gateway_role(&model_gateway, &model_gateway_role)
+        .await?;
+    model_gateway.close().await;
+
     let document = RelayRuntimeSecret {
         database_url: runtime_url.to_string(),
         relay_private_key,
@@ -1239,11 +1273,24 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("could not write the governed agent coordinator runtime secret")?;
 
+    let mut model_gateway_document = serde_json::to_string(&DatabaseRuntimeSecret {
+        database_url: model_gateway_url.to_string(),
+    })?;
+    secrets
+        .put_secret_value()
+        .secret_id(&model_gateway_secret_arn)
+        .secret_string(model_gateway_document.clone())
+        .send()
+        .await
+        .context("could not write the governed model gateway runtime secret")?;
+
     encoded.zeroize();
     agent_broker_document.zeroize();
     agent_coordinator_document.zeroize();
+    model_gateway_document.zeroize();
     agent_broker_password.zeroize();
     agent_coordinator_password.zeroize();
+    model_gateway_password.zeroize();
     runtime_password.zeroize();
     master.password.zeroize();
     if let Some(receipt) = workforce_receipt {
@@ -1364,6 +1411,13 @@ mod tests {
         assert_eq!(parsed.username(), "relay_user");
         assert_eq!(decoded_url_password(&parsed).unwrap(), "p@ss:/word");
         assert_eq!(parsed.query(), Some("sslmode=require"));
+        let secret = serde_json::to_value(DatabaseRuntimeSecret {
+            database_url: value.to_string(),
+        })
+        .unwrap();
+        assert_eq!(secret.as_object().unwrap().len(), 1);
+        assert_eq!(secret["DATABASE_URL"], value.as_str());
+        assert!(secret.get("database_url").is_none());
     }
 
     #[test]

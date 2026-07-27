@@ -20,6 +20,10 @@ const required = new Map([
     `"identifier": "${identity.desktop_bundle_id}"`,
   ],
   [
+    "desktop/src-tauri/Info.plist",
+    `<string>${identity.command_center_name}</string>`,
+  ],
+  [
     "mobile/android/app/build.gradle.kts",
     `applicationId = "${identity.desktop_bundle_id}"`,
   ],
@@ -27,12 +31,27 @@ const required = new Map([
     "mobile/android/app/src/main/AndroidManifest.xml",
     `android:label="${identity.mobile_name}"`,
   ],
+  [
+    "mobile/ios/Runner/Info.plist",
+    `<string>${identity.mobile_name}</string>`,
+  ],
+  [
+    "mobile/ios/Runner/Info.plist",
+    `<string>${identity.primary_deep_link_scheme}</string>`,
+  ],
   ["web/index.html", `<title>${identity.command_center_name}</title>`],
   [
     "Dockerfile",
     `org.opencontainers.image.title="${identity.command_center_name}"`,
   ],
   ["crates/buzz-cli/src/lib.rs", `Snowman 360 CLI`],
+  ["crates/buzz-admin/src/main.rs", `Snowman Operations administration`],
+  [".github/workflows/release.yml", identity.desktop_release_tag],
+  [".github/workflows/release.yml", identity.desktop_app_bundle_name],
+  [
+    ".github/workflows/docker.yml",
+    `org.opencontainers.image.title=${identity.command_center_name}`,
+  ],
   ["admin-web/src/App.tsx", "{ADMIN_NAME}"],
   ["mobile/lib/app.dart", "title: SnowmanProduct.mobileName"],
 ]);
@@ -60,6 +79,9 @@ const visibleFiles = [
   "desktop/src/features/settings/ui/ProfileSettingsCard.tsx",
   "desktop/src/features/settings/ui/SendFeedbackDialog.tsx",
   "desktop/src/features/settings/ui/SignOutSection.tsx",
+  "desktop/src/features/notifications/hooks.ts",
+  "desktop/src/features/local-archive/ui/localArchiveKinds.ts",
+  "desktop/src/features/projects/ui/CreateProjectDialog.tsx",
   "desktop/src/features/profile/ui/NostrBindConsentDialog.tsx",
   "desktop/src/features/profile/ui/AnimatedAvatarCapture.tsx",
   "mobile/lib/app.dart",
@@ -67,6 +89,8 @@ const visibleFiles = [
   "web/src/features/invite/ui/InvitePage.tsx",
   "web/src/features/invite/ui/InviteJoinPolicyNotice.tsx",
   "web/src/features/repos/ui/ReposPage.tsx",
+  "crates/buzz-cli/src/lib.rs",
+  "crates/buzz-admin/src/main.rs",
 ];
 const forbiddenVisible = [
   /Welcome to Buzz/i,
@@ -80,12 +104,38 @@ const forbiddenVisible = [
   /Accept invite in Buzz/i,
   /alt=["']Buzz["']/i,
   />\s*Buzz\s*</i,
+  /Buzz Desktop/i,
+  /Buzz-native/i,
+  /bee-garden/i,
 ];
 for (const path of visibleFiles) {
   const source = read(path);
   for (const pattern of forbiddenVisible) {
     if (pattern.test(source))
       failures.push(`${path}: visible legacy brand ${pattern}`);
+  }
+}
+
+const releaseSurfaceFiles = [
+  ".github/workflows/release.yml",
+  ".github/workflows/docker.yml",
+  "desktop/src-tauri/Info.plist",
+];
+const forbiddenReleaseSurface = [
+  /Buzz Desktop/i,
+  /Buzz\.app/i,
+  /buzz-desktop-latest/i,
+  /SPROUT_UPDATER/i,
+  /github\.com\/block\//i,
+  /ghcr\.io\/block\//i,
+  /block\/apple-codesign-action/i,
+];
+for (const path of releaseSurfaceFiles) {
+  const source = read(path);
+  for (const pattern of forbiddenReleaseSurface) {
+    if (pattern.test(source)) {
+      failures.push(`${path}: retired release identity or endpoint ${pattern}`);
+    }
   }
 }
 

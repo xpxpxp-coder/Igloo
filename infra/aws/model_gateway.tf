@@ -171,6 +171,23 @@ data "aws_iam_policy_document" "model_gateway_execution" {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["${aws_cloudwatch_log_group.runtime["model-gateway"].arn}:*"]
   }
+  statement {
+    sid       = "ExactModelGatewayRuntimeSecret"
+    effect    = "Allow"
+    actions   = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.model_gateway_runtime.arn]
+  }
+  statement {
+    sid       = "ModelGatewayRuntimeSecretKey"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.data.arn]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["secretsmanager.${var.aws_region}.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "model_gateway_execution" {
@@ -282,9 +299,16 @@ resource "aws_ecs_task_definition" "model_gateway" {
       { name = "SNOWMAN_MODEL_GATEWAY_ROUTES_JSON", value = jsonencode(local.model_gateway_route_contract) },
       { name = "SNOWMAN_MODEL_GATEWAY_TIMEOUT_SECONDS", value = "60" },
       { name = "SNOWMAN_MODEL_GATEWAY_AGENT_GRANT_KEY_ARN", value = aws_kms_key.agent_job_token.arn },
+      { name = "SNOWMAN_MODEL_GATEWAY_DATABASE_ROLE", value = "snowman_model_gateway" },
+      { name = "SNOWMAN_MODEL_GATEWAY_DATABASE_MAX_CONNECTIONS", value = "8" },
+      { name = "SNOWMAN_MODEL_GATEWAY_NETWORK_POLICY", value = "private-snowman-only" },
       { name = "SNOWMAN_MODEL_GATEWAY_VALKEY_CACHE_NAME", value = aws_elasticache_replication_group.valkey.replication_group_id },
       { name = "SNOWMAN_MODEL_GATEWAY_VALKEY_IAM_USER_ID", value = aws_elasticache_user.model_gateway.user_id },
     ]
+    secrets = [{
+      name      = "SNOWMAN_MODEL_GATEWAY_DATABASE_URL"
+      valueFrom = "${aws_secretsmanager_secret.model_gateway_runtime.arn}:DATABASE_URL::"
+    }]
     healthCheck = {
       command     = ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8443/_readiness >/dev/null || exit 1"]
       interval    = 30

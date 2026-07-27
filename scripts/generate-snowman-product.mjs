@@ -26,6 +26,9 @@ const requiredIdentity = [
   "tagline",
   "public_domain",
   "support_email",
+  "desktop_bundle_id",
+  "desktop_release_tag",
+  "desktop_app_bundle_name",
   "primary_deep_link_scheme",
   "legacy_deep_link_scheme",
 ];

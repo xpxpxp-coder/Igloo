@@ -35,6 +35,7 @@ members = [
     "crates/snowman-agent-coordinator",
     "crates/snowman-agent-executor",
     "crates/snowman-model-gateway",
+    "crates/snowman-meeting-control",
     "crates/snowman-workforce-worker",
     "examples/countdown-bot",
 ]

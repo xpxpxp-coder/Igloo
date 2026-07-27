@@ -48,6 +48,7 @@ const runtimeAuthorityFiles = [
   "crates/snowman-agent-coordinator/src/lib.rs",
   "crates/snowman-agent-coordinator/src/main.rs",
   "crates/snowman-agent-executor/src/main.rs",
+  "crates/snowman-meeting-control/src/lib.rs",
   "crates/snowman-bootstrap/src/main.rs",
   "crates/buzz-db/src/runtime_security.rs",
   "crates/buzz-pubsub/src/connection.rs",
@@ -61,6 +62,7 @@ const runtimeAuthorityFiles = [
   "migrations/0032_snowman_proactive_actions.sql",
   "migrations/0043_snowman_agent_jobs.sql",
   "migrations/0044_snowman_agent_launches.sql",
+  "migrations/0048_snowman_governed_meetings.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -392,9 +394,84 @@ requireFragment(
   "the model gateway role must receive only exact model-grant verification authority",
 );
 requireFragment(
+  "crates/snowman-model-gateway/src/lib.rs",
+  "lock_live_authority",
+  "agent model dispatch must recheck the exact live job and lease authority",
+);
+requireFragment(
+  "crates/snowman-model-gateway/src/lib.rs",
+  'status = if live { "indeterminate" } else { "aborted" }',
+  "provider dispatch must linearize to a durable worst-case reservation",
+);
+requireFragment(
+  "migrations/0047_snowman_agent_model_authority.sql",
+  "snowman_agent_model_generations",
+  "agent model invocations must have tenant-scoped durable accounting",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "verify_model_gateway_role",
+  "the model gateway must fail closed on its dedicated PostgreSQL identity",
+);
+requireFragment(
+  "infra/aws/network.tf",
+  'resource "aws_vpc_security_group_egress_rule" "model_gateway_to_database"',
+  "model authority checks must use only the private database security-group path",
+);
+requireFragment(
   "migrations/0044_snowman_agent_launches.sql",
   "PRIMARY KEY (community_id, launch_id)",
   "agent launch evidence must lead with the tenant boundary",
+);
+requireFragment(
+  "crates/snowman-meeting-control/src/lib.rs",
+  "pub enum MeetingToolIntent",
+  "meeting models must be restricted to a versioned narrow tool-intent allowlist",
+);
+requireFragment(
+  "crates/snowman-meeting-control/src/lib.rs",
+  "calendar.attendance != AttendanceStatus::Accepted",
+  "calendar acceptance must be independently checked before meeting admission",
+);
+requireFragment(
+  "crates/snowman-meeting-control/src/lib.rs",
+  "self.status == ScheduleStatus::Active && !self.all_participants_consented()",
+  "a late participant must pause active media until consent is complete",
+);
+requireFragment(
+  "crates/snowman-meeting-control/src/lib.rs",
+  "VoiceRoute::Disabled",
+  "meeting media must retain an explicit default-off route",
+);
+requireFragment(
+  "migrations/0048_snowman_governed_meetings.sql",
+  "content_trust = 'untrusted'",
+  "mail and calendar source content must remain structurally untrusted",
+);
+requireFragment(
+  "migrations/0048_snowman_governed_meetings.sql",
+  "sealed_coordinate_ref !~* '^sip:'",
+  "meeting persistence must reject raw SIP coordinates in the control plane",
+);
+requireFragment(
+  "migrations/0048_snowman_governed_meetings.sql",
+  "PRIMARY KEY (community_id, intent_id)",
+  "meeting tool-intent uniqueness must lead with the tenant boundary",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "REVOKE ALL ON TABLE snowman_meetings",
+  "the general relay database role must not access governed meeting authority",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "pub async fn verify_meeting_control_role",
+  "meeting control must fail closed on its dedicated database identity",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "GRANT SELECT,INSERT ON TABLE snowman_meeting_commands",
+  "meeting scheduling commands must remain append-only for the controller",
 );
 requireFragment(
   "crates/snowman-agent-broker/src/main.rs",
@@ -628,8 +705,18 @@ requireFragment(
 );
 requireFragment(
   "infra/aws/agent_broker.tf",
-  'valueFrom = "${aws_secretsmanager_secret.agent_broker_runtime.arn}:database_url::"',
+  'valueFrom = "${aws_secretsmanager_secret.agent_broker_runtime.arn}:DATABASE_URL::"',
   "the broker must receive only its exact database secret field",
+);
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  'valueFrom = "${aws_secretsmanager_secret.agent_coordinator_runtime.arn}:DATABASE_URL::"',
+  "the coordinator must receive the exact serialized database secret field",
+);
+requireFragment(
+  "infra/aws/model_gateway.tf",
+  'valueFrom = "${aws_secretsmanager_secret.model_gateway_runtime.arn}:DATABASE_URL::"',
+  "the model gateway must receive the exact serialized database secret field",
 );
 if (/resource\s+"aws_ecs_service"/m.test(agentExecutorTerraform)) {
   failures.push(

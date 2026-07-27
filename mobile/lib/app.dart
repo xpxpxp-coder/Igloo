@@ -42,7 +42,7 @@ class App extends HookConsumerWidget {
       ref.watch(userStatusCacheProvider);
     }
 
-    // Start listening for buzz:// links immediately (even pre-auth) so a
+    // Start listening for Snowman links immediately (even pre-auth) so a
     // cold-start link survives until the authenticated UI can dispatch it.
     ref.watch(pendingDeepLinkProvider);
 

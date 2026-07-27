@@ -9056,6 +9056,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "snowman-meeting-control"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "snowman-model-gateway"
 version = "0.1.0"
 dependencies = [
@@ -9064,6 +9077,7 @@ dependencies = [
  "aws-sdk-sagemakerruntime",
  "axum",
  "base64",
+ "buzz-db",
  "buzz-pubsub",
  "chrono",
  "futures-util",
@@ -9075,12 +9089,14 @@ dependencies = [
  "sha2 0.11.0",
  "snowman-agent-contract",
  "snowman-aws-auth",
+ "sqlx",
  "thiserror 2.0.18",
  "tokio",
  "tower-http",
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]

@@ -281,7 +281,7 @@ resource "aws_ecs_task_definition" "agent_coordinator" {
     ]
     secrets = [{
       name      = "SNOWMAN_AGENT_COORDINATOR_DATABASE_URL"
-      valueFrom = "${aws_secretsmanager_secret.agent_coordinator_runtime.arn}:database_url::"
+      valueFrom = "${aws_secretsmanager_secret.agent_coordinator_runtime.arn}:DATABASE_URL::"
     }]
     healthCheck = {
       command     = ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8080/_readiness >/dev/null || exit 1"]

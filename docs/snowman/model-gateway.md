@@ -1,15 +1,15 @@
 # Snowman private model gateway
 
 Status: service, client contract, dormant AWS task boundary, private ingress
-substrate, and local tests are implemented; inference deployment and staged
-proof remain.
+substrate, coordinator-grant enforcement, durable lost-response accounting,
+and local tests are implemented; inference deployment and staged proof remain.
 
-The source also verifies the coordinator's domain-separated KMS-HMAC agent
-model-grant envelope and Terraform grants `kms:VerifyMac` on only that exact
-key. This verifier is deliberately not yet connected to an inference route:
-the route must first atomically recheck the stored token digest, live job state,
-deadline, cancellation, and aggregate spend. A cryptographically valid bearer
-grant alone is not sufficient authority.
+The agent path authenticates the coordinator's domain-separated KMS-HMAC model
+grant and then requires the exact UUID tenant, job, task, lease generation,
+model, specialist role, capability, classification, minimization-evidence
+digest, deadline, token ceilings, and cost ceiling. It also compares the
+SHA-256 of the presented grant with the digest stored on the live job. A valid
+bearer grant is never sufficient by itself.
 
 `snowman-model-gateway` is the only generative model boundary used by governed
 Analyst 360 execution. Command Center clients and workforce workers never receive
@@ -36,7 +36,48 @@ a provider endpoint or credential and cannot call a model runtime directly.
    result under Analyst artifact authority, runs deterministic QA, and creates a
    human approval. Command Center receives only immutable artifact coordinates.
 
-The gateway stores no prompt or output. Its dedicated Valkey identity can only
+## One-shot agent authority
+
+An executor-side Snowman proxy presents the model grant only in
+`x-snowman-agent-model-grant`. The untrusted ACP child never receives provider
+credentials or an endpoint other than the private gateway. Agent requests add
+the exact `task_id`, `lease_generation`, and
+`minimization_evidence_sha256` coordinates; their tenant, client, and project
+must all be the grant's UUID tenant boundary.
+
+Before a model call, the gateway performs two short database transactions:
+
+1. It locks the exact request/job/task/lease authority rows, proves the job is
+   `started`, the request and task are live, the lease generation is current,
+   the job token is not revoked, and both job and lease deadlines are live. It
+   atomically reserves the request's worst-case input, output, and cost against
+   both job and parent-request cumulative budgets.
+2. Immediately before network dispatch it rechecks the same live authority and
+   changes the reservation from `reserved` to `indeterminate`. That committed
+   transition is the dispatch linearization point. Cancellation that commits
+   first changes the reservation to `aborted` and prevents dispatch;
+   cancellation after the transition prevents future generations but cannot
+   pretend an already-authorized model call never happened.
+
+No database transaction or row lock is held across provider I/O. A successful
+reply atomically replaces the worst-case reservation with actual usage, appends
+one `snowman_spend_ledger` receipt, and stores only provider/response digests.
+Malformed or over-budget replies are still accounted before their output is
+rejected. A crash, timeout, or lost provider/gateway/client response leaves the
+worst-case reservation in `reserved` or `indeterminate`, so its possible spend
+cannot disappear from the next budget decision.
+
+The UUID `generation_id` is the idempotency coordinate. An exact retry never
+invokes the backend again. It receives a `409
+generation_reconciliation_required` response containing status, accounted
+usage, and any durable provider/response digests. A conflicting request that
+reuses the UUID is rejected as a replay.
+
+The gateway stores no prompt or output. Its dedicated PostgreSQL identity can
+read only the request/task/lease/job authority rows, insert/update only the
+model-generation reservation ledger, and select/append only the spend ledger;
+it cannot change live authority, delete evidence, or read collaboration/audit
+content. Its dedicated Valkey identity can only
 `SET` replay keys under `snowman:model-gateway:nonce:*` and `PING`. The dormant
 ECS task runs without a public IP, as non-root, with a read-only root filesystem
 and all Linux capabilities dropped. Its task role has only exact `kms:Verify`
@@ -68,10 +109,14 @@ is still a separate production gate.
   Hosted third-party inference remains prohibited.
 - Prove the now-implemented stable generation and retry contract in staged
   scale-from-zero operation without duplicate charges or artifacts.
-- Add response-receipt reconciliation to the Command Center spend ledger and a
-  crash/retry test that proves a lost response cannot create untracked spend.
-- Connect the executor-local OpenAI-compatible proxy to the agent-grant verifier
-  only after the live database and cumulative-budget checks are implemented.
+- Connect the executor-local OpenAI-compatible proxy to the now-enforced agent
+  path without exposing the grant to the ACP child, and prove it against a real
+  one-shot runtime.
+- Run PostgreSQL-backed concurrency tests for request-wide reservations,
+  cancellation winning before dispatch, exact replay, lost commit responses,
+  and reconciliation. The source/migration contracts are implemented, but the
+  repository test environment did not provide a production-equivalent
+  PostgreSQL service for this evidence.
 - Add saturation, timeout, cancellation, malformed-backend, cross-tenant,
   direct-egress denial, failover, and recovery tests in dormant staging.
 - Export immutable route/catalog, image, KMS/IAM, network, test, and cost

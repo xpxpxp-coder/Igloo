@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 44);
+        assert_eq!(migrations.len(), 48);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1068,6 +1068,48 @@ mod tests {
         assert!(agent_jobs.contains("snapshot_sha256"));
         assert!(agent_jobs.contains("UNIQUE (community_id, task_id, generation)"));
         assert!(!agent_jobs.contains("provider_credential"));
+
+        assert_eq!(migrations[43].version, 44);
+        let agent_launches = migrations[43].sql.as_str();
+        assert!(agent_launches.contains("CREATE TABLE snowman_agent_launches"));
+        assert!(agent_launches.contains("PRIMARY KEY (community_id, launch_id)"));
+
+        assert_eq!(migrations[44].version, 45);
+        assert!(migrations[44].sql.as_str().contains("model_token_sha256"));
+
+        assert_eq!(migrations[45].version, 46);
+        assert!(migrations[45]
+            .sql
+            .as_str()
+            .contains("bootstrap_source_ip INET"));
+
+        assert_eq!(migrations[46].version, 47);
+        let model_authority = migrations[46].sql.as_str();
+        assert!(model_authority.contains("snowman_agent_model_generations"));
+        assert!(model_authority.contains("PRIMARY KEY (community_id, generation_id)"));
+
+        assert_eq!(migrations[47].version, 48);
+        let meetings = migrations[47].sql.as_str();
+        for table in [
+            "snowman_meeting_mailboxes",
+            "snowman_meeting_intake_receipts",
+            "snowman_meetings",
+            "snowman_meeting_commands",
+            "snowman_meeting_sessions",
+            "snowman_meeting_participant_consents",
+            "snowman_meeting_tool_intents",
+        ] {
+            assert!(
+                meetings.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(meetings.contains("content_trust = 'untrusted'"));
+        assert!(meetings.contains("voice_route TEXT NOT NULL DEFAULT 'disabled'"));
+        assert!(meetings.contains("PRIMARY KEY (community_id, intent_id)"));
+        assert!(!meetings.contains("phone_number"));
+        assert!(!meetings.contains("conference_url"));
+        assert!(!meetings.contains("provider_credential"));
     }
 
     #[test]

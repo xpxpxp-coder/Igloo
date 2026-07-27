@@ -76,6 +76,14 @@ pub async fn provision_runtime_role(pool: &PgPool, role: &str, password: &str) -
          REVOKE ALL ON TABLE snowman_agent_jobs FROM {role_identifier};\n\
          REVOKE ALL ON TABLE snowman_agent_launches FROM {role_identifier};\n\
          REVOKE ALL ON TABLE snowman_agent_coordinator_auth_events FROM {role_identifier};\n\
+         REVOKE ALL ON TABLE snowman_agent_model_generations FROM {role_identifier};\n\
+         REVOKE ALL ON TABLE snowman_meeting_mailboxes FROM {role_identifier};\n\
+         REVOKE ALL ON TABLE snowman_meeting_intake_receipts FROM {role_identifier};\n\
+         REVOKE ALL ON TABLE snowman_meetings FROM {role_identifier};\n\
+         REVOKE ALL ON TABLE snowman_meeting_commands FROM {role_identifier};\n\
+         REVOKE ALL ON TABLE snowman_meeting_sessions FROM {role_identifier};\n\
+         REVOKE ALL ON TABLE snowman_meeting_participant_consents FROM {role_identifier};\n\
+         REVOKE ALL ON TABLE snowman_meeting_tool_intents FROM {role_identifier};\n\
          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role_identifier};\n\
          ALTER DEFAULT PRIVILEGES IN SCHEMA public\n\
            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {role_identifier};\n\
@@ -206,6 +214,125 @@ pub async fn provision_agent_coordinator_role(
     Ok(())
 }
 
+/// Create or reconcile the private model-gateway login. It can inspect only
+/// the exact workforce/job authority rows, reserve/finalize model generations,
+/// and append spend receipts. It cannot mutate job, lease, request, task, or
+/// collaboration authority and it cannot delete accounting evidence.
+pub async fn provision_model_gateway_role(pool: &PgPool, role: &str, password: &str) -> Result<()> {
+    validate_role_name(role)?;
+    if password.len() < 32 {
+        return Err(DbError::InvalidData(
+            "model gateway database password must contain at least 32 characters".into(),
+        ));
+    }
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await?;
+    let role_identifier = quote_identifier(role);
+    let database_identifier = quote_identifier(&database);
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT set_config('snowman.model_gateway_role_password', $1, true)")
+        .bind(password)
+        .execute(&mut *transaction)
+        .await?;
+    let role_ddl = format!(
+        "DO $snowman$\n\
+         BEGIN\n\
+           IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n\
+             CREATE ROLE {role_identifier} LOGIN;\n\
+           END IF;\n\
+           ALTER ROLE {role_identifier}\n\
+             WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n\
+           EXECUTE format('ALTER ROLE %I PASSWORD %L', '{role}',\n\
+             current_setting('snowman.model_gateway_role_password'));\n\
+         END\n\
+         $snowman$;"
+    );
+    sqlx::raw_sql(AssertSqlSafe(role_ddl))
+        .execute(&mut *transaction)
+        .await?;
+    let grants = format!(
+        "REVOKE ALL ON DATABASE {database_identifier} FROM {role_identifier};\n\
+         REVOKE ALL ON SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role_identifier};\n\
+         GRANT CONNECT ON DATABASE {database_identifier} TO {role_identifier};\n\
+         GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
+         GRANT SELECT ON TABLE snowman_work_requests,snowman_work_tasks,\n\
+           snowman_task_leases,snowman_agent_jobs TO {role_identifier};\n\
+         GRANT SELECT,INSERT,UPDATE ON TABLE snowman_agent_model_generations\n\
+           TO {role_identifier};\n\
+         GRANT SELECT,INSERT ON TABLE snowman_spend_ledger TO {role_identifier};"
+    );
+    sqlx::raw_sql(AssertSqlSafe(grants))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Create or reconcile the private meeting-control login. It can maintain only
+/// the governed meeting ledgers and inspect workforce identity existence. It
+/// cannot read collaboration events, raw evidence, agent jobs, model authority,
+/// or audit content, and meeting commands remain append-only.
+pub async fn provision_meeting_control_role(
+    pool: &PgPool,
+    role: &str,
+    password: &str,
+) -> Result<()> {
+    validate_role_name(role)?;
+    if password.len() < 32 {
+        return Err(DbError::InvalidData(
+            "meeting control database password must contain at least 32 characters".into(),
+        ));
+    }
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await?;
+    let role_identifier = quote_identifier(role);
+    let database_identifier = quote_identifier(&database);
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT set_config('snowman.meeting_control_role_password', $1, true)")
+        .bind(password)
+        .execute(&mut *transaction)
+        .await?;
+    let role_ddl = format!(
+        "DO $snowman$\n\
+         BEGIN\n\
+           IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n\
+             CREATE ROLE {role_identifier} LOGIN;\n\
+           END IF;\n\
+           ALTER ROLE {role_identifier}\n\
+             WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n\
+           EXECUTE format('ALTER ROLE %I PASSWORD %L', '{role}',\n\
+             current_setting('snowman.meeting_control_role_password'));\n\
+         END\n\
+         $snowman$;"
+    );
+    sqlx::raw_sql(AssertSqlSafe(role_ddl))
+        .execute(&mut *transaction)
+        .await?;
+    let grants = format!(
+        "REVOKE ALL ON DATABASE {database_identifier} FROM {role_identifier};\n\
+         REVOKE ALL ON SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role_identifier};\n\
+         GRANT CONNECT ON DATABASE {database_identifier} TO {role_identifier};\n\
+         GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
+         GRANT SELECT ON TABLE snowman_workforce_identities TO {role_identifier};\n\
+         GRANT SELECT,INSERT,UPDATE ON TABLE snowman_meeting_mailboxes,\n\
+           snowman_meeting_intake_receipts,snowman_meetings,\n\
+           snowman_meeting_sessions,snowman_meeting_participant_consents,\n\
+           snowman_meeting_tool_intents TO {role_identifier};\n\
+         GRANT SELECT,INSERT ON TABLE snowman_meeting_commands TO {role_identifier};"
+    );
+    sqlx::raw_sql(AssertSqlSafe(grants))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 /// Fail closed unless the private agent broker has only its exact job-ledger
 /// read/update authority and no creation, insert, delete, or relay-table access.
 pub async fn verify_agent_broker_role(pool: &PgPool, expected_role: &str) -> Result<()> {
@@ -287,6 +414,104 @@ pub async fn verify_agent_coordinator_role(pool: &PgPool, expected_role: &str) -
     Ok(())
 }
 
+/// Fail closed unless the model gateway has exactly its read-authority,
+/// generation-reservation, and append-only spend permissions.
+pub async fn verify_model_gateway_role(pool: &PgPool, expected_role: &str) -> Result<()> {
+    validate_role_name(expected_role)?;
+    let valid: bool = sqlx::query_scalar(
+        "SELECT current_user=$1 \
+         AND has_database_privilege(current_user,current_database(),'CONNECT') \
+         AND NOT has_database_privilege(current_user,current_database(),'CREATE') \
+         AND has_schema_privilege(current_user,'public','USAGE') \
+         AND NOT has_schema_privilege(current_user,'public','CREATE') \
+         AND has_table_privilege(current_user,'snowman_work_requests','SELECT') \
+         AND has_table_privilege(current_user,'snowman_work_tasks','SELECT') \
+         AND has_table_privilege(current_user,'snowman_task_leases','SELECT') \
+         AND has_table_privilege(current_user,'snowman_agent_jobs','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','DELETE') \
+         AND has_table_privilege(current_user,'snowman_agent_model_generations','SELECT') \
+         AND has_table_privilege(current_user,'snowman_agent_model_generations','INSERT') \
+         AND has_table_privilege(current_user,'snowman_agent_model_generations','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_model_generations','DELETE') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_model_generations','TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_spend_ledger','SELECT') \
+         AND has_table_privilege(current_user,'snowman_spend_ledger','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_spend_ledger','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_spend_ledger','DELETE') \
+         AND NOT has_table_privilege(current_user,'events','SELECT') \
+         AND NOT has_table_privilege(current_user,'channels','SELECT') \
+         AND NOT has_table_privilege(current_user,'audit_log','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_work_events','SELECT')",
+    )
+    .bind(expected_role)
+    .fetch_one(pool)
+    .await?;
+    if !valid {
+        return Err(DbError::InvalidData(
+            "model gateway database identity violates its exact authority boundary".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Fail closed unless the meeting controller has only its dedicated ledgers,
+/// read-only workforce identity lookup, and append-only command authority.
+pub async fn verify_meeting_control_role(pool: &PgPool, expected_role: &str) -> Result<()> {
+    validate_role_name(expected_role)?;
+    let valid: bool = sqlx::query_scalar(
+        "SELECT current_user=$1 \
+         AND has_database_privilege(current_user,current_database(),'CONNECT') \
+         AND NOT has_database_privilege(current_user,current_database(),'CREATE') \
+         AND has_schema_privilege(current_user,'public','USAGE') \
+         AND NOT has_schema_privilege(current_user,'public','CREATE') \
+         AND has_table_privilege(current_user,'snowman_workforce_identities','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_workforce_identities','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_mailboxes','SELECT') \
+         AND has_table_privilege(current_user,'snowman_meeting_mailboxes','INSERT') \
+         AND has_table_privilege(current_user,'snowman_meeting_mailboxes','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_mailboxes','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_intake_receipts','SELECT') \
+         AND has_table_privilege(current_user,'snowman_meeting_intake_receipts','INSERT') \
+         AND has_table_privilege(current_user,'snowman_meeting_intake_receipts','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_intake_receipts','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meetings','SELECT') \
+         AND has_table_privilege(current_user,'snowman_meetings','INSERT') \
+         AND has_table_privilege(current_user,'snowman_meetings','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meetings','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_commands','SELECT') \
+         AND has_table_privilege(current_user,'snowman_meeting_commands','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_commands','UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_sessions','SELECT') \
+         AND has_table_privilege(current_user,'snowman_meeting_sessions','INSERT') \
+         AND has_table_privilege(current_user,'snowman_meeting_sessions','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_sessions','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_participant_consents','SELECT') \
+         AND has_table_privilege(current_user,'snowman_meeting_participant_consents','INSERT') \
+         AND has_table_privilege(current_user,'snowman_meeting_participant_consents','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_participant_consents','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_tool_intents','SELECT') \
+         AND has_table_privilege(current_user,'snowman_meeting_tool_intents','INSERT') \
+         AND has_table_privilege(current_user,'snowman_meeting_tool_intents','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_tool_intents','DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'events','SELECT') \
+         AND NOT has_table_privilege(current_user,'channels','SELECT') \
+         AND NOT has_table_privilege(current_user,'audit_log','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_model_generations','SELECT')",
+    )
+    .bind(expected_role)
+    .fetch_one(pool)
+    .await?;
+    if !valid {
+        return Err(DbError::InvalidData(
+            "meeting control database identity violates its exact meeting boundary".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Fail closed unless the connected serving identity has its required DML
 /// capabilities and lacks database/schema creation authority.
 pub async fn verify_runtime_role(pool: &PgPool, expected_role: &str) -> Result<()> {
@@ -352,7 +577,18 @@ pub async fn verify_runtime_role(pool: &PgPool, expected_role: &str) -> Result<(
          AND NOT has_table_privilege(current_user,'snowman_agent_launches','UPDATE') \
          AND NOT has_table_privilege(current_user,'snowman_agent_launches','DELETE') \
          AND NOT has_table_privilege(current_user,'snowman_agent_coordinator_auth_events','SELECT') \
-         AND NOT has_table_privilege(current_user,'snowman_agent_coordinator_auth_events','INSERT')",
+         AND NOT has_table_privilege(current_user,'snowman_agent_coordinator_auth_events','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_model_generations','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_model_generations','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_model_generations','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_model_generations','DELETE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_mailboxes','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_intake_receipts','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meetings','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_commands','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_sessions','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_participant_consents','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_tool_intents','SELECT,INSERT,UPDATE,DELETE,TRUNCATE')",
     )
     .fetch_one(pool)
     .await?;
@@ -406,5 +642,36 @@ mod tests {
         assert!(source.contains("NOT has_table_privilege(current_user,'events','SELECT')"));
         assert!(source
             .contains("agent coordinator database identity violates its exact launch boundary"));
+    }
+
+    #[test]
+    fn model_gateway_role_is_reservation_and_append_only() {
+        let source = include_str!("runtime_security.rs");
+        assert!(
+            source.contains("GRANT SELECT,INSERT,UPDATE ON TABLE snowman_agent_model_generations")
+        );
+        assert!(source.contains("GRANT SELECT,INSERT ON TABLE snowman_spend_ledger TO"));
+        assert!(
+            source.contains("NOT has_table_privilege(current_user,'snowman_agent_jobs','UPDATE')")
+        );
+        assert!(source
+            .contains("NOT has_table_privilege(current_user,'snowman_spend_ledger','UPDATE')"));
+        assert!(source
+            .contains("model gateway database identity violates its exact authority boundary"));
+    }
+
+    #[test]
+    fn meeting_control_role_is_isolated_and_commands_are_append_only() {
+        let source = include_str!("runtime_security.rs");
+        assert!(source.contains("GRANT SELECT,INSERT,UPDATE ON TABLE snowman_meeting_mailboxes"));
+        assert!(source.contains("GRANT SELECT,INSERT ON TABLE snowman_meeting_commands TO"));
+        assert!(source.contains(
+            "NOT has_table_privilege(current_user,'snowman_meeting_commands','UPDATE,DELETE,TRUNCATE')"
+        ));
+        assert!(
+            source.contains("NOT has_table_privilege(current_user,'snowman_agent_jobs','SELECT')")
+        );
+        assert!(source
+            .contains("meeting control database identity violates its exact meeting boundary"));
     }
 }

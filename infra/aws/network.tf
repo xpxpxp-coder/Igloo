@@ -504,6 +504,24 @@ resource "aws_vpc_security_group_egress_rule" "model_gateway_to_inference" {
   ip_protocol                  = "tcp"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "database_from_model_gateway" {
+  security_group_id            = aws_security_group.database.id
+  referenced_security_group_id = aws_security_group.model_gateway.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "Read-authority, reservation, and append-only spend identity"
+}
+
+resource "aws_vpc_security_group_egress_rule" "model_gateway_to_database" {
+  security_group_id            = aws_security_group.model_gateway.id
+  referenced_security_group_id = aws_security_group.database.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "Exact live job authority and durable model accounting only"
+}
+
 resource "aws_vpc_security_group_ingress_rule" "database_from_relay" {
   security_group_id            = aws_security_group.database.id
   referenced_security_group_id = aws_security_group.relay.id

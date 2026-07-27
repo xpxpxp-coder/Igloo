@@ -18,6 +18,8 @@ export const SNOWMAN_PRODUCT = {
   source_repository: "https://github.com/snowman-ai-org/snowman-command-center",
   release_page_path: "/downloads",
   release_api_path: "/api/releases?per_page=10",
+  desktop_release_tag: "snowman-command-center-latest",
+  desktop_app_bundle_name: "Snowman Command Center.app",
   primary_deep_link_scheme: "snowman",
   legacy_deep_link_scheme: "buzz",
   compatibility: {
