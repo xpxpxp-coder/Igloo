@@ -73,6 +73,7 @@ pub async fn provision_runtime_role(pool: &PgPool, role: &str, password: &str) -
          GRANT CONNECT ON DATABASE {database_identifier} TO {role_identifier};\n\
          GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO {role_identifier};\n\
+         REVOKE ALL ON TABLE snowman_agent_jobs FROM {role_identifier};\n\
          GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO {role_identifier};\n\
          ALTER DEFAULT PRIVILEGES IN SCHEMA public\n\
            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {role_identifier};\n\
@@ -140,6 +141,20 @@ pub async fn verify_runtime_role(pool: &PgPool, expected_role: &str) -> Result<(
             )));
         }
     }
+    let agent_job_authority_denied: bool = sqlx::query_scalar(
+        "SELECT to_regclass('public.snowman_agent_jobs') IS NOT NULL \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','DELETE')",
+    )
+    .fetch_one(pool)
+    .await?;
+    if !agent_job_authority_denied {
+        return Err(DbError::InvalidData(
+            "serving relay database identity must not access one-shot agent jobs".into(),
+        ));
+    }
     Ok(())
 }
 
@@ -156,5 +171,14 @@ mod tests {
             assert!(validate_role_name(invalid).is_err(), "{invalid}");
         }
         assert!(validate_role_name(&"r".repeat(64)).is_err());
+    }
+
+    #[test]
+    fn relay_role_explicitly_excludes_agent_job_authority() {
+        let source = include_str!("runtime_security.rs");
+        assert!(source.contains("REVOKE ALL ON TABLE snowman_agent_jobs"));
+        assert!(
+            source.contains("serving relay database identity must not access one-shot agent jobs")
+        );
     }
 }

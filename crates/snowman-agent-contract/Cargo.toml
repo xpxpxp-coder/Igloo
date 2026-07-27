@@ -1,0 +1,16 @@
+[package]
+name = "snowman-agent-contract"
+description = "Versioned private job contracts for Snowman governed agent execution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

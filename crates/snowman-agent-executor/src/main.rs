@@ -5,12 +5,19 @@
 use std::{env, path::Path, time::Duration};
 
 use buzz_acp::oneshot::{OneShotConfig, OneShotError, OneShotResult};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use reqwest::{header, redirect::Policy, Client, Response};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use snowman_agent_contract::Classification;
+use snowman_agent_contract::{
+    BrokerAck, JobSnapshot, ResultReceipt, RuntimeOutcome, StartedReceipt, BROKER_ACK_SCHEMA,
+    JOB_RESULT_SCHEMA, JOB_SNAPSHOT_SCHEMA, JOB_STARTED_SCHEMA,
+};
 use url::Url;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 const MANIFEST_PATH: &str = "/opt/snowman/runtime/manifest.json";
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
@@ -35,8 +42,9 @@ enum Error {
 
 struct Config {
     broker_url: Url,
+    tenant_id: Uuid,
     job_id: Uuid,
-    job_token: String,
+    job_token: Zeroizing<String>,
     runtime_id: String,
     model_gateway_url: Url,
     max_task_duration: Duration,
@@ -46,10 +54,13 @@ impl Config {
     fn from_env() -> Result<Self, Error> {
         let broker_url = parse_snowman_origin(&required("SNOWMAN_AGENT_BROKER_URL")?)?;
         let model_gateway_url = parse_snowman_origin(&required("SNOWMAN_MODEL_GATEWAY_URL")?)?;
+        let tenant_id = required("SNOWMAN_AGENT_TENANT_ID")?
+            .parse::<Uuid>()
+            .map_err(|_| Error::Configuration("tenant ID is invalid"))?;
         let job_id = required("SNOWMAN_AGENT_JOB_ID")?
             .parse::<Uuid>()
             .map_err(|_| Error::Configuration("job ID is invalid"))?;
-        let job_token = required("SNOWMAN_AGENT_JOB_TOKEN")?;
+        let job_token = Zeroizing::new(required("SNOWMAN_AGENT_JOB_TOKEN")?);
         if job_token.len() < 32
             || job_token.len() > 2048
             || !job_token.chars().all(|value| value.is_ascii_graphic())
@@ -76,6 +87,7 @@ impl Config {
         }
         Ok(Self {
             broker_url,
+            tenant_id,
             job_id,
             job_token,
             runtime_id,
@@ -98,80 +110,14 @@ struct RuntimeManifest {
     evaluation_evidence_sha256: String,
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct JobSnapshot {
-    schema_version: String,
-    job_id: Uuid,
-    tenant_id: String,
-    workspace_id: Uuid,
-    request_id: Uuid,
-    task_id: Uuid,
-    generation: u32,
-    runtime_id: String,
-    model_id: String,
-    specialist_role: String,
-    classification: Classification,
-    system_prompt: String,
-    prompt: String,
-    capability_grants: Vec<String>,
-    deadline_at: DateTime<Utc>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum Classification {
-    Internal,
-    Confidential,
-    Restricted,
-}
-
-#[derive(Serialize)]
-struct StartedReceipt<'a> {
-    schema_version: &'static str,
-    job_id: Uuid,
-    generation: u32,
-    snapshot_sha256: &'a str,
-    runtime_id: &'a str,
-    model_id: &'a str,
-    started_at: DateTime<Utc>,
-}
-
-#[derive(Serialize)]
-struct ResultReceipt<'a> {
-    schema_version: &'static str,
-    job_id: Uuid,
-    generation: u32,
-    snapshot_sha256: &'a str,
-    runtime_id: &'a str,
-    model_id: &'a str,
-    completed_at: DateTime<Utc>,
-    outcome: RuntimeOutcome<'a>,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-enum RuntimeOutcome<'a> {
-    Succeeded {
-        stop_reason: &'a str,
-        output: &'a str,
-        output_truncated: bool,
-        input_tokens: Option<u64>,
-        output_tokens: Option<u64>,
-    },
-    Failed {
-        failure_code: &'static str,
-    },
-}
-
 struct BrokerClient {
     origin: Url,
-    token: String,
+    token: Zeroizing<String>,
     http: Client,
 }
 
 impl BrokerClient {
-    fn new(origin: Url, token: String, timeout: Duration) -> Result<Self, Error> {
+    fn new(origin: Url, token: Zeroizing<String>, timeout: Duration) -> Result<Self, Error> {
         let http = Client::builder()
             .no_proxy()
             .redirect(Policy::none())
@@ -187,12 +133,16 @@ impl BrokerClient {
         })
     }
 
-    async fn snapshot(&self, job_id: Uuid) -> Result<(JobSnapshot, String), Error> {
-        let url = self.endpoint(&format!("v1/jobs/{job_id}/snapshot"))?;
+    async fn snapshot(
+        &self,
+        tenant_id: Uuid,
+        job_id: Uuid,
+    ) -> Result<(JobSnapshot, String), Error> {
+        let url = self.endpoint(&format!("v1/tenants/{tenant_id}/jobs/{job_id}/snapshot"))?;
         let response = self
             .http
             .get(url)
-            .bearer_auth(&self.token)
+            .bearer_auth(self.token.as_str())
             .header(header::ACCEPT, "application/json")
             .send()
             .await
@@ -217,16 +167,17 @@ impl BrokerClient {
 
     async fn post<T: Serialize>(
         &self,
+        tenant_id: Uuid,
         job_id: Uuid,
         generation: u32,
         operation: &str,
         body: &T,
     ) -> Result<(), Error> {
-        let url = self.endpoint(&format!("v1/jobs/{job_id}/{operation}"))?;
+        let url = self.endpoint(&format!("v1/tenants/{tenant_id}/jobs/{job_id}/{operation}"))?;
         let response = self
             .http
             .post(url)
-            .bearer_auth(&self.token)
+            .bearer_auth(self.token.as_str())
             .header(header::CONTENT_TYPE, "application/json")
             .header(
                 "idempotency-key",
@@ -238,7 +189,7 @@ impl BrokerClient {
             .map_err(|_| Error::Transport)?;
         ensure_success(&response)?;
         let ack: BrokerAck = decode_bounded(response, MAX_BROKER_RESPONSE_BYTES).await?;
-        if ack.schema_version != "snowman.agent.broker.ack.v1" || !ack.accepted {
+        if ack.schema_version != BROKER_ACK_SCHEMA || !ack.accepted {
             return Err(Error::BrokerContract("broker acknowledgement is invalid"));
         }
         Ok(())
@@ -249,13 +200,6 @@ impl BrokerClient {
             .join(path)
             .map_err(|_| Error::Configuration("broker endpoint could not be constructed"))
     }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BrokerAck {
-    schema_version: String,
-    accepted: bool,
 }
 
 #[tokio::main]
@@ -282,21 +226,22 @@ async fn execute() -> Result<(), Error> {
         config.job_token.clone(),
         config.max_task_duration,
     )?;
-    let (snapshot, snapshot_sha256) = broker.snapshot(config.job_id).await?;
+    let (snapshot, snapshot_sha256) = broker.snapshot(config.tenant_id, config.job_id).await?;
     validate_snapshot(&snapshot, &config)?;
 
     broker
         .post(
+            config.tenant_id,
             config.job_id,
             snapshot.generation,
             "started",
             &StartedReceipt {
-                schema_version: "snowman.agent.job.started.v1",
+                schema_version: JOB_STARTED_SCHEMA.into(),
                 job_id: config.job_id,
                 generation: snapshot.generation,
-                snapshot_sha256: &snapshot_sha256,
-                runtime_id: &snapshot.runtime_id,
-                model_id: &snapshot.model_id,
+                snapshot_sha256: snapshot_sha256.clone(),
+                runtime_id: snapshot.runtime_id.clone(),
+                model_id: snapshot.model_id.clone(),
                 started_at: Utc::now(),
             },
         )
@@ -322,36 +267,55 @@ async fn execute() -> Result<(), Error> {
     let outcome = match runtime_result.as_ref() {
         Ok(result) => successful_outcome(result),
         Err(error) => RuntimeOutcome::Failed {
-            failure_code: runtime_failure_code(error),
+            failure_code: runtime_failure_code(error).into(),
         },
     };
+    let outcome_failed = matches!(&outcome, RuntimeOutcome::Failed { .. });
 
     broker
         .post(
+            config.tenant_id,
             config.job_id,
             snapshot.generation,
             "result",
             &ResultReceipt {
-                schema_version: "snowman.agent.job.result.v1",
+                schema_version: JOB_RESULT_SCHEMA.into(),
                 job_id: config.job_id,
                 generation: snapshot.generation,
-                snapshot_sha256: &snapshot_sha256,
-                runtime_id: &snapshot.runtime_id,
-                model_id: &snapshot.model_id,
+                snapshot_sha256: snapshot_sha256.clone(),
+                runtime_id: snapshot.runtime_id.clone(),
+                model_id: snapshot.model_id.clone(),
                 completed_at: Utc::now(),
                 outcome,
             },
         )
         .await?;
-    runtime_result.map_err(|_| Error::Runtime)?;
+    if runtime_result.is_err() || outcome_failed {
+        return Err(Error::Runtime);
+    }
     tracing::info!(job_id=%config.job_id, generation=snapshot.generation, "one-shot agent job completed");
     Ok(())
 }
 
-fn successful_outcome(result: &OneShotResult) -> RuntimeOutcome<'_> {
+fn successful_outcome(result: &OneShotResult) -> RuntimeOutcome {
+    if result.stop_reason == "cancelled" {
+        return RuntimeOutcome::Failed {
+            failure_code: "runtime_cancelled".into(),
+        };
+    }
+    if result.stop_reason == "refusal" {
+        return RuntimeOutcome::Failed {
+            failure_code: "runtime_refusal".into(),
+        };
+    }
+    if result.output.trim().is_empty() {
+        return RuntimeOutcome::Failed {
+            failure_code: "runtime_empty_output".into(),
+        };
+    }
     RuntimeOutcome::Succeeded {
-        stop_reason: &result.stop_reason,
-        output: &result.output,
+        stop_reason: result.stop_reason.clone(),
+        output: result.output.clone(),
         output_truncated: result.output_truncated,
         input_tokens: result.input_tokens,
         output_tokens: result.output_tokens,
@@ -404,8 +368,9 @@ fn validate_manifest(manifest: &RuntimeManifest, runtime_id: &str) -> Result<(),
 
 fn validate_snapshot(snapshot: &JobSnapshot, config: &Config) -> Result<(), Error> {
     let now = Utc::now();
-    if snapshot.schema_version != "snowman.agent.job.snapshot.v1"
+    if snapshot.schema_version != JOB_SNAPSHOT_SCHEMA
         || snapshot.job_id != config.job_id
+        || snapshot.tenant_id != config.tenant_id.to_string()
         || snapshot.generation == 0
         || snapshot.runtime_id != config.runtime_id
         || !valid_scope(&snapshot.tenant_id)
@@ -421,6 +386,11 @@ fn validate_snapshot(snapshot: &JobSnapshot, config: &Config) -> Result<(), Erro
             .capability_grants
             .iter()
             .any(|capability| !valid_capability(capability))
+        || snapshot.max_input_tokens == 0
+        || snapshot.max_input_tokens > 10_000_000
+        || snapshot.max_output_tokens == 0
+        || snapshot.max_output_tokens > 1_000_000
+        || snapshot.max_cost_microusd > 1_000_000_000
         || snapshot.deadline_at <= now + chrono::Duration::seconds(30)
         || snapshot.deadline_at
             > now
@@ -538,8 +508,9 @@ mod tests {
     fn config() -> Config {
         Config {
             broker_url: Url::parse("https://agents.internal.snowmanai.org/").unwrap(),
+            tenant_id: Uuid::parse_str("20000000-0000-4000-8000-000000000001").unwrap(),
             job_id: Uuid::parse_str("10000000-0000-4000-8000-000000000001").unwrap(),
-            job_token: "a".repeat(64),
+            job_token: Zeroizing::new("a".repeat(64)),
             runtime_id: "snowman-acp".into(),
             model_gateway_url: Url::parse("https://models.internal.snowmanai.org/").unwrap(),
             max_task_duration: Duration::from_secs(3600),
@@ -549,10 +520,10 @@ mod tests {
     fn snapshot() -> JobSnapshot {
         let config = config();
         JobSnapshot {
-            schema_version: "snowman.agent.job.snapshot.v1".into(),
+            schema_version: JOB_SNAPSHOT_SCHEMA.into(),
             job_id: config.job_id,
-            tenant_id: "aptive".into(),
-            workspace_id: Uuid::new_v4(),
+            tenant_id: config.tenant_id.to_string(),
+            workspace_id: config.tenant_id,
             request_id: Uuid::new_v4(),
             task_id: Uuid::new_v4(),
             generation: 1,
@@ -563,6 +534,9 @@ mod tests {
             system_prompt: "Follow the governed Snowman policy.".into(),
             prompt: "Prepare the bounded work product.".into(),
             capability_grants: vec!["artifact.draft".into()],
+            max_input_tokens: 100_000,
+            max_output_tokens: 20_000,
+            max_cost_microusd: 50_000,
             deadline_at: Utc::now() + chrono::Duration::minutes(30),
         }
     }
@@ -653,5 +627,27 @@ mod tests {
             runtime_failure_code(&OneShotError::Configuration("secret detail")),
             "runtime_configuration"
         );
+        let refused = successful_outcome(&OneShotResult {
+            stop_reason: "refusal".into(),
+            output: "cannot comply".into(),
+            output_truncated: false,
+            input_tokens: None,
+            output_tokens: None,
+        });
+        assert!(matches!(
+            refused,
+            RuntimeOutcome::Failed { failure_code } if failure_code == "runtime_refusal"
+        ));
+        let empty = successful_outcome(&OneShotResult {
+            stop_reason: "end_turn".into(),
+            output: "   ".into(),
+            output_truncated: false,
+            input_tokens: None,
+            output_tokens: None,
+        });
+        assert!(matches!(
+            empty,
+            RuntimeOutcome::Failed { failure_code } if failure_code == "runtime_empty_output"
+        ));
     }
 }

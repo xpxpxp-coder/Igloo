@@ -42,6 +42,9 @@ const runtimeAuthorityFiles = [
   "crates/snowman-analyst-client/src/lib.rs",
   "crates/snowman-workforce-worker/src/lib.rs",
   "crates/snowman-workforce-worker/src/main.rs",
+  "crates/snowman-agent-contract/src/lib.rs",
+  "crates/snowman-agent-broker/src/lib.rs",
+  "crates/snowman-agent-broker/src/main.rs",
   "crates/snowman-agent-executor/src/main.rs",
   "crates/snowman-bootstrap/src/main.rs",
   "crates/buzz-db/src/runtime_security.rs",
@@ -54,6 +57,7 @@ const runtimeAuthorityFiles = [
   "migrations/0030_snowman_governed_team_plans.sql",
   "migrations/0031_snowman_context_packet_manifests.sql",
   "migrations/0032_snowman_proactive_actions.sql",
+  "migrations/0043_snowman_agent_jobs.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -256,6 +260,56 @@ requireFragment(
   "crates/snowman-agent-executor/src/main.rs",
   ".no_proxy()",
   "the one-shot executor must not inherit an ambient proxy route",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "ConstantTimeEq",
+  "job credentials must be compared in constant time",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  '"/v1/tenants/{tenant_id}/jobs/{job_id}/snapshot"',
+  "broker job lookups must carry the tenant in the private route",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  'required("SNOWMAN_AGENT_TENANT_ID")',
+  "one-shot executors must bind broker calls to the coordinator-supplied tenant",
+);
+requireFragment(
+  "migrations/0043_snowman_agent_jobs.sql",
+  "PRIMARY KEY (community_id, job_id)",
+  "agent job uniqueness must lead with the tenant boundary",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "ON CONFLICT DO NOTHING",
+  "job issuance must be idempotent for one fenced task generation",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "RequestBodyLimitLayer",
+  "agent receipts must have a transport-level body ceiling",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  '.ends_with(".rds.amazonaws.com")',
+  "the broker database route must remain on the approved Snowman AWS substrate",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "issue.job_token.zeroize();",
+  "the trusted coordinator must erase the raw job token before database I/O",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/main.rs",
+  'with_env_filter("snowman_agent_broker=info")',
+  "the private broker must ignore ambient content-bearing log directives",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "REVOKE ALL ON TABLE snowman_agent_jobs",
+  "the general relay database role must not access agent job authority",
 );
 requireFragment(
   "crates/snowman-agent-executor/src/main.rs",

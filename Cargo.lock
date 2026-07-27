@@ -8888,6 +8888,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "snowman-agent-broker"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "hex",
+ "serde_json",
+ "sha2 0.11.0",
+ "snowman-agent-contract",
+ "sqlx",
+ "subtle",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "snowman-agent-contract"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "snowman-agent-executor"
 version = "0.1.0"
 dependencies = [
@@ -8898,12 +8930,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "snowman-agent-contract",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

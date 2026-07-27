@@ -89,13 +89,21 @@ selection, adapter-local permission rejection, bounded final-answer capture,
 and idempotent start/result receipts. It accepts no relay key, AWS task
 credential, direct provider credential, or arbitrary executable/MCP path.
 
-This is not yet an executable production sandbox because the server and image
-halves remain dormant. Activation still requires:
+The matching private job broker, shared versioned contracts, durable job
+ledger, and lease-backed idempotent issuance function now exist in source. The
+broker returns only digest-bound snapshots and accepts only bounded exact start
+and result receipts under a one-job token. It is a separate private service,
+not a relay or Block endpoint.
+
+This is not yet an executable production sandbox because deployment,
+coordination, tools, and model authorization remain dormant. Activation still
+requires:
 
 - separately pinned adapter images (including any evaluated OpenClaw or Hermes
   adapter) that package the executor and exact immutable runtime manifest;
-- the job-token issuer/action broker, private listener/DNS, revocation, action
-  receipts, and approval enforcement;
+- the broker/coordinator database roles and secrets, private service/listener,
+  cancellation/expiration/purge, capability-specific action receipts, and
+  approval enforcement;
 - coordinator `RunTask`/`StopTask` logic with exact task-definition and
   `iam:PassRole` restrictions outside the untrusted task;
 - a broker-authenticated model-gateway path for agent principals;

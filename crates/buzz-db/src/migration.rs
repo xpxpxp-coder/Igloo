@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 42);
+        assert_eq!(migrations.len(), 43);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1060,6 +1060,14 @@ mod tests {
         assert!(human_revocation.contains("snowman_workforce_revocation_receipts"));
         assert!(human_revocation.contains("revocation_scope IN"));
         assert!(human_revocation.contains("assertion_body_sha256"));
+
+        assert_eq!(migrations[42].version, 43);
+        let agent_jobs = migrations[42].sql.as_str();
+        assert!(agent_jobs.contains("CREATE TABLE snowman_agent_jobs"));
+        assert!(agent_jobs.contains("job_token_sha256"));
+        assert!(agent_jobs.contains("snapshot_sha256"));
+        assert!(agent_jobs.contains("UNIQUE (community_id, task_id, generation)"));
+        assert!(!agent_jobs.contains("provider_credential"));
     }
 
     #[test]

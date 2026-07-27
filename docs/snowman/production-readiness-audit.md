@@ -86,6 +86,10 @@ the highest risks without changing the production-readiness verdict:
   adapter permission escalation, captures only bounded final-answer text, and
   returns idempotent start/result receipts without receiving a relay or AWS
   task credential;
+- a separate private broker and durable one-shot job ledger now bind an opaque
+  token to one active tenant/task/generation/runtime/model snapshot, enforce
+  constant-time authentication and exact idempotent receipts, and explicitly
+  deny the general relay database role access to job authority;
 - definition-time rejection of unimplemented workflow actions and unsafe
   webhook destinations/credential headers; and
 - a default-off Analyst lifecycle-event ingress with host-derived community
@@ -116,7 +120,7 @@ the highest risks without changing the production-readiness verdict:
 These are implementation foundations, not staged proof. OIDC assertion exchange,
 private integration routing, live database/bootstrap evidence, recurring
 partition rotation and authenticated-edge bypass tests,
-proactive execution, adapter image/action broker/model-token path and live sandbox proof,
+proactive execution, broker deployment/action tools/model-token path, adapter images, and live sandbox proof,
 KMS audit checkpoints, staged
 recovery/load/isolation exercises, comprehensive branding, accessibility, UAT,
 and launch evidence remain open gates.
