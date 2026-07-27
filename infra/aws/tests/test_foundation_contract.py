@@ -137,6 +137,8 @@ class AwsFoundationContractTests(unittest.TestCase):
             'SNOWMAN_WORKFORCE_BOOTSTRAP_MANIFEST", value = local.workforce_bootstrap_manifest',
             'SNOWMAN_AGENT_COORDINATOR_RUNTIME_SECRET_ARN", value =',
             'SNOWMAN_AGENT_COORDINATOR_DB_ROLE", value = "snowman_agent_coordinator"',
+            'SNOWMAN_PROVIDER_EGRESS_RUNTIME_SECRET_ARN", value = aws_secretsmanager_secret.provider_egress_runtime.arn',
+            'SNOWMAN_PROVIDER_EGRESS_DB_ROLE", value = "snowman_provider_egress"',
             'SNOWMAN_PARTITION_MAINTENANCE_MODE", value = "external"',
             'RELAY_OWNER_PUBKEY", valueFrom =',
         ):
@@ -415,6 +417,63 @@ class AwsFoundationContractTests(unittest.TestCase):
         self.assertNotIn('ghcr.io/block', source.lower())
         self.assertNotIn('block.xyz', source.lower())
         self.assertNotIn('actions   = ["s3:', source)
+
+    def test_provider_egress_has_exact_bootstrap_and_inspected_only_network(self) -> None:
+        source = (ROOT / "provider_egress_proxy.tf").read_text(encoding="utf-8")
+        compute = (ROOT / "compute.tf").read_text(encoding="utf-8")
+        runtime_security = (
+            ROOT.parent.parent / "crates" / "buzz-db" / "src" / "runtime_security.rs"
+        ).read_text(encoding="utf-8")
+        bootstrap = (
+            ROOT.parent.parent / "crates" / "snowman-bootstrap" / "src" / "main.rs"
+        ).read_text(encoding="utf-8")
+        for fragment in (
+            'default     = false',
+            'default     = "single_az_cost_optimized"',
+            '"single_az_cost_optimized", "three_az_ha"',
+            '["api.twilio.com", "api.openai.com"]',
+            'var.provider_egress_elevenlabs_enabled ? ["api.elevenlabs.io"] : []',
+            'resource "aws_networkfirewall_rule_group" "provider_egress_domains"',
+            'tls.sni; content:',
+            'http.host; content:',
+            'drop ip $HOME_NET any -> $EXTERNAL_NET any',
+            'stateful_default_actions           = ["aws:drop_strict"]',
+            'stream_exception_policy = "DROP"',
+            'destination_cidr_block = "0.0.0.0/0"',
+            'vpc_endpoint_id        = local.provider_egress_firewall_endpoints_by_az',
+            'resource "aws_route" "provider_egress_nat_return_to_firewall"',
+            'cidr_ipv4         = "${cidrhost(var.vpc_cidr, 2)}/32"',
+            'resource "aws_networkfirewall_logging_configuration" "provider_egress"',
+            'resource "aws_cloudwatch_metric_alarm" "provider_egress_firewall_denied"',
+            'condition     = var.provider_egress_desired_count == 0',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, source)
+        self.assertEqual(source.count('cidr_ipv4         = "0.0.0.0/0"'), 1)
+        self.assertNotIn("block.xyz", source.lower())
+        self.assertNotIn("squareup", source.lower())
+        for fragment in (
+            'SNOWMAN_PROVIDER_EGRESS_RUNTIME_SECRET_ARN", value = aws_secretsmanager_secret.provider_egress_runtime.arn',
+            'SNOWMAN_PROVIDER_EGRESS_DB_ROLE", value = "snowman_provider_egress"',
+        ):
+            self.assertIn(fragment, compute)
+        for fragment in (
+            'role != "snowman_provider_egress"',
+            "SET snowman.tenant_id = ''",
+            "current_setting('row_security')='on'",
+            "c.relrowsecurity AND c.relforcerowsecurity",
+            "GRANT SELECT,INSERT ON TABLE snowman_provider_egress_cancellations",
+        ):
+            self.assertIn(fragment, runtime_security)
+        for fragment in (
+            'required_env("SNOWMAN_PROVIDER_EGRESS_RUNTIME_SECRET_ARN")',
+            'required_env("SNOWMAN_PROVIDER_EGRESS_DB_ROLE")',
+            'provision_provider_egress_role(',
+            'verify_provider_egress_role(',
+            'could not write the governed provider egress runtime secret',
+            'provider_egress_password.zeroize()',
+        ):
+            self.assertIn(fragment, bootstrap)
 
     def test_foundation_contains_no_upstream_runtime_authority(self) -> None:
         sources = "\n".join(

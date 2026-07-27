@@ -242,6 +242,8 @@ data "aws_iam_policy_document" "bootstrap_task" {
       aws_secretsmanager_secret.model_gateway_runtime.arn,
       aws_secretsmanager_secret.audit_checkpoint_runtime.arn,
       aws_secretsmanager_secret.orchestration_runtime.arn,
+      aws_secretsmanager_secret.meeting_media_runtime.arn,
+      aws_secretsmanager_secret.provider_egress_runtime.arn,
     ]
   }
   dynamic "statement" {
@@ -325,6 +327,10 @@ resource "aws_ecs_task_definition" "bootstrap" {
         { name = "SNOWMAN_AUDIT_CHECKPOINT_DB_ROLE", value = "snowman_audit_checkpoint" },
         { name = "SNOWMAN_ORCHESTRATION_RUNTIME_SECRET_ARN", value = aws_secretsmanager_secret.orchestration_runtime.arn },
         { name = "SNOWMAN_ORCHESTRATION_DB_ROLE", value = "snowman_orchestration" },
+        { name = "SNOWMAN_MEETING_MEDIA_RUNTIME_SECRET_ARN", value = aws_secretsmanager_secret.meeting_media_runtime.arn },
+        { name = "SNOWMAN_MEETING_MEDIA_DB_ROLE", value = "snowman_meeting_media" },
+        { name = "SNOWMAN_PROVIDER_EGRESS_RUNTIME_SECRET_ARN", value = aws_secretsmanager_secret.provider_egress_runtime.arn },
+        { name = "SNOWMAN_PROVIDER_EGRESS_DB_ROLE", value = "snowman_provider_egress" },
         { name = "SNOWMAN_WORKFORCE_BOOTSTRAP_MANIFEST", value = local.workforce_bootstrap_manifest },
       ]
       logConfiguration = {

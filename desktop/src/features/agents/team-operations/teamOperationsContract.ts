@@ -6,9 +6,8 @@ export const TEAM_OPERATIONS_VIEW_SCHEMA =
 const uuid = z.string().uuid();
 const timestamp = z.string().datetime({ offset: true });
 const boundedLabel = z.string().trim().min(1).max(160);
-const sha256Reference = z
-  .string()
-  .regex(/^analyst360:sha256:[0-9a-f]{64}$/);
+const sha256Reference = z.string().regex(/^analyst360:sha256:[0-9a-f]{64}$/);
+const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
 const costSchema = z
   .object({
@@ -69,6 +68,7 @@ const approvalSchema = z
     reasonLabel: boundedLabel,
     expiresAt: timestamp,
     riskLabel: z.enum(["low", "moderate", "high"]),
+    taskSnapshotSha256: sha256,
   })
   .strict();
 
@@ -144,7 +144,29 @@ export const teamOperationsSnapshotSchema = z
         nextActionCount: z.number().int().nonnegative(),
         resumable: z.boolean(),
       })
-      .strict(),
+      .strict()
+      .nullable(),
+    recentReceipts: z
+      .array(
+        z
+          .object({
+            id: uuid,
+            kind: z.enum([
+              "create_plan",
+              "activate_plan",
+              "pause_plan",
+              "cancel_plan",
+              "supersede_plan",
+              "work_product",
+              "reminder",
+            ]),
+            status: boundedLabel,
+            digestSha256: sha256,
+            recordedAt: timestamp,
+          })
+          .strict(),
+      )
+      .max(64),
   })
   .strict()
   .superRefine((snapshot, context) => {

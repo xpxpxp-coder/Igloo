@@ -168,7 +168,8 @@ export const teamOperationsFixture: TeamOperationsSnapshot = {
     },
     {
       id: TASKS.review,
-      title: "Independently verify citations, completeness, and client readiness",
+      title:
+        "Independently verify citations, completeness, and client readiness",
       specialistId: PERSONAS.reviewer,
       dependsOn: [TASKS.produce],
       origin: "proactive",
@@ -193,6 +194,7 @@ export const teamOperationsFixture: TeamOperationsSnapshot = {
       reasonLabel: "Client-confidential work-product generation",
       expiresAt: "2026-07-27T20:00:00Z",
       riskLabel: "moderate",
+      taskSnapshotSha256: "7".repeat(64),
     },
   ],
   artifacts: [
@@ -233,4 +235,13 @@ export const teamOperationsFixture: TeamOperationsSnapshot = {
     nextActionCount: 4,
     resumable: true,
   },
+  recentReceipts: [
+    {
+      id: "60000000-0000-4000-8000-000000000001",
+      kind: "activate_plan",
+      status: "applied",
+      digestSha256: "8".repeat(64),
+      recordedAt: "2026-07-27T15:29:00Z",
+    },
+  ],
 };

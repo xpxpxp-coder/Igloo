@@ -32,11 +32,22 @@ import {
   type TeamOperationsSpecialist,
   type TeamOperationsTask,
 } from "./teamOperationsContract";
+import type {
+  TeamOperationsAction,
+  TeamOperationsControls,
+} from "./teamOperationsAdapter";
 
 type DashboardProps = {
-  controlsEnabled: boolean;
+  controls: TeamOperationsControls;
+  notice: string | null;
+  pendingAction: string | null;
   snapshot: TeamOperationsSnapshot;
-  source: "fixture";
+  source: "fixture" | "live";
+  onAction(action: TeamOperationsAction): void;
+  onApproval(
+    approval: TeamOperationsSnapshot["approvals"][number],
+    decision: "approved" | "denied",
+  ): void;
 };
 
 const statusLabel: Record<TeamOperationsTask["status"], string> = {
@@ -65,13 +76,7 @@ function statusBadgeVariant(status: TeamOperationsTask["status"]) {
   return "outline" as const;
 }
 
-function Metric({
-  label,
-  value,
-}: {
-  label: string;
-  value: React.ReactNode;
-}) {
+function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="min-w-0 rounded-xl border border-white/40 bg-background/65 px-3 py-2.5 shadow-xs backdrop-blur dark:border-white/10">
       <p className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -84,13 +89,18 @@ function Metric({
 
 function RequestHero({
   snapshot,
-  controlsEnabled,
+  controls,
+  pendingAction,
+  onAction,
 }: {
   snapshot: TeamOperationsSnapshot;
-  controlsEnabled: boolean;
+  controls: TeamOperationsControls;
+  pendingAction: string | null;
+  onAction(action: TeamOperationsAction): void;
 }) {
   const progress = summarizeTeamProgress(snapshot);
-  const spent = snapshot.cost.accountedMicrousd + snapshot.cost.reservedMicrousd;
+  const spent =
+    snapshot.cost.accountedMicrousd + snapshot.cost.reservedMicrousd;
   const budgetPercent = Math.round((spent / snapshot.cost.limitMicrousd) * 100);
   const controlsDescriptionId = "team-operations-controls-description";
 
@@ -109,7 +119,9 @@ function RequestHero({
             <div className="min-w-0 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="info">AI Workforce</Badge>
-                <Badge variant="outline">{snapshot.request.workKindLabel}</Badge>
+                <Badge variant="outline">
+                  {snapshot.request.workKindLabel}
+                </Badge>
                 <Badge variant="outline">
                   {snapshot.request.classificationLabel}
                 </Badge>
@@ -119,26 +131,56 @@ function RequestHero({
                   {snapshot.request.title}
                 </h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Generation {snapshot.request.generation} · {progress.activeTasks}{" "}
-                  active · {progress.completedTasks} of {progress.totalTasks}{" "}
-                  tasks complete
+                  Generation {snapshot.request.generation} ·{" "}
+                  {progress.activeTasks} active · {progress.completedTasks} of{" "}
+                  {progress.totalTasks} tasks complete
                 </p>
               </div>
             </div>
           </div>
           <div className="flex shrink-0 flex-wrap gap-2">
+            {snapshot.request.state === "active" ? (
+              <Button
+                aria-describedby={controlsDescriptionId}
+                disabled={!controls.pause || pendingAction !== null}
+                onClick={() => onAction("pause")}
+                size="sm"
+                variant="outline"
+              >
+                <Pause aria-hidden="true" />
+                Pause
+              </Button>
+            ) : (
+              <Button
+                aria-describedby={controlsDescriptionId}
+                disabled={!controls.activate || pendingAction !== null}
+                onClick={() => onAction("activate")}
+                size="sm"
+                variant="outline"
+              >
+                <Play aria-hidden="true" />
+                Activate
+              </Button>
+            )}
+            {snapshot.request.supersedesPlanId ? (
+              <Button
+                aria-describedby={controlsDescriptionId}
+                disabled={!controls.supersede || pendingAction !== null}
+                onClick={() => onAction("supersede")}
+                size="sm"
+                variant="outline"
+              >
+                Supersede prior plan
+              </Button>
+            ) : null}
             <Button
               aria-describedby={controlsDescriptionId}
-              disabled={!controlsEnabled}
-              size="sm"
-              variant="outline"
-            >
-              <Pause aria-hidden="true" />
-              Pause
-            </Button>
-            <Button
-              aria-describedby={controlsDescriptionId}
-              disabled={!controlsEnabled || !snapshot.request.canCancel}
+              disabled={
+                !controls.cancel ||
+                !snapshot.request.canCancel ||
+                pendingAction !== null
+              }
+              onClick={() => onAction("cancel")}
               size="sm"
               variant="destructive"
             >
@@ -148,7 +190,10 @@ function RequestHero({
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Metric label="Plan progress" value={`${progress.progressPercent}%`} />
+          <Metric
+            label="Plan progress"
+            value={`${progress.progressPercent}%`}
+          />
           <Metric
             label="Team online"
             value={`${snapshot.specialists.filter(({ status }) => status !== "queued").length} of ${snapshot.specialists.length}`}
@@ -179,8 +224,8 @@ function RequestHero({
           />
         </div>
         <p className="sr-only" id={controlsDescriptionId}>
-          Mutation controls are disabled in fixture preview mode. They require
-          live tenant-scoped authorization and durable receipts.
+          Controls require a live tenant and workspace-bound workforce session,
+          an exact lifecycle capability, and a durable generation receipt.
         </p>
       </CardContent>
     </Card>
@@ -231,7 +276,8 @@ function SpecialistCard({
   specialist: TeamOperationsSpecialist;
   currentTask?: TeamOperationsTask;
 }) {
-  const spent = specialist.cost.accountedMicrousd + specialist.cost.reservedMicrousd;
+  const spent =
+    specialist.cost.accountedMicrousd + specialist.cost.reservedMicrousd;
   return (
     <li className="rounded-xl border border-border/70 bg-background/65 p-4 shadow-xs">
       <div className="flex items-start justify-between gap-3">
@@ -251,6 +297,7 @@ function SpecialistCard({
             specialist.status === "done" && "bg-emerald-500",
             specialist.status === "queued" && "bg-muted-foreground/40",
           )}
+          role="img"
         />
       </div>
       <div className="mt-3 rounded-lg bg-muted/55 px-3 py-2">
@@ -340,7 +387,9 @@ function TaskPlan({ snapshot }: { snapshot: TeamOperationsSnapshot }) {
               ready.
             </p>
           </div>
-          <Badge variant="outline">Generation {snapshot.request.generation}</Badge>
+          <Badge variant="outline">
+            Generation {snapshot.request.generation}
+          </Badge>
         </div>
       </CardHeader>
       <CardContent className="grid gap-4 p-5 pt-2 lg:grid-cols-[minmax(0,1fr)_minmax(15rem,0.7fr)]">
@@ -480,10 +529,17 @@ function TaskPlan({ snapshot }: { snapshot: TeamOperationsSnapshot }) {
 
 function ApprovalQueue({
   snapshot,
-  controlsEnabled,
+  controls,
+  pendingAction,
+  onApproval,
 }: {
   snapshot: TeamOperationsSnapshot;
-  controlsEnabled: boolean;
+  controls: TeamOperationsControls;
+  pendingAction: string | null;
+  onApproval(
+    approval: TeamOperationsSnapshot["approvals"][number],
+    decision: "approved" | "denied",
+  ): void;
 }) {
   return (
     <Card>
@@ -508,13 +564,23 @@ function ApprovalQueue({
               >
                 <p className="text-sm font-medium">{approval.title}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {approval.reasonLabel} · Expires {formatDateTime(approval.expiresAt)}
+                  {approval.reasonLabel} · Expires{" "}
+                  {formatDateTime(approval.expiresAt)}
                 </p>
                 <div className="mt-3 flex gap-2">
-                  <Button disabled={!controlsEnabled} size="xs">
-                    Review
+                  <Button
+                    disabled={!controls.approve || pendingAction !== null}
+                    onClick={() => onApproval(approval, "approved")}
+                    size="xs"
+                  >
+                    Approve
                   </Button>
-                  <Button disabled={!controlsEnabled} size="xs" variant="outline">
+                  <Button
+                    disabled={!controls.approve || pendingAction !== null}
+                    onClick={() => onApproval(approval, "denied")}
+                    size="xs"
+                    variant="outline"
+                  >
                     Deny
                   </Button>
                 </div>
@@ -570,6 +636,19 @@ function ArtifactCard({ snapshot }: { snapshot: TeamOperationsSnapshot }) {
 }
 
 function ContinuityCard({ snapshot }: { snapshot: TeamOperationsSnapshot }) {
+  if (!snapshot.handoff) {
+    return (
+      <Card>
+        <CardHeader className="p-5 pb-3">
+          <h3 className="font-semibold">Continuity and memory</h3>
+        </CardHeader>
+        <CardContent className="p-5 pt-2 text-sm text-muted-foreground">
+          No bounded Analyst handoff receipt has been published for this plan.
+        </CardContent>
+      </Card>
+    );
+  }
+  const handoff = snapshot.handoff;
   return (
     <Card>
       <CardHeader className="p-5 pb-3">
@@ -582,30 +661,33 @@ function ContinuityCard({ snapshot }: { snapshot: TeamOperationsSnapshot }) {
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-medium">
-              {snapshot.handoff.resumable
+              {handoff.resumable
                 ? "Replacement-ready handoff"
                 : "Handoff needs attention"}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Updated {formatDateTime(snapshot.handoff.updatedAt)}
+              Updated {formatDateTime(handoff.updatedAt)}
             </p>
           </div>
-          <Badge variant={snapshot.handoff.resumable ? "success" : "warning"}>
-            {snapshot.handoff.coveragePercent}% covered
+          <Badge variant={handoff.resumable ? "success" : "warning"}>
+            {handoff.coveragePercent}% covered
           </Badge>
         </div>
         <Progress
           aria-label="Handoff memory coverage"
           className="motion-reduce:[&>div]:transition-none"
-          value={snapshot.handoff.coveragePercent}
+          value={handoff.coveragePercent}
         />
         <div className="grid grid-cols-3 gap-2 text-center">
-          <Metric label="Decisions" value={snapshot.handoff.decisionCount} />
-          <Metric label="Open questions" value={snapshot.handoff.openQuestionCount} />
-          <Metric label="Next steps" value={snapshot.handoff.nextActionCount} />
+          <Metric label="Decisions" value={handoff.decisionCount} />
+          <Metric label="Open questions" value={handoff.openQuestionCount} />
+          <Metric label="Next steps" value={handoff.nextActionCount} />
         </div>
         <p className="flex items-start gap-2 text-xs text-muted-foreground">
-          <LockKeyhole aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <LockKeyhole
+            aria-hidden="true"
+            className="mt-0.5 h-3.5 w-3.5 shrink-0"
+          />
           Context remains an immutable Analyst-managed digest; this screen does
           not retain raw client data, transcripts, or mailbox content.
         </p>
@@ -614,7 +696,11 @@ function ContinuityCard({ snapshot }: { snapshot: TeamOperationsSnapshot }) {
   );
 }
 
-function ScheduleAndAuthority({ snapshot }: { snapshot: TeamOperationsSnapshot }) {
+function ScheduleAndAuthority({
+  snapshot,
+}: {
+  snapshot: TeamOperationsSnapshot;
+}) {
   return (
     <Card>
       <CardHeader className="p-5 pb-3">
@@ -663,20 +749,67 @@ function ScheduleAndAuthority({ snapshot }: { snapshot: TeamOperationsSnapshot }
   );
 }
 
+function ReceiptCard({ snapshot }: { snapshot: TeamOperationsSnapshot }) {
+  return (
+    <Card>
+      <CardHeader className="p-5 pb-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <History aria-hidden="true" className="h-4 w-4 text-sky-500" />
+            <h3 className="font-semibold">Durable receipts</h3>
+          </div>
+          <Badge variant="outline">{snapshot.recentReceipts.length}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="p-5 pt-2">
+        {snapshot.recentReceipts.length ? (
+          <ul className="space-y-2">
+            {snapshot.recentReceipts.slice(0, 6).map((receipt) => (
+              <li
+                className="flex items-center justify-between gap-3 rounded-lg bg-muted/45 px-3 py-2 text-xs"
+                key={`${receipt.kind}-${receipt.id}`}
+              >
+                <span className="min-w-0 truncate">
+                  {receipt.kind.replaceAll("_", " ")} · {receipt.status}
+                </span>
+                <time className="shrink-0 text-muted-foreground">
+                  {formatDateTime(receipt.recordedAt)}
+                </time>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No lifecycle or work-product receipt has been recorded yet.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function TeamOperationsDashboard({
-  controlsEnabled,
+  controls,
+  notice,
+  pendingAction,
   snapshot,
   source,
+  onAction,
+  onApproval,
 }: DashboardProps) {
   return (
     <section aria-labelledby="team-operations-title" className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight" id="team-operations-title">
+          <h2
+            className="text-lg font-semibold tracking-tight"
+            id="team-operations-title"
+          >
             Team operations
           </h2>
           <p className="text-sm text-muted-foreground">
-            Requests, specialist work, approvals, evidence, and continuity in one governed view.
+            Requests, specialist work, approvals, evidence, and continuity in
+            one governed view.
           </p>
         </div>
         {source === "fixture" ? (
@@ -690,7 +823,21 @@ export function TeamOperationsDashboard({
         ) : null}
       </div>
 
-      <RequestHero controlsEnabled={controlsEnabled} snapshot={snapshot} />
+      {notice ? (
+        <p
+          aria-live="polite"
+          className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3 text-sm"
+          role="status"
+        >
+          {notice}
+        </p>
+      ) : null}
+      <RequestHero
+        controls={controls}
+        onAction={onAction}
+        pendingAction={pendingAction}
+        snapshot={snapshot}
+      />
       <NextActionCard snapshot={snapshot} />
 
       <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(20rem,0.85fr)]">
@@ -700,12 +847,15 @@ export function TeamOperationsDashboard({
         </div>
         <div className="space-y-4">
           <ApprovalQueue
-            controlsEnabled={controlsEnabled}
+            controls={controls}
+            onApproval={onApproval}
+            pendingAction={pendingAction}
             snapshot={snapshot}
           />
           <ArtifactCard snapshot={snapshot} />
           <ContinuityCard snapshot={snapshot} />
           <ScheduleAndAuthority snapshot={snapshot} />
+          <ReceiptCard snapshot={snapshot} />
         </div>
       </div>
 

@@ -760,6 +760,128 @@ pub async fn verify_meeting_media_role(pool: &PgPool, expected_role: &str) -> Re
     Ok(())
 }
 
+/// Create or reconcile the exact provider-egress login. The role can read the
+/// admitted meeting-media session fence, maintain only its tenant-scoped
+/// request/cancellation ledgers, and append content-free receipt evidence.
+/// Every new session starts with RLS enabled and no tenant selected; the
+/// runtime must bind `snowman.tenant_id` locally inside each transaction.
+pub async fn provision_provider_egress_role(
+    pool: &PgPool,
+    role: &str,
+    password: &str,
+) -> Result<()> {
+    if role != "snowman_provider_egress" {
+        return Err(DbError::InvalidData(
+            "provider egress database role must be exactly snowman_provider_egress".into(),
+        ));
+    }
+    validate_role_name(role)?;
+    if password.len() < 32 {
+        return Err(DbError::InvalidData(
+            "provider egress database password must contain at least 32 characters".into(),
+        ));
+    }
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await?;
+    let role_identifier = quote_identifier(role);
+    let database_identifier = quote_identifier(&database);
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT set_config('snowman.provider_egress_role_password', $1, true)")
+        .bind(password)
+        .execute(&mut *transaction)
+        .await?;
+    let role_ddl = format!(
+        "DO $snowman$\n\
+         BEGIN\n\
+           IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n\
+             CREATE ROLE {role_identifier} LOGIN;\n\
+           END IF;\n\
+           ALTER ROLE {role_identifier}\n\
+             WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n\
+           EXECUTE format('ALTER ROLE %I PASSWORD %L', '{role}',\n\
+             current_setting('snowman.provider_egress_role_password'));\n\
+         END\n\
+         $snowman$;\n\
+         ALTER ROLE {role_identifier} IN DATABASE {database_identifier} SET row_security = on;\n\
+         ALTER ROLE {role_identifier} IN DATABASE {database_identifier} SET snowman.tenant_id = '';"
+    );
+    sqlx::raw_sql(AssertSqlSafe(role_ddl))
+        .execute(&mut *transaction)
+        .await?;
+    let grants = format!(
+        "REVOKE ALL ON DATABASE {database_identifier} FROM {role_identifier};\n\
+         REVOKE ALL ON SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role_identifier};\n\
+         GRANT CONNECT ON DATABASE {database_identifier} TO {role_identifier};\n\
+         GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
+         GRANT SELECT ON TABLE snowman_meeting_media_sessions TO {role_identifier};\n\
+         GRANT SELECT,INSERT ON TABLE snowman_provider_egress_cancellations TO {role_identifier};\n\
+         GRANT SELECT,INSERT,UPDATE ON TABLE snowman_provider_egress_requests TO {role_identifier};\n\
+         GRANT SELECT,INSERT ON TABLE snowman_provider_egress_receipt_events TO {role_identifier};"
+    );
+    sqlx::raw_sql(AssertSqlSafe(grants))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Fail closed unless the provider-egress identity has only its exact
+/// content-free ledgers, cannot bypass RLS, and starts unbound to any tenant.
+pub async fn verify_provider_egress_role(pool: &PgPool, expected_role: &str) -> Result<()> {
+    if expected_role != "snowman_provider_egress" {
+        return Err(DbError::InvalidData(
+            "provider egress database role must be exactly snowman_provider_egress".into(),
+        ));
+    }
+    let valid: bool = sqlx::query_scalar(
+        "SELECT current_user=$1 \
+         AND has_database_privilege(current_user,current_database(),'CONNECT') \
+         AND NOT has_database_privilege(current_user,current_database(),'CREATE') \
+         AND has_schema_privilege(current_user,'public','USAGE') \
+         AND NOT has_schema_privilege(current_user,'public','CREATE') \
+         AND current_setting('row_security')='on' \
+         AND COALESCE(current_setting('snowman.tenant_id',true),'')='' \
+         AND has_table_privilege(current_user,'snowman_meeting_media_sessions','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_sessions','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_provider_egress_cancellations','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_provider_egress_cancellations','UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_provider_egress_requests','SELECT,INSERT,UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_provider_egress_requests','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_provider_egress_receipt_events','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_provider_egress_receipt_events','UPDATE,DELETE,TRUNCATE') \
+         AND (SELECT bool_and(c.relrowsecurity AND c.relforcerowsecurity) \
+              FROM pg_catalog.pg_class c \
+              WHERE c.oid IN ('snowman_provider_egress_cancellations'::regclass, \
+                              'snowman_provider_egress_requests'::regclass, \
+                              'snowman_provider_egress_receipt_events'::regclass)) \
+         AND (SELECT count(*)=3 AND bool_and(qual LIKE '%snowman.tenant_id%' \
+                                            AND with_check LIKE '%snowman.tenant_id%') \
+              FROM pg_catalog.pg_policies \
+              WHERE schemaname='public' AND tablename IN \
+                ('snowman_provider_egress_cancellations', \
+                 'snowman_provider_egress_requests', \
+                 'snowman_provider_egress_receipt_events')) \
+         AND NOT has_table_privilege(current_user,'events','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'channels','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'audit_log','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meetings','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_tool_intents','SELECT,INSERT,UPDATE,DELETE,TRUNCATE')",
+    )
+    .bind(expected_role)
+    .fetch_one(pool)
+    .await?;
+    if !valid {
+        return Err(DbError::InvalidData(
+            "provider egress database identity violates its exact tenant-RLS boundary".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Fail closed unless the connected serving identity has its required DML
 /// capabilities and lacks database/schema creation authority.
 pub async fn verify_runtime_role(pool: &PgPool, expected_role: &str) -> Result<()> {
@@ -1051,5 +1173,17 @@ mod tests {
         assert!(source.contains(
             "orchestration database identity violates its exact metadata-control boundary"
         ));
+    }
+
+    #[test]
+    fn provider_egress_role_is_exact_rls_bound_and_content_free() {
+        let source = include_str!("runtime_security.rs");
+        assert!(source.contains("role != \"snowman_provider_egress\""));
+        assert!(source.contains("SET snowman.tenant_id = ''"));
+        assert!(source.contains("current_setting('row_security')='on'"));
+        assert!(source.contains("c.relrowsecurity AND c.relforcerowsecurity"));
+        assert!(source.contains("snowman_provider_egress_receipt_events','UPDATE,DELETE,TRUNCATE'"));
+        assert!(source
+            .contains("provider egress database identity violates its exact tenant-RLS boundary"));
     }
 }

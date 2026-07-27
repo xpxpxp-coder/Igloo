@@ -652,6 +652,10 @@ fn human_capabilities(role: &str) -> Vec<String> {
             "workforce.requests.cancel",
             "workforce.tasks.approve",
             "workforce.schedules.manage",
+            "orchestration.plans.activate",
+            "orchestration.plans.pause",
+            "orchestration.plans.cancel",
+            "orchestration.plans.supersede",
         ],
         "member" => &["workforce.requests.create", "workforce.requests.read"],
         _ => &[],
@@ -896,6 +900,8 @@ mod tests {
         assert_eq!(snowman_role("service"), None);
         assert!(human_capabilities("member").contains(&"workforce.requests.read".to_string()));
         assert!(!human_capabilities("member").contains(&"workforce.tasks.approve".to_string()));
+        assert!(human_capabilities("owner").contains(&"orchestration.plans.pause".to_string()));
+        assert!(!human_capabilities("member").contains(&"orchestration.plans.pause".to_string()));
     }
 
     #[test]

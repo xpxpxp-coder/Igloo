@@ -103,6 +103,8 @@ const runtimeAuthorityFiles = [
   "desktop/src-tauri/tauri.conf.json",
   "desktop/src-tauri/tauri.dev.conf.json",
   "desktop/src/features/profile/lib/animatedAvatarCapture.ts",
+  "desktop/src/features/agents/team-operations/teamOperationsAdapter.ts",
+  "desktop/src/features/agents/team-operations/teamOperationsApiContract.ts",
   "desktop/src/features/communities/hostedCommunityApi.ts",
   "desktop/src/features/communities/relayProbe.ts",
   "desktop/src/features/onboarding/welcomeCanvas.ts",
@@ -240,6 +242,71 @@ requireFragment(
   "infra/aws/provider_egress_proxy.tf",
   "assign_public_ip = false",
   "the dormant provider task must not silently receive a public egress path",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'default     = "single_az_cost_optimized"',
+  "provider inspection must expose an explicit staging-cost versus production-HA topology",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'resource "aws_networkfirewall_rule_group" "provider_egress_domains"',
+  "provider internet traffic must traverse a dedicated stateful Network Firewall",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "tls.sni; content:",
+  "provider firewall policy must enforce exact TLS SNI values",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "http.host; content:",
+  "provider firewall policy must enforce exact HTTP Host values",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'var.provider_egress_elevenlabs_enabled ? ["api.elevenlabs.io"] : []',
+  "ElevenLabs egress must remain independently optional",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "drop ip $HOME_NET any -> $EXTERNAL_NET any",
+  "provider firewall policy must default-deny every non-approved destination",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'resource "aws_route" "provider_egress_nat_return_to_firewall"',
+  "provider NAT return traffic must be symmetrically inspected",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'cidr_ipv4         = "${cidrhost(var.vpc_cidr, 2)}/32"',
+  "provider DNS must be limited to the exact VPC resolver",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  'role != "snowman_provider_egress"',
+  "provider egress must use the exact dedicated database login",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "SET snowman.tenant_id = ''",
+  "provider database sessions must start tenant-unbound",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "c.relrowsecurity AND c.relforcerowsecurity",
+  "provider bootstrap must validate FORCE RLS on every provider ledger",
+);
+requireFragment(
+  "crates/snowman-bootstrap/src/main.rs",
+  "provision_provider_egress_role",
+  "the governed bootstrap must reconcile the exact provider database identity",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  'SNOWMAN_PROVIDER_EGRESS_DB_ROLE", value = "snowman_provider_egress"',
+  "the one-shot bootstrap task must seal the exact provider role name",
 );
 requireFragment(
   "crates/snowman-provider-egress-proxy/src/lib.rs",
@@ -706,6 +773,21 @@ requireFragment(
   "crates/snowman-orchestration/src/lib.rs",
   "valid_analyst_ref",
   "orchestration memory and work-product context must remain immutable Analyst 360 references",
+);
+requireFragment(
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "authorize_human_read",
+  "the command-center orchestration projection must revalidate a live human workspace authority",
+);
+requireFragment(
+  "desktop/src/features/agents/team-operations/teamOperationsAdapter.ts",
+  "exactSnowmanOrigin",
+  "team operations must reject direct non-Snowman network origins",
+);
+requireFragment(
+  "desktop/src/features/agents/team-operations/teamOperationsAdapter.ts",
+  "receipt.plan_generation !== projection.plan.generation",
+  "lifecycle UI updates must remain fenced to the exact plan generation receipt",
 );
 requireFragment(
   "crates/snowman-orchestration/src/lib.rs",

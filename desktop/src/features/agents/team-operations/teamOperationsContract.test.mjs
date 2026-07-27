@@ -13,7 +13,10 @@ test("fixture is a bounded, internally consistent team operations view", () => {
   assert.equal(parsed.request.generation, 3);
   assert.equal(parsed.specialists.length, 4);
   assert.equal(parsed.tasks.length, 4);
-  assert.equal(parsed.tasks.find((task) => task.origin === "meeting")?.status, "done");
+  assert.equal(
+    parsed.tasks.find((task) => task.origin === "meeting")?.status,
+    "done",
+  );
 });
 
 test("progress summarizes the dependency plan without counting artifact bodies", () => {
@@ -62,12 +65,8 @@ test("cross-snapshot task, persona, approval, and artifact references fail close
           dependsOn: [unknownId],
         },
       ],
-      approvals: [
-        { ...teamOperationsFixture.approvals[0], taskId: unknownId },
-      ],
-      artifacts: [
-        { ...teamOperationsFixture.artifacts[0], taskId: unknownId },
-      ],
+      approvals: [{ ...teamOperationsFixture.approvals[0], taskId: unknownId }],
+      artifacts: [{ ...teamOperationsFixture.artifacts[0], taskId: unknownId }],
     }),
   );
 });

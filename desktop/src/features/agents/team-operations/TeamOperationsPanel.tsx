@@ -1,12 +1,20 @@
 import { AlertTriangle, LockKeyhole, ServerOff } from "lucide-react";
 import * as React from "react";
 
+import { useCommunities } from "@/features/communities/useCommunities";
+import { relayHttpFromWs } from "@/shared/api/inviteHelpers";
+import { signRelayEvent } from "@/shared/api/tauri";
 import { Button } from "@/shared/ui/button";
 import { Card, CardContent } from "@/shared/ui/card";
+import { Input } from "@/shared/ui/input";
 import { Skeleton } from "@/shared/ui/skeleton";
+import { Textarea } from "@/shared/ui/textarea";
 import {
   createDisabledTeamOperationsAdapter,
   createFixtureTeamOperationsAdapter,
+  createLiveTeamOperationsAdapter,
+  type TeamOperationsCommandResult,
+  type CreateGovernedRequestInput,
   type TeamOperationsAdapter,
   type TeamOperationsLoadResult,
 } from "./teamOperationsAdapter";
@@ -21,10 +29,29 @@ type TeamOperationsE2eWindow = Window & {
   __BUZZ_E2E__?: { teamOperationsFixture?: boolean };
 };
 
-function createDefaultAdapter(): TeamOperationsAdapter {
+function createDefaultAdapter(
+  tenantId: string | undefined,
+  relayUrl: string | undefined,
+): TeamOperationsAdapter {
   const e2e = (window as TeamOperationsE2eWindow).__BUZZ_E2E__;
   if (import.meta.env.MODE === "e2e" && e2e?.teamOperationsFixture === true) {
     return createFixtureTeamOperationsAdapter(teamOperationsFixture);
+  }
+  const orchestrationOrigin = import.meta.env.VITE_SNOWMAN_ORCHESTRATION_ORIGIN;
+  const workspaceId = import.meta.env.VITE_SNOWMAN_WORKSPACE_ID;
+  if (orchestrationOrigin && workspaceId && tenantId && relayUrl) {
+    try {
+      return createLiveTeamOperationsAdapter({
+        orchestrationOrigin,
+        relayOrigin: `${relayHttpFromWs(relayUrl).replace(/\/+$/, "")}/`,
+        tenantId,
+        workspaceId,
+        signEvent: async (input) =>
+          (await signRelayEvent(input)) as unknown as Record<string, unknown>,
+      });
+    } catch {
+      return createDisabledTeamOperationsAdapter();
+    }
   }
   return createDisabledTeamOperationsAdapter();
 }
@@ -95,18 +122,155 @@ function DisabledTeamOperations({
   );
 }
 
+function GovernedRequestComposer({
+  disabled,
+  onCreate,
+}: {
+  disabled: boolean;
+  onCreate(input: CreateGovernedRequestInput): void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [objective, setObjective] = React.useState("");
+  const [classification, setClassification] =
+    React.useState<CreateGovernedRequestInput["classification"]>(
+      "confidential",
+    );
+  const [deadline, setDeadline] = React.useState("");
+  const [budget, setBudget] = React.useState("25");
+
+  if (!open) {
+    return (
+      <div className="flex justify-end">
+        <Button disabled={disabled} onClick={() => setOpen(true)} size="sm">
+          Start a governed request
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <Card>
+      <CardContent className="p-5">
+        <form
+          className="grid gap-4 lg:grid-cols-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const dollars = Number(budget);
+            if (!objective.trim() || !deadline || !Number.isFinite(dollars))
+              return;
+            onCreate({
+              objective,
+              classification,
+              deadlineAt: new Date(deadline).toISOString(),
+              maxCostMicrousd: Math.round(dollars * 1_000_000),
+              contextReferences: [],
+            });
+          }}
+        >
+          <div className="space-y-2 lg:col-span-2">
+            <label className="text-sm font-medium" htmlFor="governed-objective">
+              What outcome should the team produce?
+            </label>
+            <Textarea
+              disabled={disabled}
+              id="governed-objective"
+              maxLength={8000}
+              onChange={(event) => setObjective(event.target.value)}
+              placeholder="Describe the outcome without pasting raw client rows, mailbox content, or transcripts."
+              required
+              value={objective}
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="governed-deadline">
+              Deadline
+            </label>
+            <Input
+              disabled={disabled}
+              id="governed-deadline"
+              onChange={(event) => setDeadline(event.target.value)}
+              required
+              type="datetime-local"
+              value={deadline}
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="governed-budget">
+              Maximum budget (USD)
+            </label>
+            <Input
+              disabled={disabled}
+              id="governed-budget"
+              min="0.01"
+              onChange={(event) => setBudget(event.target.value)}
+              required
+              step="0.01"
+              type="number"
+              value={budget}
+            />
+          </div>
+          <div className="space-y-2">
+            <label
+              className="text-sm font-medium"
+              htmlFor="governed-classification"
+            >
+              Classification
+            </label>
+            <select
+              className="h-9 w-full rounded-lg border border-input/40 bg-background px-3 text-sm"
+              disabled={disabled}
+              id="governed-classification"
+              onChange={(event) =>
+                setClassification(
+                  event.target
+                    .value as CreateGovernedRequestInput["classification"],
+                )
+              }
+              value={classification}
+            >
+              <option value="internal">Snowman internal</option>
+              <option value="confidential">Client confidential</option>
+              <option value="restricted">Restricted</option>
+            </select>
+          </div>
+          <p className="self-end text-xs text-muted-foreground">
+            Context is attached later through immutable Analyst 360 references.
+          </p>
+          <div className="flex flex-wrap justify-end gap-2 lg:col-span-2">
+            <Button
+              onClick={() => setOpen(false)}
+              type="button"
+              variant="ghost"
+            >
+              Close
+            </Button>
+            <Button disabled={disabled} type="submit">
+              Authorize planning
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function TeamOperationsPanel({
   adapter,
 }: {
   adapter?: TeamOperationsAdapter;
 }) {
+  const { activeCommunity } = useCommunities();
   const resolvedAdapter = React.useMemo(
-    () => adapter ?? createDefaultAdapter(),
-    [adapter],
+    () =>
+      adapter ??
+      createDefaultAdapter(activeCommunity?.id, activeCommunity?.relayUrl),
+    [activeCommunity?.id, activeCommunity?.relayUrl, adapter],
   );
-  const [result, setResult] =
-    React.useState<TeamOperationsLoadResult | null>(null);
+  const [result, setResult] = React.useState<TeamOperationsLoadResult | null>(
+    null,
+  );
   const [error, setError] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+  const [pendingAction, setPendingAction] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     const controller = new AbortController();
@@ -129,6 +293,43 @@ export function TeamOperationsPanel({
     return () => controller.abort();
   }, [resolvedAdapter]);
 
+  const runAction = React.useCallback(
+    async (
+      label: string,
+      operation: (signal: AbortSignal) => Promise<TeamOperationsCommandResult>,
+    ) => {
+      const controller = new AbortController();
+      setPendingAction(label);
+      setError(null);
+      setNotice(null);
+      try {
+        const command = await operation(controller.signal);
+        const nextSnapshot = command.snapshot;
+        if (nextSnapshot) {
+          setResult((current) =>
+            current?.kind === "ready"
+              ? {
+                  ...current,
+                  snapshot: nextSnapshot,
+                  controls: command.controls ?? current.controls,
+                }
+              : current,
+          );
+        }
+        setNotice(`${label} receipt: ${command.receipt.status}.`);
+      } catch (actionError) {
+        setError(
+          actionError instanceof Error
+            ? actionError.message
+            : "The governed operation failed closed.",
+        );
+      } finally {
+        setPendingAction(null);
+      }
+    },
+    [],
+  );
+
   if (error) {
     return (
       <Card className="border-destructive/30" role="alert">
@@ -150,14 +351,87 @@ export function TeamOperationsPanel({
   if (result.kind === "disabled") {
     return <DisabledTeamOperations {...result} />;
   }
+  if (result.kind === "empty") {
+    return (
+      <section
+        aria-labelledby="team-operations-empty-title"
+        className="space-y-4"
+      >
+        <Card>
+          <CardContent className="p-5">
+            <h2 className="font-semibold" id="team-operations-empty-title">
+              AI Workforce command view
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {result.message}
+            </p>
+          </CardContent>
+        </Card>
+        <GovernedRequestComposer
+          disabled={!resolvedAdapter.createRequest || pendingAction !== null}
+          onCreate={(input) => {
+            if (!resolvedAdapter.createRequest) return;
+            void runAction(
+              "Governed request",
+              (signal) =>
+                resolvedAdapter.createRequest?.(input, signal) ??
+                Promise.reject(new Error("Request creation is unavailable.")),
+            );
+          }}
+        />
+      </section>
+    );
+  }
 
   return (
-    <React.Suspense fallback={<TeamOperationsLoading />}>
-      <TeamOperationsDashboard
-        controlsEnabled={false}
-        snapshot={result.snapshot}
-        source={result.source}
+    <div className="space-y-4">
+      <GovernedRequestComposer
+        disabled={!resolvedAdapter.createRequest || pendingAction !== null}
+        onCreate={(input) => {
+          if (!resolvedAdapter.createRequest) return;
+          void runAction(
+            "Governed request",
+            (signal) =>
+              resolvedAdapter.createRequest?.(input, signal) ??
+              Promise.reject(new Error("Request creation is unavailable.")),
+          );
+        }}
       />
-    </React.Suspense>
+      <React.Suspense fallback={<TeamOperationsLoading />}>
+        <TeamOperationsDashboard
+          controls={result.controls}
+          notice={notice}
+          pendingAction={pendingAction}
+          snapshot={result.snapshot}
+          source={result.source}
+          onAction={(action) => {
+            if (!resolvedAdapter.execute) return;
+            void runAction(
+              action,
+              (signal) =>
+                resolvedAdapter.execute?.(action, signal) ??
+                Promise.reject(
+                  new Error("Lifecycle controls are unavailable."),
+                ),
+            );
+          }}
+          onApproval={(approval, decision) => {
+            if (!resolvedAdapter.decideApproval) return;
+            void runAction(
+              decision,
+              (signal) =>
+                resolvedAdapter.decideApproval?.(
+                  crypto.randomUUID(),
+                  approval.taskId,
+                  approval.taskSnapshotSha256,
+                  decision,
+                  signal,
+                ) ??
+                Promise.reject(new Error("Approval controls are unavailable.")),
+            );
+          }}
+        />
+      </React.Suspense>
+    </div>
   );
 }

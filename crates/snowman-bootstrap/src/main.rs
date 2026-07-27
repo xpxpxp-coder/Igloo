@@ -1075,6 +1075,11 @@ async fn main() -> anyhow::Result<()> {
     let meeting_media_secret_arn = required_env("SNOWMAN_MEETING_MEDIA_RUNTIME_SECRET_ARN")?;
     let meeting_media_role = required_env("SNOWMAN_MEETING_MEDIA_DB_ROLE")?;
     buzz_db::runtime_security::validate_role_name(&meeting_media_role)?;
+    let provider_egress_secret_arn = required_env("SNOWMAN_PROVIDER_EGRESS_RUNTIME_SECRET_ARN")?;
+    let provider_egress_role = required_env("SNOWMAN_PROVIDER_EGRESS_DB_ROLE")?;
+    if provider_egress_role != "snowman_provider_egress" {
+        bail!("provider egress database role must be exactly snowman_provider_egress");
+    }
     if [
         runtime_role.as_str(),
         agent_broker_role.as_str(),
@@ -1083,13 +1088,14 @@ async fn main() -> anyhow::Result<()> {
         audit_checkpoint_role.as_str(),
         orchestration_role.as_str(),
         meeting_media_role.as_str(),
+        provider_egress_role.as_str(),
     ]
     .into_iter()
     .collect::<std::collections::BTreeSet<_>>()
     .len()
-        != 7
+        != 8
     {
-        bail!("relay, agent broker, agent coordinator, model gateway, audit checkpoint, orchestration, and meeting media database roles must be distinct");
+        bail!("relay, agent broker, agent coordinator, model gateway, audit checkpoint, orchestration, meeting media, and provider egress database roles must be distinct");
     }
     let owner_pubkey = required_env("SNOWMAN_RELAY_OWNER_PUBKEY")?.to_ascii_lowercase();
     validate_owner_pubkey(&owner_pubkey)?;
@@ -1184,6 +1190,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Zeroizing::new(random_hex())
     };
+    let existing_provider_egress =
+        existing_database_runtime_secret(&secrets, &provider_egress_secret_arn).await?;
+    let mut provider_egress_password = if let Some(existing) = &existing_provider_egress {
+        let parsed = url::Url::parse(&existing.database_url)
+            .context("provider egress DATABASE_URL is not a URL")?;
+        Zeroizing::new(decoded_url_password(&parsed)?)
+    } else {
+        Zeroizing::new(random_hex())
+    };
 
     let admin = PgPoolOptions::new()
         .max_connections(1)
@@ -1233,6 +1248,12 @@ async fn main() -> anyhow::Result<()> {
         &admin,
         &meeting_media_role,
         &meeting_media_password,
+    )
+    .await?;
+    buzz_db::runtime_security::provision_provider_egress_role(
+        &admin,
+        &provider_egress_role,
+        &provider_egress_password,
     )
     .await?;
     buzz_db::partition::ensure_future_partitions(&admin, 6).await?;
@@ -1341,6 +1362,21 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     meeting_media.close().await;
 
+    let provider_egress_url = database_url(
+        &master,
+        &database,
+        &provider_egress_role,
+        &provider_egress_password,
+    )?;
+    let provider_egress = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&provider_egress_url)
+        .await
+        .context("could not verify the provisioned provider egress identity")?;
+    buzz_db::runtime_security::verify_provider_egress_role(&provider_egress, &provider_egress_role)
+        .await?;
+    provider_egress.close().await;
+
     let document = RelayRuntimeSecret {
         database_url: runtime_url.to_string(),
         relay_private_key,
@@ -1422,6 +1458,17 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("could not write the governed meeting media runtime secret")?;
 
+    let mut provider_egress_document = serde_json::to_string(&DatabaseRuntimeSecret {
+        database_url: provider_egress_url.to_string(),
+    })?;
+    secrets
+        .put_secret_value()
+        .secret_id(&provider_egress_secret_arn)
+        .secret_string(provider_egress_document.clone())
+        .send()
+        .await
+        .context("could not write the governed provider egress runtime secret")?;
+
     encoded.zeroize();
     agent_broker_document.zeroize();
     agent_coordinator_document.zeroize();
@@ -1429,12 +1476,14 @@ async fn main() -> anyhow::Result<()> {
     audit_checkpoint_document.zeroize();
     orchestration_document.zeroize();
     meeting_media_document.zeroize();
+    provider_egress_document.zeroize();
     agent_broker_password.zeroize();
     agent_coordinator_password.zeroize();
     model_gateway_password.zeroize();
     audit_checkpoint_password.zeroize();
     orchestration_password.zeroize();
     meeting_media_password.zeroize();
+    provider_egress_password.zeroize();
     runtime_password.zeroize();
     master.password.zeroize();
     if let Some(receipt) = workforce_receipt {
@@ -1587,5 +1636,21 @@ mod tests {
         assert_eq!(first, deterministic_uuid(b"snowman.grant.v1", &parts));
         assert_ne!(first, deterministic_uuid(b"snowman.binding.v1", &parts));
         assert_eq!(first.get_version_num(), 5);
+    }
+
+    #[test]
+    fn provider_egress_bootstrap_is_exact_and_zeroized() {
+        let source = include_str!("main.rs");
+        for required in [
+            "SNOWMAN_PROVIDER_EGRESS_RUNTIME_SECRET_ARN",
+            "SNOWMAN_PROVIDER_EGRESS_DB_ROLE",
+            "provider_egress_role != \"snowman_provider_egress\"",
+            "provision_provider_egress_role",
+            "verify_provider_egress_role",
+            "provider_egress_document.zeroize()",
+            "provider_egress_password.zeroize()",
+        ] {
+            assert!(source.contains(required), "missing {required}");
+        }
     }
 }

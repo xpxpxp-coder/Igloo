@@ -24,12 +24,19 @@ manifest from the exact runtime profiles and evaluated model catalog. The task:
 7. activates only catalog routes whose gateway is an exact lower-case Snowman
    HTTPS origin and whose evaluation digest, time, classifications, role fit,
    quality, latency, context, and cost limits pass validation; and
-8. records a secret-free SHA-256 manifest receipt with identity/model counts.
+8. reconciles and verifies distinct least-privilege database logins and runtime
+   secrets for relay, broker, coordinator, model gateway, audit checkpoint,
+   orchestration, meeting media, and the exact `snowman_provider_egress` role;
+   the provider role starts tenant-unbound with FORCE-RLS enforcement and has no
+   collaboration, audit, agent-job, raw-meeting, or tool-intent access; and
+9. records a secret-free SHA-256 manifest receipt with identity/model counts.
 
 The bootstrap task role can read the RDS-managed master secret, reconcile the
-relay runtime secret, and read/write only the identity secrets named by the
-Terraform-generated manifest. Runtime execution roles can read only their own
-secret. The task has no public IP or internet route.
+exact service database runtime secrets, and read/write only the identity secrets
+named by the Terraform-generated manifest. Runtime execution roles can read only
+their own secret. The task has no public IP or internet route. Existing random
+database passwords are preserved on idempotent reruns; generated/serialized
+passwords are zeroized after their Secrets Manager versions are written.
 
 Rerunning bootstrap deliberately treats the reviewed manifest as the source of
 truth. It can reactivate a manifest-listed service identity, so it is a manual

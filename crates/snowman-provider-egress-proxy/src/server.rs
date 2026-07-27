@@ -118,7 +118,7 @@ impl Config {
         if env("SNOWMAN_PROVIDER_EGRESS_NETWORK_POLICY").as_deref()
             != Some("private-snowman-provider-only")
             || !valid_database_url(&database_url)
-            || !valid_identifier(&database_role)
+            || database_role != "snowman_provider_egress"
             || aws_account_id.len() != 12
             || !aws_account_id.bytes().all(|byte| byte.is_ascii_digit())
             || policy.principals.is_empty()
@@ -996,10 +996,16 @@ fn receipt_digest(receipt: &Receipt) -> Result<String, ProxyError> {
 }
 
 async fn verify_database_role(pool: &PgPool, expected: &str) -> Result<(), ()> {
+    if expected != "snowman_provider_egress" {
+        return Err(());
+    }
     let valid: bool = sqlx::query_scalar(
         "SELECT current_user=$1 AND NOT usesuper AND NOT usecreatedb AND NOT usecreaterole \
+         AND (SELECT NOT rolbypassrls AND NOT rolinherit FROM pg_roles WHERE rolname=current_user) \
          AND NOT has_schema_privilege(current_user,'public','CREATE') \
          AND has_schema_privilege(current_user,'public','USAGE') \
+         AND current_setting('row_security')='on' \
+         AND COALESCE(current_setting('snowman.tenant_id',true),'')='' \
          AND has_table_privilege(current_user,'snowman_provider_egress_cancellations','SELECT,INSERT') \
          AND NOT has_table_privilege(current_user,'snowman_provider_egress_cancellations','UPDATE,DELETE,TRUNCATE') \
          AND has_table_privilege(current_user,'snowman_provider_egress_requests','SELECT,INSERT,UPDATE') \
@@ -1008,6 +1014,18 @@ async fn verify_database_role(pool: &PgPool, expected: &str) -> Result<(), ()> {
          AND NOT has_table_privilege(current_user,'snowman_provider_egress_receipt_events','UPDATE,DELETE,TRUNCATE') \
          AND has_table_privilege(current_user,'snowman_meeting_media_sessions','SELECT') \
          AND NOT has_table_privilege(current_user,'snowman_meeting_media_sessions','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND (SELECT bool_and(c.relrowsecurity AND c.relforcerowsecurity) \
+              FROM pg_catalog.pg_class c \
+              WHERE c.oid IN ('snowman_provider_egress_cancellations'::regclass, \
+                              'snowman_provider_egress_requests'::regclass, \
+                              'snowman_provider_egress_receipt_events'::regclass)) \
+         AND (SELECT count(*)=3 AND bool_and(qual LIKE '%snowman.tenant_id%' \
+                                            AND with_check LIKE '%snowman.tenant_id%') \
+              FROM pg_catalog.pg_policies \
+              WHERE schemaname='public' AND tablename IN \
+                ('snowman_provider_egress_cancellations', \
+                 'snowman_provider_egress_requests', \
+                 'snowman_provider_egress_receipt_events')) \
          AND NOT has_table_privilege(current_user,'events','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
          AND NOT has_table_privilege(current_user,'audit_log','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') \
          FROM pg_user WHERE usename=current_user",

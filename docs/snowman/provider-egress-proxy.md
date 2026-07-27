@@ -49,16 +49,29 @@ above zero:
    provider supports it. Enforce request, response, deadline, timeout, and
    concurrency ceilings before allocating unbounded buffers.
 
-AWS routes Secrets Manager access over a VPC endpoint. The current ECS package
-is deliberately unroutable to public providers: it stays in the private tier,
-receives no public IP, and has no public HTTPS security-group rule or default
-route. Application host sealing is defense in depth, not a substitute for
-network-exact enforcement. Activation requires a separately reviewed AWS
-Network Firewall domain-list route or Snowman Cloudflare egress-control path,
-bound by `provider_egress_inspected_egress_evidence_sha256`. No other Command
-Center workload may receive equivalent egress. Internal TLS ingress is
-optional, disabled by default, and accepts only the meeting-media security
-group through an internal NLB.
+AWS routes Secrets Manager access over a VPC endpoint. The inspected internet
+path is now represented as a separate, default-off topology. It places only the
+provider proxy in dedicated workload subnets whose sole default route is the
+same-AZ AWS Network Firewall endpoint. The firewall uses strict-order Suricata
+rules to allow exact TLS SNI and HTTP Host values for `api.twilio.com` and
+`api.openai.com`, optionally `api.elevenlabs.io`, and drops every other external
+packet. Dedicated NAT gateways sit beyond the firewall; explicit public-subnet
+return routes force the reverse flow back through that same endpoint. Other
+private/data subnets receive neither the NAT nor firewall route, so they cannot
+bypass the proxy. DNS is limited by security group to the VPC resolver at the
+exact `VPC+2` address, while the runtime independently rejects mixed/private
+answers and pins the TLS connection.
+
+`provider_egress_inspected_network_enabled=false` creates none of those public
+egress resources. `provider_egress_network_topology` makes the cost/availability
+choice explicit: `single_az_cost_optimized` is the dormant staging default;
+`three_az_ha` provisions independent firewall/NAT paths in all three AZs. Both
+modes remain unusable until reviewed runtime policy and immutable inspected-
+egress evidence are present. Network Firewall alert/flow logs are KMS-encrypted,
+retained with the Snowman log policy, and denial/log-delivery alarms notify the
+existing monitored operations topic. Internal TLS ingress is independently
+disabled by default and accepts only the meeting-media security group through
+an internal NLB.
 
 ## Replay, cancellation, and evidence
 
@@ -99,13 +112,21 @@ budget bounds, response/request content types, and Snowman-named same-account
 Secrets Manager ARNs. Provider credentials are never accepted through an
 environment variable or caller field.
 
-Terraform packaging lives in `infra/aws/provider_egress_proxy.tf`. It creates
-nothing until runtime evidence, route policy, caller KMS keys, and provider
-secret ARNs are supplied together. Even then, desired count is statically
-restricted to zero and the task has no public provider route. Private TLS
-ingress is a second default-off switch. Do not raise the service until the
-inspected-egress path and its bypass-denial tests are represented in Terraform
-and bound to immutable launch evidence.
+Terraform packaging lives in `infra/aws/provider_egress_proxy.tf`. The encrypted
+database runtime-secret container exists independently so the governed one-shot
+bootstrap can reconcile the exact `snowman_provider_egress` login even while the
+service is dormant. That role is `NOINHERIT`, `NOBYPASSRLS`, defaults to
+`row_security=on` with an empty tenant, and receives only meeting-session reads,
+request updates, cancellation inserts, and append-only receipt inserts. The
+runtime binds `snowman.tenant_id` transaction-locally; bootstrap and service
+readiness both verify exact grants, FORCE RLS, and the unbound session default.
+
+The ECS task, policy, caller keys, and provider-secret access package only after
+runtime evidence, route policy, caller KMS keys, and provider secret ARNs are
+supplied together. The inspected network is a further default-off gate. Even
+then, desired count is statically restricted to zero and private TLS ingress is
+a separate default-off switch. Do not revise the hard-zero service gate until
+live provider, route-bypass, DNS, recovery, and evidence inspection pass.
 
 Only `snowman.provider-egress.receipt.v1` may be persisted. It contains tenant,
 session, generation, provider, purpose, classification, authorized budget,
@@ -130,7 +151,8 @@ The service stays at ECS desired count zero until staging proves:
   provider idempotency, cancellation, budgets, content types, and size limits;
 - log/trace/crash inspection proving raw content and secrets are absent;
 - Network Firewall/egress-DNS evidence proving Block, Square, arbitrary public
-  hosts, private/reserved addresses, and non-proxy task egress are denied;
+  hosts, private/reserved addresses, direct IGW/NAT routing, asymmetric return
+  routing, and non-proxy task egress are denied in both configured topologies;
 - replay, timeout, cancellation, secret rotation, provider outage, and task
   replacement recovery drills.
 

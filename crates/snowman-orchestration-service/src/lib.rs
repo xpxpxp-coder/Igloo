@@ -76,6 +76,9 @@ pub enum Error {
     /// The exact bounded request or schedule is invalid.
     #[error("orchestration request is invalid")]
     Invalid,
+    /// No governed orchestration plan exists in the exact tenant/workspace scope.
+    #[error("orchestration plan was not found")]
+    NotFound,
     /// A cancellation, supersession, idempotency, or lease fence won.
     #[error("orchestration authority conflicts with durable state")]
     Conflict,
@@ -826,7 +829,7 @@ pub fn router(state: AppState) -> Router {
         .route("/_readiness", get(readiness))
         .route(
             "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/plans",
-            post(post_plan),
+            get(get_team_operations).post(post_plan),
         )
         .route(
             "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/plans/{plan_id}/cancel",
@@ -870,6 +873,148 @@ pub fn router(state: AppState) -> Router {
         )
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BYTES))
         .with_state(state)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamOperationsProjection {
+    schema_version: &'static str,
+    generated_at: DateTime<Utc>,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    authority: TeamOperationsAuthority,
+    plan: TeamOperationsPlan,
+    schedule: Option<TeamOperationsSchedule>,
+    personas: Vec<TeamOperationsPersona>,
+    tasks: Vec<TeamOperationsTask>,
+    receipts: Vec<TeamOperationsReceipt>,
+    reminders: Vec<TeamOperationsReminder>,
+    commands: Vec<TeamOperationsCommandReceipt>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamOperationsAuthority {
+    identity_id: Uuid,
+    principal: String,
+    policy_generation: u64,
+    capabilities: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamOperationsPlan {
+    plan_id: Uuid,
+    request_id: Uuid,
+    work_kind: String,
+    generation: u64,
+    supersedes_plan_id: Option<Uuid>,
+    state: String,
+    classification: String,
+    max_cost_microusd: u64,
+    automatic_execution_enabled: bool,
+    deadline_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamOperationsSchedule {
+    timezone: String,
+    quiet_start_local_minute: u16,
+    quiet_end_local_minute: u16,
+    allow_deadline_reminders: bool,
+    reminder_offsets_seconds: Vec<i32>,
+    recurrence_enabled: bool,
+    recurrence_local_minute: Option<u16>,
+    recurrence_weekdays: Vec<i16>,
+    next_fire_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamOperationsPersona {
+    persona_id: Uuid,
+    specialist_role: String,
+    model_id: String,
+    model_route_reference: String,
+    max_cost_microusd: u64,
+    enabled: bool,
+    capabilities: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamOperationsTask {
+    task_id: Uuid,
+    persona_id: Uuid,
+    depends_on: Vec<Uuid>,
+    status: String,
+    approval_required: bool,
+    required_capabilities: Vec<String>,
+    artifact_types: Vec<String>,
+    max_cost_microusd: u64,
+    deadline_at: DateTime<Utc>,
+    dispatch_status: Option<String>,
+    reserved_cost_microusd: u64,
+    accounted_cost_microusd: u64,
+    execution_snapshot_sha256: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamOperationsReceipt {
+    task_id: Uuid,
+    outcome: String,
+    handoff_manifest_reference: String,
+    receipt_sha256: String,
+    artifact_references: Vec<String>,
+    evidence_references: Vec<String>,
+    actual_cost_microusd: u64,
+    completed_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamOperationsReminder {
+    occurrence_id: Uuid,
+    due_at: DateTime<Utc>,
+    delivered_at: Option<DateTime<Utc>>,
+    status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamOperationsCommandReceipt {
+    command_id: Uuid,
+    command_kind: String,
+    plan_generation: u64,
+    command_sha256: String,
+    status: String,
+    applied_at: DateTime<Utc>,
+}
+
+async fn get_team_operations(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<Json<TeamOperationsProjection>, ApiError> {
+    let url = endpoint_url(
+        &state.private_origin,
+        &format!("v1/tenants/{tenant_id}/workspaces/{workspace_id}/plans"),
+    )?;
+    let auth = verify_read_auth(&headers, url.as_str())?;
+    let projection = read_team_operations(
+        &state.pool,
+        tenant_id,
+        workspace_id,
+        &auth,
+        url.as_str(),
+        Utc::now(),
+    )
+    .await?;
+    Ok(Json(projection))
 }
 
 async fn readiness(State(state): State<AppState>) -> StatusCode {
@@ -4290,6 +4435,490 @@ async fn claim_ready_dispatches(
     Ok(leases)
 }
 
+async fn read_team_operations(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    auth: &VerifiedAuth,
+    request_url: &str,
+    now: DateTime<Utc>,
+) -> Result<TeamOperationsProjection, ApiError> {
+    let mut tx = pool.begin().await.map_err(|_| ApiError(Error::Database))?;
+    let request_digest: [u8; 32] =
+        Sha256::digest([b"GET\0".as_slice(), request_url.as_bytes()].concat()).into();
+    let authority =
+        authorize_human_read(&mut tx, tenant_id, workspace_id, auth, request_digest, now).await?;
+
+    let plan_row = sqlx::query(
+        "SELECT plan_id,request_id,work_kind,generation,supersedes_plan_id,state,classification,\
+         max_cost_microusd,automatic_execution_enabled,deadline_at,created_at,updated_at \
+         FROM snowman_orchestration_plans WHERE community_id=$1 AND workspace_id=$2 \
+         ORDER BY CASE WHEN state IN ('active','paused','draft') THEN 0 ELSE 1 END,updated_at DESC,plan_id \
+         LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    .ok_or(ApiError(Error::NotFound))?;
+    let plan_id: Uuid = plan_row
+        .try_get("plan_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let generation = positive_u64(
+        plan_row
+            .try_get("generation")
+            .map_err(|_| ApiError(Error::Database))?,
+    )?;
+    let plan = TeamOperationsPlan {
+        plan_id,
+        request_id: plan_row
+            .try_get("request_id")
+            .map_err(|_| ApiError(Error::Database))?,
+        work_kind: plan_row
+            .try_get("work_kind")
+            .map_err(|_| ApiError(Error::Database))?,
+        generation,
+        supersedes_plan_id: plan_row
+            .try_get("supersedes_plan_id")
+            .map_err(|_| ApiError(Error::Database))?,
+        state: plan_row
+            .try_get("state")
+            .map_err(|_| ApiError(Error::Database))?,
+        classification: plan_row
+            .try_get("classification")
+            .map_err(|_| ApiError(Error::Database))?,
+        max_cost_microusd: nonnegative_u64_projection(
+            plan_row
+                .try_get("max_cost_microusd")
+                .map_err(|_| ApiError(Error::Database))?,
+        )?,
+        automatic_execution_enabled: plan_row
+            .try_get("automatic_execution_enabled")
+            .map_err(|_| ApiError(Error::Database))?,
+        deadline_at: plan_row
+            .try_get("deadline_at")
+            .map_err(|_| ApiError(Error::Database))?,
+        created_at: plan_row
+            .try_get("created_at")
+            .map_err(|_| ApiError(Error::Database))?,
+        updated_at: plan_row
+            .try_get("updated_at")
+            .map_err(|_| ApiError(Error::Database))?,
+    };
+
+    let schedule = sqlx::query(
+        "SELECT s.timezone,s.quiet_start_local_minute,s.quiet_end_local_minute,\
+         s.allow_deadline_reminders,s.reminder_offsets_seconds,r.enabled,\
+         r.local_minute,r.weekdays,r.next_fire_at \
+         FROM snowman_orchestration_schedule_policies s \
+         LEFT JOIN snowman_orchestration_recurrences r \
+           ON r.community_id=s.community_id AND r.plan_id=s.plan_id \
+         WHERE s.community_id=$1 AND s.plan_id=$2",
+    )
+    .bind(tenant_id)
+    .bind(plan_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    .map(|row| -> Result<TeamOperationsSchedule, ApiError> {
+        let quiet_start: i32 = row
+            .try_get("quiet_start_local_minute")
+            .map_err(|_| ApiError(Error::Database))?;
+        let quiet_end: i32 = row
+            .try_get("quiet_end_local_minute")
+            .map_err(|_| ApiError(Error::Database))?;
+        let recurrence_minute: Option<i32> = row
+            .try_get("local_minute")
+            .map_err(|_| ApiError(Error::Database))?;
+        Ok(TeamOperationsSchedule {
+            timezone: row
+                .try_get("timezone")
+                .map_err(|_| ApiError(Error::Database))?,
+            quiet_start_local_minute: u16::try_from(quiet_start)
+                .map_err(|_| ApiError(Error::Database))?,
+            quiet_end_local_minute: u16::try_from(quiet_end)
+                .map_err(|_| ApiError(Error::Database))?,
+            allow_deadline_reminders: row
+                .try_get("allow_deadline_reminders")
+                .map_err(|_| ApiError(Error::Database))?,
+            reminder_offsets_seconds: row
+                .try_get("reminder_offsets_seconds")
+                .map_err(|_| ApiError(Error::Database))?,
+            recurrence_enabled: row
+                .try_get::<Option<bool>, _>("enabled")
+                .map_err(|_| ApiError(Error::Database))?
+                .unwrap_or(false),
+            recurrence_local_minute: recurrence_minute
+                .map(u16::try_from)
+                .transpose()
+                .map_err(|_| ApiError(Error::Database))?,
+            recurrence_weekdays: row
+                .try_get::<Option<Vec<i16>>, _>("weekdays")
+                .map_err(|_| ApiError(Error::Database))?
+                .unwrap_or_default(),
+            next_fire_at: row
+                .try_get("next_fire_at")
+                .map_err(|_| ApiError(Error::Database))?,
+        })
+    })
+    .transpose()?;
+
+    let persona_rows = sqlx::query(
+        "SELECT p.persona_id,p.specialist_role,p.model_id,p.model_route_reference,\
+         p.max_cost_microusd,p.enabled,ARRAY(SELECT pc.capability \
+           FROM snowman_orchestration_persona_capabilities pc \
+           WHERE pc.community_id=p.community_id AND pc.plan_id=p.plan_id \
+             AND pc.persona_id=p.persona_id ORDER BY pc.capability) AS capabilities \
+         FROM snowman_orchestration_personas p WHERE p.community_id=$1 AND p.plan_id=$2 \
+         ORDER BY p.specialist_role,p.persona_id",
+    )
+    .bind(tenant_id)
+    .bind(plan_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let personas = persona_rows
+        .into_iter()
+        .map(|row| -> Result<TeamOperationsPersona, ApiError> {
+            Ok(TeamOperationsPersona {
+                persona_id: row
+                    .try_get("persona_id")
+                    .map_err(|_| ApiError(Error::Database))?,
+                specialist_role: row
+                    .try_get("specialist_role")
+                    .map_err(|_| ApiError(Error::Database))?,
+                model_id: row
+                    .try_get("model_id")
+                    .map_err(|_| ApiError(Error::Database))?,
+                model_route_reference: row
+                    .try_get::<Option<String>, _>("model_route_reference")
+                    .map_err(|_| ApiError(Error::Database))?
+                    .ok_or(ApiError(Error::Database))?,
+                max_cost_microusd: nonnegative_u64_projection(
+                    row.try_get("max_cost_microusd")
+                        .map_err(|_| ApiError(Error::Database))?,
+                )?,
+                enabled: row
+                    .try_get("enabled")
+                    .map_err(|_| ApiError(Error::Database))?,
+                capabilities: row
+                    .try_get("capabilities")
+                    .map_err(|_| ApiError(Error::Database))?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let task_rows = sqlx::query(
+        "SELECT t.task_id,t.persona_id,w.status,t.approval_required,t.max_cost_microusd,\
+         w.execution_snapshot_sha256,\
+         t.deadline_at,ARRAY(SELECT d.depends_on_task_id FROM snowman_orchestration_task_dependencies d \
+           WHERE d.community_id=t.community_id AND d.plan_id=t.plan_id AND d.task_id=t.task_id \
+           ORDER BY d.depends_on_task_id) AS depends_on,\
+         ARRAY(SELECT c.capability FROM snowman_orchestration_task_required_capabilities c \
+           WHERE c.community_id=t.community_id AND c.plan_id=t.plan_id AND c.task_id=t.task_id \
+           ORDER BY c.capability) AS required_capabilities,\
+         ARRAY(SELECT a.artifact_type FROM snowman_orchestration_task_artifact_contracts a \
+           WHERE a.community_id=t.community_id AND a.plan_id=t.plan_id AND a.task_id=t.task_id \
+           ORDER BY a.artifact_type) AS artifact_types,\
+         d.status AS dispatch_status,COALESCE(d.reserved_cost_microusd,0)::bigint AS reserved_cost_microusd,\
+         COALESCE(r.actual_cost_microusd,0)::bigint AS accounted_cost_microusd \
+         FROM snowman_orchestration_tasks t JOIN snowman_work_tasks w \
+           ON w.community_id=t.community_id AND w.request_id=t.request_id AND w.task_id=t.task_id \
+         LEFT JOIN LATERAL (SELECT status,reserved_cost_microusd FROM snowman_orchestration_dispatches x \
+           WHERE x.community_id=t.community_id AND x.plan_id=t.plan_id AND x.task_id=t.task_id \
+           ORDER BY x.updated_at DESC,x.dispatch_id LIMIT 1) d ON TRUE \
+         LEFT JOIN snowman_orchestration_work_product_receipts r \
+           ON r.community_id=t.community_id AND r.plan_id=t.plan_id AND r.task_id=t.task_id \
+         WHERE t.community_id=$1 AND t.plan_id=$2 AND t.plan_generation=$3 \
+         ORDER BY t.deadline_at,t.task_id",
+    )
+    .bind(tenant_id)
+    .bind(plan_id)
+    .bind(i64::try_from(generation).map_err(|_| ApiError(Error::Database))?)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let tasks = task_rows
+        .into_iter()
+        .map(|row| -> Result<TeamOperationsTask, ApiError> {
+            Ok(TeamOperationsTask {
+                task_id: row
+                    .try_get("task_id")
+                    .map_err(|_| ApiError(Error::Database))?,
+                persona_id: row
+                    .try_get("persona_id")
+                    .map_err(|_| ApiError(Error::Database))?,
+                depends_on: row
+                    .try_get("depends_on")
+                    .map_err(|_| ApiError(Error::Database))?,
+                status: row
+                    .try_get("status")
+                    .map_err(|_| ApiError(Error::Database))?,
+                approval_required: row
+                    .try_get("approval_required")
+                    .map_err(|_| ApiError(Error::Database))?,
+                required_capabilities: row
+                    .try_get("required_capabilities")
+                    .map_err(|_| ApiError(Error::Database))?,
+                artifact_types: row
+                    .try_get("artifact_types")
+                    .map_err(|_| ApiError(Error::Database))?,
+                max_cost_microusd: nonnegative_u64_projection(
+                    row.try_get("max_cost_microusd")
+                        .map_err(|_| ApiError(Error::Database))?,
+                )?,
+                deadline_at: row
+                    .try_get("deadline_at")
+                    .map_err(|_| ApiError(Error::Database))?,
+                dispatch_status: row
+                    .try_get("dispatch_status")
+                    .map_err(|_| ApiError(Error::Database))?,
+                reserved_cost_microusd: nonnegative_u64_projection(
+                    row.try_get("reserved_cost_microusd")
+                        .map_err(|_| ApiError(Error::Database))?,
+                )?,
+                accounted_cost_microusd: nonnegative_u64_projection(
+                    row.try_get("accounted_cost_microusd")
+                        .map_err(|_| ApiError(Error::Database))?,
+                )?,
+                execution_snapshot_sha256: hex::encode(
+                    row.try_get::<Vec<u8>, _>("execution_snapshot_sha256")
+                        .map_err(|_| ApiError(Error::Database))?,
+                ),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let receipt_rows = sqlx::query(
+        "SELECT r.task_id,r.outcome,r.handoff_manifest_reference,r.receipt_sha256,\
+         r.actual_cost_microusd,r.completed_at,\
+         ARRAY(SELECT x.immutable_reference FROM snowman_orchestration_receipt_refs x \
+           WHERE x.community_id=r.community_id AND x.plan_id=r.plan_id AND x.task_id=r.task_id \
+             AND x.reference_kind='artifact' ORDER BY x.immutable_reference) AS artifacts,\
+         ARRAY(SELECT x.immutable_reference FROM snowman_orchestration_receipt_refs x \
+           WHERE x.community_id=r.community_id AND x.plan_id=r.plan_id AND x.task_id=r.task_id \
+             AND x.reference_kind='evidence' ORDER BY x.immutable_reference) AS evidence \
+         FROM snowman_orchestration_work_product_receipts r \
+         WHERE r.community_id=$1 AND r.plan_id=$2 AND r.plan_generation=$3 ORDER BY r.accepted_at,r.task_id",
+    )
+    .bind(tenant_id)
+    .bind(plan_id)
+    .bind(i64::try_from(generation).map_err(|_| ApiError(Error::Database))?)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let receipts = receipt_rows
+        .into_iter()
+        .map(|row| -> Result<TeamOperationsReceipt, ApiError> {
+            Ok(TeamOperationsReceipt {
+                task_id: row
+                    .try_get("task_id")
+                    .map_err(|_| ApiError(Error::Database))?,
+                outcome: row
+                    .try_get("outcome")
+                    .map_err(|_| ApiError(Error::Database))?,
+                handoff_manifest_reference: row
+                    .try_get("handoff_manifest_reference")
+                    .map_err(|_| ApiError(Error::Database))?,
+                receipt_sha256: hex::encode(
+                    row.try_get::<Vec<u8>, _>("receipt_sha256")
+                        .map_err(|_| ApiError(Error::Database))?,
+                ),
+                artifact_references: row
+                    .try_get("artifacts")
+                    .map_err(|_| ApiError(Error::Database))?,
+                evidence_references: row
+                    .try_get("evidence")
+                    .map_err(|_| ApiError(Error::Database))?,
+                actual_cost_microusd: nonnegative_u64_projection(
+                    row.try_get("actual_cost_microusd")
+                        .map_err(|_| ApiError(Error::Database))?,
+                )?,
+                completed_at: row
+                    .try_get("completed_at")
+                    .map_err(|_| ApiError(Error::Database))?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let reminder_rows = sqlx::query(
+        "SELECT occurrence_id,due_at,delivered_at,status FROM snowman_orchestration_reminder_receipts \
+         WHERE community_id=$1 AND plan_id=$2 AND plan_generation=$3 ORDER BY due_at,occurrence_id LIMIT 64",
+    )
+    .bind(tenant_id)
+    .bind(plan_id)
+    .bind(i64::try_from(generation).map_err(|_| ApiError(Error::Database))?)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let reminders = reminder_rows
+        .into_iter()
+        .map(|row| -> Result<TeamOperationsReminder, ApiError> {
+            Ok(TeamOperationsReminder {
+                occurrence_id: row
+                    .try_get("occurrence_id")
+                    .map_err(|_| ApiError(Error::Database))?,
+                due_at: row
+                    .try_get("due_at")
+                    .map_err(|_| ApiError(Error::Database))?,
+                delivered_at: row
+                    .try_get("delivered_at")
+                    .map_err(|_| ApiError(Error::Database))?,
+                status: row
+                    .try_get("status")
+                    .map_err(|_| ApiError(Error::Database))?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let command_rows = sqlx::query(
+        "SELECT command_id,command_kind,plan_generation,command_sha256,status,applied_at \
+         FROM snowman_orchestration_commands WHERE community_id=$1 AND workspace_id=$2 AND plan_id=$3 \
+         ORDER BY applied_at DESC,command_id LIMIT 64",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(plan_id)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let commands = command_rows
+        .into_iter()
+        .map(|row| -> Result<TeamOperationsCommandReceipt, ApiError> {
+            Ok(TeamOperationsCommandReceipt {
+                command_id: row
+                    .try_get("command_id")
+                    .map_err(|_| ApiError(Error::Database))?,
+                command_kind: row
+                    .try_get("command_kind")
+                    .map_err(|_| ApiError(Error::Database))?,
+                plan_generation: positive_u64(
+                    row.try_get("plan_generation")
+                        .map_err(|_| ApiError(Error::Database))?,
+                )?,
+                command_sha256: hex::encode(
+                    row.try_get::<Vec<u8>, _>("command_sha256")
+                        .map_err(|_| ApiError(Error::Database))?,
+                ),
+                status: row
+                    .try_get("status")
+                    .map_err(|_| ApiError(Error::Database))?,
+                applied_at: row
+                    .try_get("applied_at")
+                    .map_err(|_| ApiError(Error::Database))?,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+    Ok(TeamOperationsProjection {
+        schema_version: "snowman.orchestration.team-operations.v1",
+        generated_at: now,
+        tenant_id,
+        workspace_id,
+        authority,
+        plan,
+        schedule,
+        personas,
+        tasks,
+        receipts,
+        reminders,
+        commands,
+    })
+}
+
+async fn authorize_human_read(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    auth: &VerifiedAuth,
+    digest: [u8; 32],
+    now: DateTime<Utc>,
+) -> Result<TeamOperationsAuthority, ApiError> {
+    let authority = sqlx::query(
+        "SELECT i.identity_id,c.service_principal,c.policy_generation FROM snowman_orchestration_callers c \
+         JOIN snowman_workforce_identities i ON i.community_id=c.community_id AND i.identity_id=c.service_identity_id \
+         JOIN snowman_workforce_key_bindings k ON k.community_id=i.community_id AND k.identity_id=i.identity_id \
+         JOIN snowman_workforce_sessions s ON s.community_id=i.community_id AND s.identity_id=i.identity_id \
+           AND s.session_id=k.session_id \
+         JOIN snowman_workforce_capability_grants g ON g.community_id=i.community_id AND g.identity_id=i.identity_id \
+         WHERE c.community_id=$1 AND c.workspace_id=$2 AND c.status='active' \
+           AND i.identity_type='human' AND i.status='active' AND i.revoked_at IS NULL \
+           AND (i.expires_at IS NULL OR i.expires_at>NOW()) \
+           AND k.pubkey=$3 AND k.binding_type='human_device' AND k.revoked_at IS NULL \
+           AND (k.expires_at IS NULL OR k.expires_at>NOW()) \
+           AND s.revoked_at IS NULL AND s.expires_at>NOW() \
+           AND g.capability='workforce.requests.read' AND g.revoked_at IS NULL \
+           AND (g.expires_at IS NULL OR g.expires_at>NOW()) LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(auth.pubkey.as_slice())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    .ok_or(ApiError(Error::Unauthorized))?;
+    let identity_id: Uuid = authority
+        .try_get("identity_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let principal: String = authority
+        .try_get("service_principal")
+        .map_err(|_| ApiError(Error::Database))?;
+    let policy_generation = positive_u64(
+        authority
+            .try_get("policy_generation")
+            .map_err(|_| ApiError(Error::Database))?,
+    )?;
+    let capabilities: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT capability FROM snowman_workforce_capability_grants \
+         WHERE community_id=$1 AND identity_id=$2 AND revoked_at IS NULL \
+           AND (expires_at IS NULL OR expires_at>NOW()) \
+           AND capability IN ('orchestration.plans.activate','orchestration.plans.pause',\
+             'orchestration.plans.cancel','orchestration.plans.supersede',\
+             'workforce.tasks.approve') ORDER BY capability",
+    )
+    .bind(tenant_id)
+    .bind(identity_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let inserted = sqlx::query(
+        "INSERT INTO snowman_orchestration_auth_events \
+         (community_id,auth_event_id,request_sha256,requester_pubkey,service_identity_id,observed_at,expires_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING",
+    )
+    .bind(tenant_id)
+    .bind(auth.event_id.as_slice())
+    .bind(digest.as_slice())
+    .bind(auth.pubkey.as_slice())
+    .bind(identity_id)
+    .bind(now)
+    .bind(auth.created_at + ChronoDuration::seconds(AUTH_TTL_SECONDS))
+    .execute(&mut **tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    if inserted.rows_affected() != 1 {
+        return Err(ApiError(Error::Unauthorized));
+    }
+    Ok(TeamOperationsAuthority {
+        identity_id,
+        principal,
+        policy_generation,
+        capabilities,
+    })
+}
+
+fn positive_u64(value: i64) -> Result<u64, ApiError> {
+    u64::try_from(value)
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or(ApiError(Error::Database))
+}
+
+fn nonnegative_u64_projection(value: i64) -> Result<u64, ApiError> {
+    u64::try_from(value).map_err(|_| ApiError(Error::Database))
+}
+
 struct Scope<'a> {
     tenant_id: Uuid,
     workspace_id: Uuid,
@@ -4310,13 +4939,19 @@ async fn authorize_and_record(
         "SELECT EXISTS (SELECT 1 FROM snowman_orchestration_callers c \
          JOIN snowman_workforce_identities i ON i.community_id=c.community_id AND i.identity_id=c.service_identity_id \
          JOIN snowman_workforce_key_bindings k ON k.community_id=i.community_id AND k.identity_id=i.identity_id \
+         LEFT JOIN snowman_workforce_sessions s ON s.community_id=i.community_id AND s.identity_id=i.identity_id \
+           AND s.session_id=k.session_id \
          JOIN snowman_workforce_capability_grants g ON g.community_id=i.community_id AND g.identity_id=i.identity_id \
          WHERE c.community_id=$1 AND c.workspace_id=$2 AND c.service_identity_id=$3 \
            AND c.service_principal=$4 AND c.policy_generation=$5 AND c.status='active' \
-           AND i.identity_type='service' AND i.provider='snowman_service' AND i.status='active' \
+           AND i.status='active' \
            AND i.revoked_at IS NULL AND (i.expires_at IS NULL OR i.expires_at>NOW()) \
-           AND k.pubkey=$6 AND k.binding_type='service_runtime' AND k.revoked_at IS NULL \
+           AND k.pubkey=$6 AND k.revoked_at IS NULL \
            AND (k.expires_at IS NULL OR k.expires_at>NOW()) \
+           AND ((i.identity_type='service' AND i.provider='snowman_service' \
+                 AND k.binding_type='service_runtime' AND s.session_id IS NULL) \
+             OR (i.identity_type='human' AND k.binding_type='human_device' \
+                 AND s.revoked_at IS NULL AND s.expires_at>NOW())) \
            AND g.capability=$7 AND g.revoked_at IS NULL AND (g.expires_at IS NULL OR g.expires_at>NOW()))",
     )
     .bind(scope.tenant_id)
@@ -4480,6 +5115,41 @@ fn verify_auth(headers: &HeaderMap, url: &str, body: &[u8]) -> Result<VerifiedAu
         return Err(ApiError(Error::Unauthorized));
     }
     let pubkey = buzz_auth::verify_nip98_event(&event_json, url, "POST", Some(body))
+        .map_err(|_| ApiError(Error::Unauthorized))?;
+    let created_at = DateTime::from_timestamp(event.created_at.as_secs() as i64, 0)
+        .ok_or(ApiError(Error::Unauthorized))?;
+    let now = Utc::now();
+    if created_at > now + ChronoDuration::seconds(30)
+        || now > created_at + ChronoDuration::seconds(AUTH_TTL_SECONDS)
+    {
+        return Err(ApiError(Error::Unauthorized));
+    }
+    Ok(VerifiedAuth {
+        pubkey: pubkey.to_bytes(),
+        event_id: event.id.to_bytes(),
+        created_at,
+    })
+}
+
+fn verify_read_auth(headers: &HeaderMap, url: &str) -> Result<VerifiedAuth, ApiError> {
+    let encoded = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Nostr "))
+        .ok_or(ApiError(Error::Unauthorized))?;
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|_| ApiError(Error::Unauthorized))?;
+    if bytes.len() > 32 * 1024 {
+        return Err(ApiError(Error::Unauthorized));
+    }
+    let event_json = String::from_utf8(bytes).map_err(|_| ApiError(Error::Unauthorized))?;
+    let event: nostr::Event =
+        serde_json::from_str(&event_json).map_err(|_| ApiError(Error::Unauthorized))?;
+    if event.tags.iter().any(|tag| tag.kind() == TagKind::Payload) {
+        return Err(ApiError(Error::Unauthorized));
+    }
+    let pubkey = buzz_auth::verify_nip98_event(&event_json, url, "GET", None)
         .map_err(|_| ApiError(Error::Unauthorized))?;
     let created_at = DateTime::from_timestamp(event.created_at.as_secs() as i64, 0)
         .ok_or(ApiError(Error::Unauthorized))?;
@@ -4755,6 +5425,7 @@ impl IntoResponse for ApiError {
         let status = match self.0 {
             Error::Unauthorized => StatusCode::UNAUTHORIZED,
             Error::Invalid | Error::Timezone => StatusCode::BAD_REQUEST,
+            Error::NotFound => StatusCode::NOT_FOUND,
             Error::Conflict => StatusCode::CONFLICT,
             Error::Database => StatusCode::SERVICE_UNAVAILABLE,
         };
