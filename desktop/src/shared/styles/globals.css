@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "./generated/snowman-brand.generated.css";
 @import "./globals/scrollbars.css";
 @import "./globals/motion.css";
 @import "./globals/animations.css";

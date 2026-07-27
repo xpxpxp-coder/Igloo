@@ -17,7 +17,7 @@ on:
       - ".github/workflows/push-gateway-helm-chart.yml"
 permissions: {}
 env:
-  CHART_REPO: oci://ghcr.io/block/buzz/charts
+  CHART_REPO: oci://ghcr.io/snowman-ai-org/snowman-command-center/charts
 jobs:
   validate:
     runs-on: ubuntu-latest

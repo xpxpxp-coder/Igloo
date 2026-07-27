@@ -2,7 +2,7 @@ name: buzz-prod
 
 services:
   relay:
-    image: ${BUZZ_IMAGE:-ghcr.io/block/buzz:main}
+    image: ${SNOWMAN_COMMAND_CENTER_IMAGE:?set a Snowman-owned digest-pinned image}
     env_file:
       - .env
     environment:

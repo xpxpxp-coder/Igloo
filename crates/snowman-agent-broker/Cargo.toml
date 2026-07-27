@@ -1,0 +1,35 @@
+[package]
+name = "snowman-agent-broker"
+description = "Private purpose-bound job broker for Snowman governed agent execution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+buzz-db = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+snowman-agent-contract = { path = "../snowman-agent-contract" }
+sqlx = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+url = { workspace = true }
+zeroize = { workspace = true }
+
+[lib]
+name = "snowman_agent_broker"
+path = "src/lib.rs"
+
+[[bin]]
+name = "snowman-agent-broker"
+path = "src/main.rs"

@@ -26,17 +26,21 @@ export type MessageDeepLinkPayload = {
 };
 
 export type NostrBindDeepLinkPayload = {
+  bindingKind?: "nostr_identity" | "snowman_workforce_session";
   challengeId: string;
   nonce: string;
   verificationCode: string;
-  audience: "buzz:nostr-identity";
-  action: "bind_nostr_identity";
-  protocol: "buzz-nostr-identity";
+  audience: "buzz:nostr-identity" | "snowman:workforce-identity";
+  action: "bind_nostr_identity" | "enroll_workforce_session";
+  protocol: "buzz-nostr-identity" | "snowman-workforce-device-proof";
   version: "1";
   origin: string;
   expiresAt: string;
   returnMode: "clipboard" | "browser_fragment_v1";
   callbackUrl?: string;
+  broker?: string | null;
+  community?: string | null;
+  purpose?: string | null;
 };
 
 /**

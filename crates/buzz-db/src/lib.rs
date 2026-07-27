@@ -11,6 +11,8 @@
 
 /// Explicit deployment-global admin report reads.
 pub mod admin_moderation;
+/// Tenant-isolated Analyst 360 lifecycle-event and receipt persistence.
+pub mod analyst_integration;
 /// API token storage and lookup.
 pub mod api_token;
 /// Relay-scoped archived identity persistence (NIP-IA).
@@ -43,6 +45,8 @@ pub mod reaction;
 pub mod relay_members;
 /// Replica freshness fence for keyset-cursor read routing.
 pub mod replica_fence;
+/// Least-privilege database runtime role provisioning and verification.
+pub mod runtime_security;
 /// Thread metadata persistence.
 pub mod thread;
 /// Per-community usage rollup queries for Prometheus gauges.
@@ -51,6 +55,10 @@ pub mod usage;
 pub mod user;
 /// Workflow, run, and approval persistence.
 pub mod workflow;
+/// Durable, fenced Snowman AI Workforce queue and spend controls.
+pub mod workforce;
+/// Workforce identity, device/session, and service-capability resolution.
+pub mod workforce_identity;
 
 pub use error::{DbError, Result};
 pub use event::{EventQuery, ReactionEventInsertOutcome};
@@ -2917,6 +2925,252 @@ impl Db {
         relay_members::get_relay_member(&self.pool, community, pubkey).await
     }
 
+    /// Resolve a live Snowman workforce identity for a tenant and relay key.
+    pub async fn resolve_workforce_principal(
+        &self,
+        community: CommunityId,
+        pubkey: &[u8],
+    ) -> Result<Option<workforce_identity::WorkforcePrincipal>> {
+        workforce_identity::resolve_workforce_principal(&self.pool, community, pubkey).await
+    }
+
+    /// Load an active tenant-local Snowman identity-authority binding.
+    pub async fn workforce_identity_broker(
+        &self,
+        community: CommunityId,
+        broker_id: &str,
+    ) -> Result<Option<workforce_identity::WorkforceIdentityBroker>> {
+        workforce_identity::workforce_identity_broker(&self.pool, community, broker_id).await
+    }
+
+    /// Atomically consume an authority assertion and bind one human device session.
+    pub async fn enroll_human_workforce_session(
+        &self,
+        community: CommunityId,
+        enrollment: &workforce_identity::NewHumanWorkforceSession,
+    ) -> Result<workforce_identity::EnrolledHumanWorkforceSession> {
+        workforce_identity::enroll_human_workforce_session(&self.pool, community, enrollment).await
+    }
+
+    /// Atomically consume an authority assertion and revoke human access.
+    pub async fn revoke_human_workforce_session(
+        &self,
+        community: CommunityId,
+        revocation: &workforce_identity::NewHumanWorkforceRevocation,
+    ) -> Result<workforce_identity::HumanWorkforceRevocationResult> {
+        workforce_identity::revoke_human_workforce_session(&self.pool, community, revocation).await
+    }
+
+    /// Verify an active tenant-local agent service identity and capability.
+    pub async fn active_service_identity_has_capability(
+        &self,
+        community: CommunityId,
+        identity_id: Uuid,
+        capability: &str,
+    ) -> Result<bool> {
+        workforce_identity::active_service_identity_has_capability(
+            &self.pool,
+            community,
+            identity_id,
+            capability,
+        )
+        .await
+    }
+
+    /// Idempotently enqueue a governed Snowman work request on the writer.
+    pub async fn enqueue_work_request(
+        &self,
+        community: CommunityId,
+        request: &workforce::NewWorkRequest,
+    ) -> Result<workforce::EnqueuedWorkRequest> {
+        workforce::enqueue_work_request(&self.pool, community, request).await
+    }
+
+    /// Load the server-owned constraints for a lead planner proposal.
+    pub async fn work_plan_envelope(
+        &self,
+        community: CommunityId,
+        request_id: Uuid,
+        lead_task_id: Uuid,
+    ) -> Result<Option<workforce::WorkPlanEnvelope>> {
+        workforce::work_plan_envelope(&self.pool, community, request_id, lead_task_id).await
+    }
+
+    /// Load active evaluated model routes for one tenant.
+    pub async fn active_model_routes(
+        &self,
+        community: CommunityId,
+    ) -> Result<Vec<workforce::StoredModelRoute>> {
+        workforce::active_model_routes(&self.pool, community).await
+    }
+
+    /// Publish one bounded evidence-linked handoff for replacement specialists.
+    pub async fn publish_context_packet(
+        &self,
+        community: CommunityId,
+        packet: &workforce::NewContextPacket,
+    ) -> Result<workforce::PublishedContextPacket> {
+        workforce::publish_context_packet(&self.pool, community, packet).await
+    }
+
+    /// List non-expired handoffs visible to one assigned specialist.
+    pub async fn list_context_packets(
+        &self,
+        community: CommunityId,
+        request_id: Uuid,
+        reader_identity_id: Uuid,
+    ) -> Result<Vec<workforce::StoredContextPacket>> {
+        workforce::list_context_packets(&self.pool, community, request_id, reader_identity_id).await
+    }
+
+    /// Atomically replace a live leased lead task with a governed specialist DAG.
+    pub async fn commit_work_plan(
+        &self,
+        community: CommunityId,
+        plan: &workforce::NewWorkPlan,
+    ) -> Result<workforce::CommittedWorkPlan> {
+        workforce::commit_work_plan(&self.pool, community, plan).await
+    }
+
+    /// Read current Snowman work-request state from the writer.
+    pub async fn get_work_request_status(
+        &self,
+        community: CommunityId,
+        request_id: Uuid,
+    ) -> Result<Option<workforce::WorkRequestStatus>> {
+        workforce::get_work_request_status(&self.pool, community, request_id).await
+    }
+
+    /// Atomically cancel a request and invalidate every outstanding task lease.
+    pub async fn cancel_work_request(
+        &self,
+        community: CommunityId,
+        cancellation: &workforce::WorkRequestCancellation,
+    ) -> Result<Option<workforce::CancelledWorkRequest>> {
+        workforce::cancel_work_request(&self.pool, community, cancellation).await
+    }
+
+    /// Append one hash-chained Snowman workforce lifecycle event.
+    pub async fn append_work_event(
+        &self,
+        community: CommunityId,
+        event: &workforce::NewWorkEvent,
+    ) -> Result<workforce::AppendedWorkEvent> {
+        workforce::append_work_event(&self.pool, community, event).await
+    }
+
+    /// Idempotently claim the next task for one tenant-bound service identity.
+    pub async fn claim_next_work_task(
+        &self,
+        community: CommunityId,
+        worker_identity_id: Uuid,
+        claim_id: Uuid,
+        lease_token_sha256: [u8; 32],
+        lease_duration: chrono::Duration,
+    ) -> Result<Option<workforce::LeasedWorkTask>> {
+        workforce::claim_next_work_task(
+            &self.pool,
+            community,
+            worker_identity_id,
+            claim_id,
+            lease_token_sha256,
+            lease_duration,
+        )
+        .await
+    }
+
+    /// Heartbeat a live task under its exact fenced lease.
+    pub async fn heartbeat_work_task(
+        &self,
+        community: CommunityId,
+        task_id: Uuid,
+        worker_identity_id: Uuid,
+        generation: i64,
+        lease_token_sha256: [u8; 32],
+        lease_duration: chrono::Duration,
+    ) -> Result<bool> {
+        workforce::heartbeat_work_task(
+            &self.pool,
+            community,
+            task_id,
+            worker_identity_id,
+            generation,
+            lease_token_sha256,
+            lease_duration,
+        )
+        .await
+    }
+
+    /// Finish a task only while its current fenced lease remains live.
+    pub async fn finish_work_task(
+        &self,
+        community: CommunityId,
+        completion: &workforce::WorkTaskCompletion,
+    ) -> Result<bool> {
+        workforce::finish_work_task(&self.pool, community, completion).await
+    }
+
+    /// Reserve a server-derived reminder recipient snapshot under a live task lease.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepare_work_reminder(
+        &self,
+        community: CommunityId,
+        delivery_id: Uuid,
+        task_id: Uuid,
+        worker_identity_id: Uuid,
+        generation: i64,
+        lease_token_sha256: [u8; 32],
+    ) -> Result<workforce::PreparedWorkReminder> {
+        workforce::prepare_work_reminder(
+            &self.pool,
+            community,
+            delivery_id,
+            task_id,
+            worker_identity_id,
+            generation,
+            lease_token_sha256,
+        )
+        .await
+    }
+
+    /// Persist the exact relay-signed event ID for a prepared reminder.
+    pub async fn record_work_reminder_event(
+        &self,
+        community: CommunityId,
+        delivery_id: Uuid,
+        worker_identity_id: Uuid,
+        nostr_event_id: [u8; 32],
+        delivered_at: DateTime<Utc>,
+    ) -> Result<bool> {
+        workforce::record_work_reminder_event(
+            &self.pool,
+            community,
+            delivery_id,
+            worker_identity_id,
+            nostr_event_id,
+            delivered_at,
+        )
+        .await
+    }
+
+    /// Record one provider/model operation against hard request budgets.
+    pub async fn record_work_spend(
+        &self,
+        community: CommunityId,
+        entry: &workforce::SpendEntry,
+    ) -> Result<()> {
+        workforce::record_work_spend(&self.pool, community, entry).await
+    }
+
+    /// Persist one exact-snapshot human approval decision and its evidence.
+    pub async fn record_work_approval(
+        &self,
+        community: CommunityId,
+        approval: &workforce::WorkApproval,
+    ) -> Result<bool> {
+        workforce::record_work_approval(&self.pool, community, approval).await
+    }
+
     /// Returns all relay members of `community` ordered by `created_at` ascending.
     pub async fn list_relay_members(
         &self,
@@ -2950,6 +3204,83 @@ impl Db {
     ) -> Result<bool> {
         relay_members::claim_relay_membership(&self.pool, community, pubkey, role, policy_version)
             .await
+    }
+
+    /// Evaluate and durably record one proactive next-useful action.
+    pub async fn schedule_proactive_action(
+        &self,
+        community: CommunityId,
+        proposal: &workforce::NewProactiveAction,
+    ) -> Result<workforce::ScheduledProactiveAction> {
+        workforce::schedule_proactive_action(&self.pool, community, proposal).await
+    }
+
+    /// Idempotently authorize bounded recurring specialist work.
+    pub async fn create_work_schedule(
+        &self,
+        community: CommunityId,
+        schedule: &workforce::NewWorkSchedule,
+    ) -> Result<bool> {
+        workforce::create_work_schedule(&self.pool, community, schedule).await
+    }
+
+    /// Stop a recurring-work authorization and expire unsubmitted occurrences.
+    pub async fn cancel_work_schedule(
+        &self,
+        community: CommunityId,
+        request_id: Uuid,
+        schedule_id: Uuid,
+        cancellation_id: Uuid,
+        actor_identity_id: Uuid,
+        cancelled_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        workforce::cancel_work_schedule(
+            &self.pool,
+            community,
+            request_id,
+            schedule_id,
+            cancellation_id,
+            actor_identity_id,
+            cancelled_at,
+        )
+        .await
+    }
+
+    /// Claim one retryable due occurrence for its exact trigger identity.
+    pub async fn claim_due_work_schedule(
+        &self,
+        community: CommunityId,
+        trigger_identity_id: Uuid,
+        claim_id: Uuid,
+        requested_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<workforce::ClaimedWorkScheduleOccurrence>> {
+        workforce::claim_due_work_schedule(
+            &self.pool,
+            community,
+            trigger_identity_id,
+            claim_id,
+            requested_at,
+        )
+        .await
+    }
+
+    /// Enforce workforce deadlines and recover abandoned leases under one
+    /// idempotent, evidence-preserving scheduler tick.
+    pub async fn maintain_workforce(
+        &self,
+        community: CommunityId,
+        tick_id: Uuid,
+        scheduler_identity_id: Uuid,
+        requested_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<workforce::WorkforceMaintenanceResult> {
+        workforce::maintain_workforce(
+            &self.pool,
+            community,
+            tick_id,
+            scheduler_identity_id,
+            requested_at,
+        )
+        .await
     }
 
     /// Returns whether a member has persisted acceptance evidence for a policy version.

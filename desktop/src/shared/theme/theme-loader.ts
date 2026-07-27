@@ -37,6 +37,13 @@ export const BUZZ_BASE_THEME: SyntaxThemeName = "github-light";
 /** The Shiki bundle Buzz Dark borrows its base palette from. */
 export const BUZZ_DARK_BASE_THEME: SyntaxThemeName = "github-dark";
 
+/** User-facing Snowman names for legacy persisted theme identifiers. */
+export function productThemeLabel(name: string): string | null {
+  if (name === BUZZ_THEME_NAME) return "Snowman Ice";
+  if (name === BUZZ_DARK_THEME_NAME) return "Snowman Midnight";
+  return null;
+}
+
 /**
  * Resolve a theme name to the real Shiki bundled theme it maps to.
  *

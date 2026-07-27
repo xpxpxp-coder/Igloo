@@ -81,18 +81,20 @@ export function IdentityKeyHelpDialog() {
           >
             <div>
               <p>
-                Buzz uses an identity key instead of a traditional account. It’s
-                created on your device and represents you whenever you use Buzz.
+                Snowman uses an identity key beneath your workforce account.
+                It’s created on your device and represents you whenever you use
+                Snowman Command Center.
               </p>
               <p>
-                Your identity belongs to you, not Buzz. There’s no password to
-                reset, and Buzz can’t recover your key if you lose it. Keep a
-                backup somewhere safe and never share it. Anyone with your key
-                can act as you.
+                Your identity belongs to you, not Snowman. There’s no password
+                to reset, and Snowman can’t recover your key if you lose it.
+                Keep a backup somewhere safe and never share it. Anyone with
+                your key can act as you.
               </p>
               <p>
-                If you’re new to Buzz, create a new identity key. If you already
-                have a Nostr identity, use your existing key.
+                If you’re new to Snowman Command Center, create a new identity
+                key. If you already have a Nostr identity, use your existing
+                key.
               </p>
             </div>
           </DialogDescription>

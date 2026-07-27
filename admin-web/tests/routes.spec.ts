@@ -41,7 +41,7 @@ test("report rows render the relay response contract", async ({ page }) => {
         {
           id: "0e6caad8-1e18-4cd7-84fa-7264103f0a08",
           communityId: "6d474feb-c50a-44e4-a0b5-f30532df49bc",
-          communityHost: "design.buzz.xyz",
+          communityHost: "design.snowmanai.org",
           reporterPubkey: "21".repeat(32),
           targetKind: "event",
           target: "12".repeat(32),
@@ -53,7 +53,7 @@ test("report rows render the relay response contract", async ({ page }) => {
     }),
   );
   await page.goto("/reports");
-  await expect(page.getByText("design.buzz.xyz")).toBeVisible();
+  await expect(page.getByText("design.snowmanai.org")).toBeVisible();
   await expect(page.getByText("spam")).toBeVisible();
   await expect(page.getByText("Unknown date")).toHaveCount(0);
 });
@@ -67,7 +67,7 @@ test("feedback cards open the complete submission", async ({ page }) => {
       body: JSON.stringify({
         id,
         communityId: "6d474feb-c50a-44e4-a0b5-f30532df49bc",
-        communityHost: "design.buzz.xyz",
+        communityHost: "design.snowmanai.org",
         eventId: "31".repeat(32),
         submitterPubkey: "21".repeat(32),
         category: "needs-work",
@@ -85,7 +85,7 @@ test("feedback cards open the complete submission", async ({ page }) => {
         {
           id,
           communityId: "6d474feb-c50a-44e4-a0b5-f30532df49bc",
-          communityHost: "design.buzz.xyz",
+          communityHost: "design.snowmanai.org",
           submitterPubkey: "21".repeat(32),
           category: "needs-work",
           bodySummary: `${fullBody.slice(0, 240)}…`,
@@ -98,7 +98,7 @@ test("feedback cards open the complete submission", async ({ page }) => {
   await page.goto("/feedback");
   const card = page.locator(".feedback-record");
   await expect(card.locator(".record-provenance")).toContainText(
-    "design.buzz.xyz",
+    "design.snowmanai.org",
   );
   await card.locator(".feedback-main-link").click();
   await expect(page).toHaveURL(`/feedback/${id}`);
@@ -122,7 +122,7 @@ test("feedback can be searched and filtered by community and time", async ({
         {
           id: "recent",
           communityId: "one",
-          communityHost: "design.buzz.xyz",
+          communityHost: "design.snowmanai.org",
           submitterPubkey: "21".repeat(32),
           category: "bug",
           bodySummary: "Composer freezes after sleep",
@@ -131,7 +131,7 @@ test("feedback can be searched and filtered by community and time", async ({
         {
           id: "old",
           communityId: "two",
-          communityHost: "engineering.buzz.xyz",
+          communityHost: "engineering.snowmanai.org",
           submitterPubkey: "22".repeat(32),
           category: "praise",
           bodySummary: "Calls are much more reliable",
@@ -148,7 +148,7 @@ test("feedback can be searched and filtered by community and time", async ({
   await expect(page.getByText("Composer freezes after sleep")).toHaveCount(0);
 
   await page.getByRole("searchbox", { name: "Search feedback" }).fill("");
-  await page.getByLabel("Community").selectOption("design.buzz.xyz");
+  await page.getByLabel("Community").selectOption("design.snowmanai.org");
   await expect(page.getByText("Composer freezes after sleep")).toBeVisible();
   await expect(page.getByText("Calls are much more reliable")).toHaveCount(0);
 
@@ -166,7 +166,7 @@ test("feedback status is stored locally by feedback id", async ({ page }) => {
         {
           id: "feedback-one",
           communityId: "one",
-          communityHost: "design.buzz.xyz",
+          communityHost: "design.snowmanai.org",
           submitterPubkey: "21".repeat(32),
           category: "bug",
           bodySummary: "Composer freezes after sleep",
@@ -190,15 +190,15 @@ test("feedback attachments render from imeta without raw markdown", async ({
   page,
 }) => {
   const id = "feedback-with-attachments";
-  const imageUrl = `https://design.buzz.xyz/media/${"a".repeat(64)}.png`;
-  const fileUrl = `https://design.buzz.xyz/media/${"b".repeat(64)}.txt`;
+  const imageUrl = `https://design.snowmanai.org/media/${"a".repeat(64)}.png`;
+  const fileUrl = `https://design.snowmanai.org/media/${"b".repeat(64)}.txt`;
   await page.route(`**/api/admin/v1/feedback/${id}`, (route) =>
     route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         id,
         communityId: "one",
-        communityHost: "design.buzz.xyz",
+        communityHost: "design.snowmanai.org",
         eventId: "31".repeat(32),
         submitterPubkey: "21".repeat(32),
         category: "bug",

@@ -4,7 +4,7 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 use url::Url;
 
-use crate::nostr_bind;
+use crate::{nostr_bind, workforce_enroll};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -193,6 +193,7 @@ fn parse_add_community_deep_link(url: &Url) -> Option<AddCommunityDeepLinkPayloa
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct NostrBindDeepLinkPayload {
+    binding_kind: String,
     challenge_id: String,
     nonce: String,
     verification_code: String,
@@ -204,6 +205,9 @@ struct NostrBindDeepLinkPayload {
     expires_at: String,
     return_mode: String,
     callback_url: Option<String>,
+    broker: Option<String>,
+    community: Option<String>,
+    purpose: Option<String>,
 }
 
 fn non_empty_param(url: &Url, name: &str) -> Result<String, String> {
@@ -277,6 +281,7 @@ fn parse_nostr_bind_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayload, Str
     }
 
     Ok(NostrBindDeepLinkPayload {
+        binding_kind: "nostr_identity".to_string(),
         challenge_id,
         nonce,
         verification_code,
@@ -288,6 +293,72 @@ fn parse_nostr_bind_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayload, Str
         expires_at,
         return_mode,
         callback_url,
+        broker: None,
+        community: None,
+        purpose: None,
+    })
+}
+
+fn parse_workforce_enroll_deep_link(url: &Url) -> Result<NostrBindDeepLinkPayload, String> {
+    if !matches!(url.path(), "" | "/") || url.fragment().is_some() || url.query_pairs().count() != 12 {
+        return Err("workforce enrollment link shape is invalid".into());
+    }
+    let assertion_id = non_empty_param(url, "assertion_id")?;
+    let broker = non_empty_param(url, "broker")?;
+    let community = non_empty_param(url, "community")?;
+    let purpose = non_empty_param(url, "purpose")?;
+    let nonce = non_empty_param(url, "nonce")?;
+    let verification_code = non_empty_param(url, "verification_code")?;
+    let origin = non_empty_param(url, "origin")?;
+    let expires_at = non_empty_param(url, "expires_at")?;
+    let protocol = non_empty_param(url, "protocol")?;
+    let version = non_empty_param(url, "version")?;
+    let return_mode = non_empty_param(url, "return")?;
+    let callback_url = optional_non_empty_param(url, "callback_url");
+    workforce_enroll::validate_request(
+        &assertion_id,
+        &broker,
+        &community,
+        &purpose,
+        &nonce,
+        &verification_code,
+        &origin,
+        &expires_at,
+        &protocol,
+        &version,
+    )?;
+    if return_mode != nostr_bind::RETURN_MODE_BROWSER_FRAGMENT_V1 || callback_url.is_none() {
+        return Err("workforce enrollment requires browser_fragment_v1".into());
+    }
+    let callback_url = callback_url.unwrap_or_default();
+    validate_nostr_bind_callback_url(&callback_url, &origin)?;
+    let callback = Url::parse(&callback_url)
+        .map_err(|error| format!("invalid callback_url: {error}"))?;
+    let callback_parameters: Vec<_> = callback.query_pairs().collect();
+    if callback.path() != "/"
+        || callback.fragment().is_some()
+        || callback_parameters.len() != 1
+        || callback_parameters[0].0 != "snowman_enrollment"
+        || callback_parameters[0].1 != assertion_id
+    {
+        return Err("workforce enrollment callback is not challenge bound".into());
+    }
+    Ok(NostrBindDeepLinkPayload {
+        binding_kind: "snowman_workforce_session".to_string(),
+        challenge_id: assertion_id,
+        nonce,
+        verification_code,
+        audience: workforce_enroll::AUDIENCE.to_string(),
+        action: workforce_enroll::ACTION.to_string(),
+        protocol,
+        version,
+        origin,
+        expires_at,
+        return_mode,
+        callback_url: Some(callback_url),
+        broker: Some(broker),
+        community: Some(community),
+        purpose: Some(purpose),
     })
 }
 
@@ -304,7 +375,7 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
         }
     };
 
-    if url.scheme() != "buzz" {
+    if !matches!(url.scheme(), "snowman" | "buzz") {
         eprintln!("buzz-desktop: ignoring unsupported deep link scheme: {url_str}");
         return;
     }
@@ -375,6 +446,15 @@ pub(crate) fn handle_deep_link_url(app: &tauri::AppHandle, url_str: &str) {
                 eprintln!("buzz-desktop: rejecting nostr-bind deep link: {error}: {url_str}");
             }
         },
+        Some("workforce-enroll") => match parse_workforce_enroll_deep_link(&url) {
+            Ok(payload) => {
+                activate_main_window(app);
+                let _ = app.emit("deep-link-nostr-bind", payload);
+            }
+            Err(error) => {
+                eprintln!("buzz-desktop: rejecting workforce enrollment deep link: {error}");
+            }
+        },
         Some(action) => {
             eprintln!("buzz-desktop: unknown deep link action: {action}");
         }
@@ -440,14 +520,21 @@ mod tests {
         .unwrap()
     }
 
+    fn valid_workforce_enroll_url() -> Url {
+        Url::parse(
+            "snowman://workforce-enroll?assertion_id=550e8400-e29b-41d4-a716-446655440000&broker=snowman-analyst360-identity&community=10000000-0000-4000-8000-000000000001&purpose=snowman-workforce-session-enrollment&nonce=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567&verification_code=123456&origin=https%3A%2F%2Fanalyst360.snowmanai.org&expires_at=2999-01-01T00%3A00%3A00Z&protocol=snowman-workforce-device-proof&version=1&return=browser_fragment_v1&callback_url=https%3A%2F%2Fanalyst360.snowmanai.org%2F%3Fsnowman_enrollment%3D550e8400-e29b-41d4-a716-446655440000",
+        )
+        .unwrap()
+    }
+
     #[test]
     fn parse_add_community_deep_link_extracts_relay_and_name() {
         let url = Url::parse(
-            "buzz://add-community?relay=wss%3A%2F%2Facme.communities.buzz.xyz&name=Acme%20Team&ignored=value",
+            "buzz://add-community?relay=wss%3A%2F%2Facme.communities.snowmanai.org&name=Acme%20Team&ignored=value",
         )
         .unwrap();
         let payload = parse_add_community_deep_link(&url).unwrap();
-        assert_eq!(payload.relay_url, "wss://acme.communities.buzz.xyz");
+        assert_eq!(payload.relay_url, "wss://acme.communities.snowmanai.org");
         assert_eq!(payload.name.as_deref(), Some("Acme Team"));
     }
 
@@ -584,6 +671,44 @@ mod tests {
         assert_eq!(payload.expires_at, "2999-01-01T00:00:00Z");
         assert_eq!(payload.return_mode, "clipboard");
         assert_eq!(payload.callback_url, None);
+    }
+
+    #[test]
+    fn parse_workforce_enrollment_is_snowman_tenant_and_callback_bound() {
+        let payload = parse_workforce_enroll_deep_link(&valid_workforce_enroll_url()).unwrap();
+        assert_eq!(payload.binding_kind, "snowman_workforce_session");
+        assert_eq!(payload.challenge_id, "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(
+            payload.broker.as_deref(),
+            Some("snowman-analyst360-identity")
+        );
+        assert_eq!(
+            payload.community.as_deref(),
+            Some("10000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(
+            payload.purpose.as_deref(),
+            Some("snowman-workforce-session-enrollment")
+        );
+        assert_eq!(payload.protocol, "snowman-workforce-device-proof");
+        assert_eq!(payload.origin, "https://analyst360.snowmanai.org");
+    }
+
+    #[test]
+    fn parse_workforce_enrollment_rejects_non_snowman_origin() {
+        let raw = valid_workforce_enroll_url()
+            .as_str()
+            .replace("analyst360.snowmanai.org", "outside.example");
+        assert!(parse_workforce_enroll_deep_link(&Url::parse(&raw).unwrap()).is_err());
+    }
+
+    #[test]
+    fn parse_workforce_enrollment_rejects_mismatched_callback_challenge() {
+        let raw = valid_workforce_enroll_url().as_str().replace(
+            "%3D550e8400-e29b-41d4-a716-446655440000",
+            "%3D550e8400-e29b-41d4-a716-446655440001",
+        );
+        assert!(parse_workforce_enroll_deep_link(&Url::parse(&raw).unwrap()).is_err());
     }
 
     #[test]

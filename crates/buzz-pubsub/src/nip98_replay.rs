@@ -21,12 +21,12 @@ use nostr::EventId;
 /// the TTL window return `nil`, which we surface as `Ok(false)` so the caller
 /// rejects the request as replay.
 pub struct RedisNip98ReplayGuard {
-    pool: deadpool_redis::Pool,
+    pool: crate::RedisPool,
 }
 
 impl RedisNip98ReplayGuard {
     /// Create a new replay guard backed by the given Redis connection pool.
-    pub fn new(pool: deadpool_redis::Pool) -> Self {
+    pub fn new(pool: crate::RedisPool) -> Self {
         Self { pool }
     }
 }
@@ -69,7 +69,7 @@ impl Nip98ReplayGuard for RedisNip98ReplayGuard {
                 .arg("NX")
                 .arg("EX")
                 .arg(ttl)
-                .query_async(&mut *conn)
+                .query_async(&mut conn)
                 .await
                 .map_err(|e| {
                     tracing::warn!(
@@ -106,11 +106,12 @@ mod tests {
     use nostr::{EventBuilder, Keys, Kind};
     use uuid::Uuid;
 
-    fn redis_pool() -> deadpool_redis::Pool {
+    fn redis_pool() -> crate::RedisPool {
         let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
-        Config::from_url(url)
+        let pool = Config::from_url(&url)
             .create_pool(Some(Runtime::Tokio1))
-            .expect("create pool")
+            .expect("create pool");
+        crate::RedisPool::from_deadpool(&url, pool).expect("wrap pool")
     }
 
     fn fresh_ctx() -> TenantContext {

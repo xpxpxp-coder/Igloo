@@ -63,6 +63,22 @@ pub(crate) const RESERVED_ENV_KEYS: &[&str] = &[
     "BUZZ_API_TOKEN",
     "BUZZ_ACP_PRIVATE_KEY",
     "BUZZ_ACP_API_TOKEN",
+    // Provider credentials and destinations belong in the Snowman secret and
+    // egress broker, never portable persona/team JSON or per-agent overrides.
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "OPENAI_API_KEY",
+    "OPENAI_COMPAT_API_KEY",
+    "OPENAI_COMPAT_BASE_URL",
+    "DATABRICKS_TOKEN",
+    "DATABRICKS_HOST",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    // Capability grants are issued by the broker and cannot be self-granted.
+    "SNOWMAN_AGENT_SHELL_CAPABILITY",
+    "SNOWMAN_AGENT_NETWORK_CAPABILITY",
     // Relay URL: overriding would let a malicious config redirect the
     // agent to an attacker-controlled relay.
     "BUZZ_RELAY_URL",
@@ -187,7 +203,7 @@ pub fn validate_user_env_keys(env_vars: &BTreeMap<String, String>) -> Result<(),
     reserved.dedup();
     if !reserved.is_empty() {
         return Err(format!(
-            "the following env vars are reserved by Buzz and cannot be overridden: {}",
+            "the following env vars are reserved by Snowman and cannot be overridden: {}",
             reserved.join(", ")
         ));
     }

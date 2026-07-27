@@ -15,5 +15,7 @@ relay:
   # Don't enforce membership in CI — we're testing the chart renders and the
   # Pod starts, not relay business logic.
   requireRelayMembership: false
+  snowmanRoleScopes: false
+  snowmanWorkforceIdentityRequired: false
 podDisruptionBudget:
   enabled: false

@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 24);
+        assert_eq!(migrations.len(), 60);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -584,6 +584,138 @@ mod tests {
             .sql
             .as_str()
             .contains("search_tsv  TSVECTOR GENERATED ALWAYS"));
+        assert_eq!(migrations[30].version, 31);
+        assert_eq!(
+            &*migrations[30].description,
+            "snowman context packet manifests"
+        );
+        assert!(migrations[30]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_context_packet_manifests"));
+        assert_eq!(migrations[31].version, 32);
+        assert_eq!(&*migrations[31].description, "snowman proactive actions");
+        assert!(migrations[31]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_proactive_actions"));
+        assert_eq!(migrations[32].version, 33);
+        assert_eq!(
+            &*migrations[32].description,
+            "snowman context artifact type"
+        );
+        assert!(migrations[32]
+            .sql
+            .as_str()
+            .contains("ADD COLUMN artifact_type"));
+        assert_eq!(migrations[33].version, 34);
+        assert_eq!(
+            &*migrations[33].description,
+            "snowman workforce maintenance"
+        );
+        assert!(migrations[33]
+            .sql
+            .as_str()
+            .contains("snowman_workforce_maintenance_ticks"));
+        assert_eq!(migrations[34].version, 35);
+        assert_eq!(
+            &*migrations[34].description,
+            "snowman proactive execution tasks"
+        );
+        assert!(migrations[34]
+            .sql
+            .as_str()
+            .contains("snowman_sync_proactive_task_status"));
+        assert_eq!(migrations[35].version, 36);
+        assert_eq!(&*migrations[35].description, "snowman work schedules");
+        assert!(migrations[35]
+            .sql
+            .as_str()
+            .contains("snowman_work_schedule_occurrences"));
+        assert_eq!(migrations[36].version, 37);
+        assert_eq!(&*migrations[36].description, "snowman schedule claims");
+        assert!(migrations[36]
+            .sql
+            .as_str()
+            .contains("snowman_submit_schedule_occurrence"));
+        assert_eq!(migrations[37].version, 38);
+        assert_eq!(
+            &*migrations[37].description,
+            "snowman schedule failure pause"
+        );
+        assert!(migrations[37]
+            .sql
+            .as_str()
+            .contains("snowman_pause_schedule_on_occurrence_failure"));
+        assert_eq!(migrations[52].version, 53);
+        assert_eq!(
+            &*migrations[52].description,
+            "snowman orchestration service"
+        );
+        assert!(migrations[52]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_orchestration_callers"));
+        assert_eq!(migrations[53].version, 54);
+        assert_eq!(&*migrations[53].description, "snowman audit checkpoints");
+        assert!(migrations[53]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_audit_checkpoint_requests"));
+        assert_eq!(migrations[54].version, 55);
+        assert_eq!(
+            &*migrations[54].description,
+            "snowman orchestration execution lifecycle"
+        );
+        assert!(migrations[54]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_orchestration_terminal_receipts"));
+        assert_eq!(migrations[55].version, 56);
+        assert_eq!(
+            &*migrations[55].description,
+            "snowman meeting media service"
+        );
+        assert!(migrations[55]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_meeting_media_callers"));
+        assert_eq!(migrations[56].version, 57);
+        assert_eq!(
+            &*migrations[56].description,
+            "snowman orchestration control delivery"
+        );
+        assert!(migrations[56]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_orchestration_control_delivery_receipts"));
+        assert_eq!(migrations[57].version, 58);
+        assert_eq!(
+            &*migrations[57].description,
+            "snowman provider egress runtime"
+        );
+        assert!(migrations[57]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_provider_egress_requests"));
+        assert_eq!(migrations[58].version, 59);
+        assert_eq!(
+            &*migrations[58].description,
+            "snowman orchestration destinations"
+        );
+        assert!(migrations[58]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_orchestration_destination_receipts"));
+        assert_eq!(migrations[59].version, 60);
+        assert_eq!(
+            &*migrations[59].description,
+            "snowman meeting callback authority"
+        );
+        assert!(migrations[59]
+            .sql
+            .as_str()
+            .contains("snowman_meeting_media_callback_exact_authority"));
 
         // The git repo-name registry is an additive migration, never folded into
         // 0001 — folding it would change 0001's checksum and break brownfield
@@ -879,6 +1011,222 @@ mod tests {
             .to_lowercase()
             .contains("for update"));
         assert!(ttl_shared.contains("NEW.kind <> 9007"));
+
+        // The Snowman AI Workforce queue is durable, fenced, budgeted, and
+        // tenant-scoped. It stores coordination state and immutable context
+        // references, never raw Analyst 360 client datasets.
+        assert_eq!(migrations[24].version, 25);
+        let workforce = migrations[24].sql.as_str();
+        for table in [
+            "snowman_work_requests",
+            "snowman_context_packets",
+            "snowman_work_tasks",
+            "snowman_work_approvals",
+            "snowman_task_leases",
+            "snowman_work_events",
+            "snowman_spend_ledger",
+        ] {
+            assert!(
+                workforce.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(workforce.contains("PRIMARY KEY (community_id, task_id)"));
+        assert!(workforce.contains("lease_token_sha256"));
+        assert!(workforce.contains("execution_snapshot_sha256"));
+        assert!(workforce.contains("model_gateway_route ~ '^https://"));
+        assert!(workforce.contains("max_cost_microusd"));
+        assert!(!workforce.contains("raw_client_data"));
+        assert!(!migrations[0].sql.as_str().contains("snowman_work_requests"));
+
+        // A Nostr signature is bound to a live workforce identity, human
+        // session/device or capability-bounded service runtime before governed
+        // production authorization can succeed.
+        assert_eq!(migrations[25].version, 26);
+        let identity = migrations[25].sql.as_str();
+        for table in [
+            "snowman_workforce_identities",
+            "snowman_workforce_sessions",
+            "snowman_workforce_key_bindings",
+            "snowman_workforce_capability_grants",
+        ] {
+            assert!(
+                identity.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(identity.contains("provider_subject_sha256"));
+        assert!(identity.contains("device_pubkey"));
+        assert!(identity.contains("revoked_at"));
+        assert!(identity.contains("service_identity_fk"));
+        assert!(!identity.contains("id_token"));
+        assert!(!identity.contains("refresh_token"));
+
+        assert_eq!(migrations[26].version, 27);
+        assert!(migrations[26]
+            .sql
+            .as_str()
+            .contains("request_contract_sha256"));
+        assert_eq!(migrations[27].version, 28);
+        assert!(migrations[27].sql.as_str().contains("claim_id"));
+
+        assert_eq!(migrations[28].version, 29);
+        let analyst = migrations[28].sql.as_str();
+        for table in [
+            "snowman_analyst_integrations",
+            "snowman_analyst_request_nonces",
+            "snowman_analyst_events",
+        ] {
+            assert!(
+                analyst.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(analyst.contains("request_kms_key_arn"));
+        assert!(analyst.contains("receipt_kms_key_arn"));
+        assert!(analyst.contains("PRIMARY KEY (community_id, event_id)"));
+        assert!(!analyst.contains("raw_client_data"));
+
+        assert_eq!(migrations[29].version, 30);
+        let team_plans = migrations[29].sql.as_str();
+        assert!(team_plans.contains("snowman_model_routes"));
+        assert!(team_plans.contains("snowman_team_plans"));
+        assert!(team_plans.contains("snowman_work_task_dependencies"));
+        assert!(team_plans.contains("snowman_work_task_context_refs"));
+        assert!(!team_plans.contains("raw_client_data"));
+
+        assert_eq!(migrations[38].version, 39);
+        let reminders = migrations[38].sql.as_str();
+        assert!(reminders.contains("snowman_work_reminder_receipts"));
+        assert!(reminders.contains("target_pubkeys"));
+        assert!(reminders.contains("nostr_event_id"));
+        assert!(!reminders.contains("message_body"));
+        assert!(!reminders.contains("raw_client_data"));
+
+        assert_eq!(migrations[39].version, 40);
+        let bootstrap = migrations[39].sql.as_str();
+        assert!(bootstrap.contains("snowman_workforce_bootstrap_receipts"));
+        assert!(bootstrap.contains("manifest_sha256"));
+        assert!(bootstrap.contains("provisioning_authority"));
+        assert!(!bootstrap.contains("private_key"));
+        assert!(!bootstrap.contains("raw_client_data"));
+
+        assert_eq!(migrations[40].version, 41);
+        let human_enrollment = migrations[40].sql.as_str();
+        assert!(human_enrollment.contains("snowman_workforce_identity_brokers"));
+        assert!(human_enrollment.contains("snowman_workforce_enrollment_receipts"));
+        assert!(human_enrollment.contains("device_proof_event_id"));
+        assert!(human_enrollment.contains("assertion_body_sha256"));
+        assert!(human_enrollment.contains("assurance_evidence_sha256"));
+        assert!(human_enrollment.contains("identity_broker_count"));
+        assert!(!human_enrollment.contains("id_token"));
+        assert!(!human_enrollment.contains("access_token"));
+        assert!(!human_enrollment.contains("refresh_token"));
+        assert!(!human_enrollment.contains("email_address"));
+
+        assert_eq!(migrations[41].version, 42);
+        let human_revocation = migrations[41].sql.as_str();
+        assert!(human_revocation.contains("snowman_workforce_revocation_receipts"));
+        assert!(human_revocation.contains("revocation_scope IN"));
+        assert!(human_revocation.contains("assertion_body_sha256"));
+
+        assert_eq!(migrations[42].version, 43);
+        let agent_jobs = migrations[42].sql.as_str();
+        assert!(agent_jobs.contains("CREATE TABLE snowman_agent_jobs"));
+        assert!(agent_jobs.contains("job_token_sha256"));
+        assert!(agent_jobs.contains("snapshot_sha256"));
+        assert!(agent_jobs.contains("UNIQUE (community_id, task_id, generation)"));
+        assert!(!agent_jobs.contains("provider_credential"));
+
+        assert_eq!(migrations[43].version, 44);
+        let agent_launches = migrations[43].sql.as_str();
+        assert!(agent_launches.contains("CREATE TABLE snowman_agent_launches"));
+        assert!(agent_launches.contains("PRIMARY KEY (community_id, launch_id)"));
+
+        assert_eq!(migrations[44].version, 45);
+        assert!(migrations[44].sql.as_str().contains("model_token_sha256"));
+
+        assert_eq!(migrations[45].version, 46);
+        assert!(migrations[45]
+            .sql
+            .as_str()
+            .contains("bootstrap_source_ip INET"));
+
+        assert_eq!(migrations[46].version, 47);
+        let model_authority = migrations[46].sql.as_str();
+        assert!(model_authority.contains("snowman_agent_model_generations"));
+        assert!(model_authority.contains("PRIMARY KEY (community_id, generation_id)"));
+
+        assert_eq!(migrations[47].version, 48);
+        let meetings = migrations[47].sql.as_str();
+        for table in [
+            "snowman_meeting_mailboxes",
+            "snowman_meeting_intake_receipts",
+            "snowman_meetings",
+            "snowman_meeting_commands",
+            "snowman_meeting_sessions",
+            "snowman_meeting_participant_consents",
+            "snowman_meeting_tool_intents",
+        ] {
+            assert!(
+                meetings.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(meetings.contains("content_trust = 'untrusted'"));
+        assert!(meetings.contains("voice_route TEXT NOT NULL DEFAULT 'disabled'"));
+        assert!(meetings.contains("PRIMARY KEY (community_id, intent_id)"));
+        assert!(!meetings.contains("phone_number"));
+        assert!(!meetings.contains("conference_url"));
+        assert!(!meetings.contains("provider_credential"));
+
+        assert_eq!(migrations[48].version, 49);
+        let tool_authority = migrations[48].sql.as_str();
+        assert!(tool_authority.contains("CREATE TABLE snowman_agent_tool_approvals"));
+        assert!(tool_authority.contains("CREATE TABLE snowman_agent_tool_actions"));
+        assert!(tool_authority.contains("CREATE TABLE snowman_agent_tool_receipts"));
+
+        assert_eq!(migrations[49].version, 50);
+        let meeting_media = migrations[49].sql.as_str();
+        for table in [
+            "snowman_meeting_media_routes",
+            "snowman_meeting_media_sessions",
+            "snowman_meeting_media_provider_sessions",
+            "snowman_meeting_media_commands",
+            "snowman_meeting_media_webhook_receipts",
+            "snowman_meeting_media_usage_receipts",
+            "snowman_meeting_media_turn_receipts",
+        ] {
+            assert!(
+                meeting_media.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(meeting_media.contains("raw_audio_retention = 'none'"));
+        assert!(meeting_media.contains("PRIMARY KEY (community_id, provider, delivery_id_sha256)"));
+        assert!(!meeting_media.contains("phone_number"));
+        assert!(!meeting_media.contains("conference_url"));
+        assert!(!meeting_media.contains("provider_credential"));
+        assert!(!meeting_media.contains("transcript_text"));
+
+        assert_eq!(migrations[50].version, 51);
+        let meeting_commands = migrations[50].sql.as_str();
+        for table in [
+            "snowman_meeting_command_callers",
+            "snowman_meeting_command_receivers",
+            "snowman_meeting_command_auth_events",
+            "snowman_meeting_command_receipts",
+        ] {
+            assert!(
+                meeting_commands.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(meeting_commands.contains("requester_pubkey BYTEA"));
+        assert!(meeting_commands.contains("receiver_signature BYTEA"));
+        assert!(!meeting_commands.contains("conference_url"));
+        assert!(!meeting_commands.contains("provider_credential"));
+        assert!(!meeting_commands.contains("transcript_text"));
     }
 
     #[test]

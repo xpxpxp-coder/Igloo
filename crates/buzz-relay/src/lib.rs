@@ -4,6 +4,9 @@
 
 mod admission;
 
+/// Snowman tenant role to capability enforcement.
+pub mod authorization;
+
 /// REST API route handlers.
 pub mod api;
 /// WebSocket audio relay for huddle voice channels.

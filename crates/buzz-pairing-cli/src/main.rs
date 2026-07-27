@@ -47,7 +47,7 @@ enum Cmd {
     /// Act as the source device (holds the secret, displays QR code).
     Source {
         /// Relay WebSocket URL to use for pairing.
-        #[arg(long, default_value = "wss://relay.damus.io")]
+        #[arg(long, default_value = "wss://pairing.snowmanai.org")]
         relay: String,
 
         /// nsec (bech32) of the key to transfer. If omitted, generates a test key.

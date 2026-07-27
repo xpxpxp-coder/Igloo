@@ -10,7 +10,7 @@ use error::CliError;
 use nostr::Keys;
 use uuid::Uuid;
 
-/// Run the Buzz CLI from raw arguments (including `argv[0]`).
+/// Run the Snowman CLI from raw arguments (including `argv[0]`).
 ///
 /// Returns a process exit code (0 = success).
 ///
@@ -61,12 +61,12 @@ where
 
 #[derive(Parser)]
 #[command(
-    name = "buzz",
-    about = "Buzz CLI — interact with a Buzz relay",
+    name = "snowman",
+    about = "Snowman 360 CLI — operate the Snowman Command Center",
     long_about = "\
-Buzz CLI — interact with a Buzz relay
+Snowman 360 CLI — operate the Snowman Command Center
 
-Configuration (flags override env vars):
+Configuration (flags override env vars; BUZZ_* names are retained protocol compatibility identifiers):
   BUZZ_RELAY_URL     Relay base URL        [default: http://localhost:3000]
   BUZZ_PRIVATE_KEY   Nostr private key (hex or nsec)  [required]
   BUZZ_AUTH_TAG      NIP-OA auth tag JSON  [optional]
@@ -77,7 +77,7 @@ Exit codes: 0=ok  1=bad input  2=relay/network error  3=auth error  4=other  5=w
 Errors are JSON on stderr: {\"error\": \"<category>\", \"message\": \"<detail>\"}"
 )]
 struct Cli {
-    /// Relay URL (http:// or https://). Overrides BUZZ_RELAY_URL env var.
+    /// Snowman Command Center relay URL. Overrides the compatibility BUZZ_RELAY_URL env var.
     #[arg(long, env = "BUZZ_RELAY_URL", default_value = "http://localhost:3000")]
     relay: String,
 
@@ -258,7 +258,7 @@ impl RespondToArg {
 
 #[derive(Subcommand)]
 pub enum AgentsCmd {
-    /// Open a prefilled create-agent form in the owner's Buzz Desktop
+    /// Open a prefilled create-agent form in the owner's Snowman Command Center
     DraftCreate {
         /// Current channel UUID; the new agent is added here after save
         #[arg(long)]
@@ -270,7 +270,7 @@ pub enum AgentsCmd {
         #[arg(long)]
         system_prompt: String,
     },
-    /// Open a prefilled edit-agent form in the owner's Buzz Desktop
+    /// Open a prefilled edit-agent form in the owner's Snowman Command Center
     DraftUpdate {
         /// Current channel UUID
         #[arg(long)]
@@ -303,8 +303,8 @@ running under BUZZ_AUTH_TAG signs as itself, so it can only ever satisfy \
 the self path (target == signer) — not the owner-of-agent path for another \
 identity.\n\n\
 Examples:\n  \
-buzz agents archive <PUBKEY> --reason retired\n  \
-buzz agents archive <PUBKEY> --reason bot-rebuilt --replaced-by <NEW_PUBKEY>"
+snowman agents archive <PUBKEY> --reason retired\n  \
+snowman agents archive <PUBKEY> --reason bot-rebuilt --replaced-by <NEW_PUBKEY>"
     )]
     Archive {
         /// Target identity pubkey (hex)
@@ -321,7 +321,7 @@ buzz agents archive <PUBKEY> --reason bot-rebuilt --replaced-by <NEW_PUBKEY>"
     },
     /// Submit a NIP-IA unarchive request for an identity (kind 9036)
     #[command(after_help = "Examples:\n  \
-buzz agents unarchive <PUBKEY> --reason returned")]
+snowman agents unarchive <PUBKEY> --reason returned")]
     Unarchive {
         /// Target identity pubkey (hex)
         target_pubkey: String,
@@ -339,7 +339,7 @@ and NIP-70 `-` protection tag before trusting it. Any trust failure is a \
 nonzero-exit error, never a false-empty success — this command's whole \
 purpose is verification.\n\n\
 Examples:\n  \
-buzz agents archived"
+snowman agents archived"
     )]
     Archived,
 }
@@ -348,10 +348,10 @@ buzz agents archived"
 pub enum MessagesCmd {
     /// Send a message to a channel
     #[command(
-        after_help = "Examples:\n  buzz messages send --channel <UUID> --content \"hello\"\n  buzz messages send --channel <UUID> --content \"@alice check this\"\n  echo \"hello from stdin\" | buzz messages send --channel <UUID> --content -"
+        after_help = "Examples:\n  snowman messages send --channel <UUID> --content \"hello\"\n  snowman messages send --channel <UUID> --content \"@alice check this\"\n  echo \"hello from stdin\" | snowman messages send --channel <UUID> --content -"
     )]
     Send {
-        /// Channel UUID (from 'buzz channels list')
+        /// Channel UUID (from 'snowman channels list')
         #[arg(long)]
         channel: String,
         /// Message text — supports @mentions and markdown. Use '-' to read from stdin.
@@ -435,7 +435,7 @@ pub enum MessagesCmd {
     },
     /// Retrieve messages from a channel
     #[command(
-        after_help = "Examples:\n  buzz messages get --channel <UUID>\n  buzz messages get --channel <UUID> --limit 50 --kinds 1,1984"
+        after_help = "Examples:\n  snowman messages get --channel <UUID>\n  snowman messages get --channel <UUID> --limit 50 --kinds 1,1984"
     )]
     Get {
         /// Channel UUID
@@ -471,7 +471,7 @@ pub enum MessagesCmd {
     },
     /// Full-text search across messages
     #[command(
-        after_help = "Examples:\n  buzz messages search --query checkout\n  buzz messages search --author npub1... --since 1783497600\n  buzz messages search --author Aaron --query checkout --limit 20"
+        after_help = "Examples:\n  snowman messages search --query checkout\n  snowman messages search --author npub1... --since 1783497600\n  snowman messages search --author Aaron --query checkout --limit 20"
     )]
     Search {
         /// Search query string (optional when --author is given)
@@ -502,7 +502,7 @@ pub enum MessagesCmd {
 pub enum ChannelsCmd {
     /// List channels visible to the current identity
     #[command(
-        after_help = "Examples:\n  buzz channels list\n  buzz channels list --visibility open"
+        after_help = "Examples:\n  snowman channels list\n  snowman channels list --visibility open"
     )]
     List {
         /// Filter by visibility
@@ -523,7 +523,7 @@ pub enum ChannelsCmd {
     },
     /// Search channels by human-readable name
     #[command(
-        after_help = "Examples:\n  buzz channels search --query composer\n  buzz channels search --query buzz-chat-composer --exact\n  buzz channels search --query design --include-archived"
+        after_help = "Examples:\n  snowman channels search --query composer\n  snowman channels search --query snowman-chat-composer --exact\n  snowman channels search --query design --include-archived"
     )]
     Search {
         /// Search query (case-insensitive substring of channel name)
@@ -541,7 +541,7 @@ pub enum ChannelsCmd {
     },
     /// Create a new channel
     #[command(
-        after_help = "Examples:\n  buzz channels create --name general --type stream --visibility open\n  buzz channels create --name design --type forum --visibility open --description \"Design discussions\"\n  buzz channels create --name standup --type stream --visibility open --ttl 3600  # ephemeral, archived after 1h idle\n  buzz channels create --name project-x --template \"Buzz Team\"  # type/visibility/canvas/roster from the template; explicit flags override"
+        after_help = "Examples:\n  snowman channels create --name general --type stream --visibility open\n  snowman channels create --name design --type forum --visibility open --description \"Design discussions\"\n  snowman channels create --name standup --type stream --visibility open --ttl 3600  # ephemeral, archived after 1h idle\n  snowman channels create --name project-x --template \"Snowman Team\"  # type/visibility/canvas/roster from the template; explicit flags override"
     )]
     Create {
         /// Channel name
@@ -1299,7 +1299,7 @@ pub enum PatchesCmd {
 pub enum PrCmd {
     /// Open a git pull request (NIP-34 kind:1618)
     #[command(
-        after_help = "Examples:\n  buzz pr open --repo-owner <hex> --repo-id myrepo --subject 'Fix bug' --body-file - --commit $(git rev-parse HEAD) --clone https://relay/git/owner/myrepo --branch-name fix-bug\n  buzz pr update --repo-owner <hex> --repo-id myrepo --pr <event> --pr-author <hex> --commit $(git rev-parse HEAD) --clone https://relay/git/owner/myrepo"
+        after_help = "Examples:\n  snowman pr open --repo-owner <hex> --repo-id myrepo --subject 'Fix bug' --body-file - --commit $(git rev-parse HEAD) --clone https://relay/git/owner/myrepo --branch-name fix-bug\n  snowman pr update --repo-owner <hex> --repo-id myrepo --pr <event> --pr-author <hex> --commit $(git rev-parse HEAD) --clone https://relay/git/owner/myrepo"
     )]
     Open {
         /// Repo owner pubkey (64-char hex)

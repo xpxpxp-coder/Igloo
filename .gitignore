@@ -2,6 +2,8 @@
 /target/
 /dist/
 /admin-web/dist/
+__pycache__/
+*.py[cod]
 
 # lefthook-generated hook scripts (machine-specific)
 .hooks/
@@ -68,3 +70,11 @@ identity.key
 
 # Helm dependency tarballs — regenerable from Chart.lock via `helm dependency build`
 deploy/charts/*/charts/*.tgz
+
+# Terraform local state/cache (provider lock files remain versioned)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log

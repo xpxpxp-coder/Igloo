@@ -1,11 +1,11 @@
 {
-  "name": "buzz-admin-web",
+  "name": "snowman-operations-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node ../scripts/check-snowman-ui-budgets.mjs admin-web dist",
     "typecheck": "tsc --noEmit",
     "lint": "biome lint .",
     "check": "biome check . && pnpm typecheck && pnpm test",

@@ -1,8 +1,7 @@
 //! Path resolution and file I/O shared across dev-mcp tools.
 //!
 //! `resolve_path` resolves and canonicalizes a user-supplied path against a
-//! workspace root. No containment enforcement — the resolved path may land
-//! anywhere on the filesystem (consistent with the `shell` tool's posture).
+//! workspace root and rejects traversal or symlink escape.
 //!
 //! `read_text_file` builds on `resolve_path` to provide the full
 //! resolve → stat → size-check → read → UTF-8 decode pipeline shared by
@@ -18,6 +17,8 @@ pub(crate) const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 /// the result. Returns an error string suitable for `ErrorData::invalid_params`
 /// if the path cannot be resolved.
 pub(crate) fn resolve_path(root: &Path, path: &str) -> Result<PathBuf, String> {
+    let root = std::fs::canonicalize(root)
+        .map_err(|e| format!("workspace root is not accessible: {} ({e})", root.display()))?;
     // The agent runs inside MSYS bash and naturally hands us MSYS-form absolute
     // paths (`/c/Users/...`). On Windows those are NOT `is_absolute()` (a leading
     // `/` has no drive `Prefix`), so without translation they'd take the relative
@@ -38,7 +39,38 @@ pub(crate) fn resolve_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     let resolved = std::fs::canonicalize(&candidate)
         .map_err(|e| format!("path not accessible: {} ({e})", candidate.display()))?;
 
+    if !resolved.starts_with(&root) {
+        return Err(format!(
+            "path escapes the Snowman agent workspace: {}",
+            resolved.display()
+        ));
+    }
+
     Ok(resolved)
+}
+
+pub(crate) fn resolve_workspace_root(
+    state: &SharedState,
+    workdir: Option<&str>,
+) -> Result<PathBuf, String> {
+    let allowed_root = std::fs::canonicalize(&state.cwd).map_err(|e| {
+        format!(
+            "Snowman agent workspace is not accessible: {} ({e})",
+            state.cwd.display()
+        )
+    })?;
+    let requested = workdir
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.cwd.clone());
+    let requested = std::fs::canonicalize(&requested)
+        .map_err(|e| format!("workdir is not accessible: {} ({e})", requested.display()))?;
+    if !requested.starts_with(&allowed_root) {
+        return Err(format!(
+            "workdir escapes the Snowman agent workspace: {}",
+            requested.display()
+        ));
+    }
+    Ok(requested)
 }
 
 /// Translate the MSYS/Cygwin absolute path forms bash would accept into a
@@ -104,10 +136,8 @@ pub(crate) fn read_text_file(
     path: &str,
     workdir: Option<&str>,
 ) -> Result<(PathBuf, String), ErrorData> {
-    let workspace_root: PathBuf = match workdir {
-        Some(w) => PathBuf::from(w),
-        None => state.cwd.clone(),
-    };
+    let workspace_root =
+        resolve_workspace_root(state, workdir).map_err(|e| ErrorData::invalid_params(e, None))?;
     let target = match resolve_path(&workspace_root, path) {
         Ok(t) => t,
         Err(e) => return Err(ErrorData::invalid_params(e, None)),
@@ -186,7 +216,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn resolve_path_allows_outside_workspace() {
+    fn resolve_path_rejects_outside_workspace() {
         let dir = tempdir().expect("tempdir");
         let inside = dir.path().join("file.txt");
         fs::write(&inside, b"x").expect("write");
@@ -198,9 +228,8 @@ mod tests {
             fs::write(&outside, b"y").expect("write outside");
             let link = dir.path().join("link.txt");
             std::os::unix::fs::symlink(&outside, &link).expect("symlink");
-            let resolved = resolve_path(dir.path(), "link.txt").expect("resolve");
-            let outside_canon = std::fs::canonicalize(&outside).expect("canonicalize");
-            assert_eq!(resolved, outside_canon);
+            let error = resolve_path(dir.path(), "link.txt").unwrap_err();
+            assert!(error.contains("escapes the Snowman agent workspace"));
             let _ = fs::remove_file(&outside);
         }
         // Resolves a normal path inside.

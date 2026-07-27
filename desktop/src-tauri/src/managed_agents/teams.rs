@@ -28,14 +28,24 @@ struct BuiltInTeam {
     id: &'static str,
     name: &'static str,
     description: Option<&'static str>,
+    instructions: Option<&'static str>,
     persona_ids: &'static [&'static str],
 }
 
 const BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
     id: "builtin-team:welcome",
-    name: "Welcome Team",
-    description: Some("A friendly starter trio ready to help you plan, create, and ship."),
-    persona_ids: &["builtin:fizz", "builtin:honey", "builtin:bumble"],
+    name: "Snowman AI Workforce",
+    description: Some("A governed specialist team for research, analysis, delivery, and independent review."),
+    instructions: Some(
+        "Snowman Lead owns decomposition, routing, dependency tracking, and synthesis. Specialists work only within their assigned scope and capability grants, record evidence and reusable context, and return explicit status and artifact references. Quality & Risk Reviewer evaluates material work before release. Execute reversible low-risk next steps automatically only when authorized; stop at human gates for external communications, destructive changes, sensitive access, spend, production activation, or consequential decisions. Never move raw client rows, transcripts, credentials, or private keys into the command center.",
+    ),
+    persona_ids: &[
+        "builtin:fizz",
+        "builtin:bumble",
+        "builtin:snowman-analyst",
+        "builtin:honey",
+        "builtin:snowman-reviewer",
+    ],
 }];
 
 // Built-in teams that have been retired. A stored copy that still exactly
@@ -46,6 +56,7 @@ const RETIRED_BUILT_IN_TEAMS: &[BuiltInTeam] = &[BuiltInTeam {
     id: "builtin-team:fizz",
     name: "Fizz",
     description: Some("Fizz works carefully and collaboratively."),
+    instructions: None,
     persona_ids: &["builtin:fizz"],
 }];
 
@@ -56,7 +67,7 @@ fn built_in_team_records(built_ins: &[BuiltInTeam], now: &str) -> Vec<TeamRecord
             id: team.id.to_string(),
             name: team.name.to_string(),
             description: team.description.map(|s| s.to_string()),
-            instructions: None,
+            instructions: team.instructions.map(str::to_string),
             persona_ids: team.persona_ids.iter().map(|s| s.to_string()).collect(),
             is_builtin: true,
             source_dir: None,

@@ -853,9 +853,13 @@ pub(crate) fn collect_same_instance_orphans(
     std::collections::HashSet::new()
 }
 
-/// Binary names for the Buzz desktop/Tauri process. Used by dead-instance
-/// detection to confirm the owning desktop is still alive.
+/// Binary names for the Snowman desktop/Tauri process plus retained legacy
+/// names. Used by dead-instance detection to confirm the owning desktop is
+/// still alive during upgrades from the upstream-derived application.
 const DESKTOP_BINARY_NAMES: &[&str] = &[
+    "Snowman Command Center",
+    "snowman-command-center",
+    "snowman-command-",
     "Buzz",
     "buzz-desktop",
     "buzz_desktop",
@@ -864,7 +868,7 @@ const DESKTOP_BINARY_NAMES: &[&str] = &[
     "buzz-desktop.bi",
 ];
 
-/// Check if a process name matches a known Buzz desktop binary.
+/// Check if a process name matches a current or legacy desktop binary.
 fn is_desktop_binary(name: &str) -> bool {
     DESKTOP_BINARY_NAMES.contains(&name)
 }
@@ -2000,7 +2004,7 @@ pub fn spawn_agent_child(
     }
     configure_runtime_cli(&mut command, runtime_meta);
 
-    // Buzz shared compute is stored as a native provider; derive the OpenAI-compatible
+    // Snowman shared compute is stored as a native provider; derive the OpenAI-compatible
     // transport at spawn time and scrub any unrelated ambient OpenAI key.
     #[cfg(feature = "mesh-llm")]
     if effective_provider == Some(super::RELAY_MESH_PROVIDER_ID) {

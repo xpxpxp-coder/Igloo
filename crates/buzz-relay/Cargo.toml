@@ -24,6 +24,7 @@ buzz-pubsub = { workspace = true }
 buzz-audit = { workspace = true }
 buzz-search = { workspace = true }
 buzz-relay-mesh = { workspace = true }
+snowman-workforce = { workspace = true }
 async-trait = "0.1"
 postcard = { workspace = true }
 axum = { workspace = true }
@@ -60,7 +61,7 @@ sqlx = { workspace = true }
 reqwest = { workspace = true }
 base64 = "0.22"
 buzz-sdk = { workspace = true }
-buzz-workflow = { workspace = true, features = ["reqwest"] }
+buzz-workflow = { workspace = true }
 buzz-media = { workspace = true }
 s3 = { version = "0.37", package = "rust-s3", default-features = false, features = ["tokio-rustls-tls", "fail-on-err", "tags"] }
 tempfile = "3"
@@ -69,6 +70,9 @@ infer = "0.19"
 serde_yaml      = { workspace = true }
 sha2            = { workspace = true }
 hmac            = { workspace = true }
+aws-config      = { workspace = true }
+aws-sdk-kms     = { workspace = true }
+snowman-aws-auth = { workspace = true }
 subtle          = { workspace = true }
 rand            = { workspace = true }
 hex             = { workspace = true }

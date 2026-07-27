@@ -1,6 +1,6 @@
-# Buzz Helm Chart
+# Snowman Command Center Helm Chart
 
-[Buzz](https://github.com/block/buzz) is a Nostr-based messaging platform for human–agent collaboration: a single relay binary serving WebSocket + REST + web UI, backed by PostgreSQL, Redis, and S3-compatible object storage.
+[Snowman Command Center](https://github.com/snowman-ai-org/snowman-command-center) is a governed human and agent operations platform: a relay service serving WebSocket + REST + web UI, backed by PostgreSQL, Redis, and S3-compatible object storage.
 
 This chart has two operating profiles selected by values:
 
@@ -12,7 +12,7 @@ This chart has two operating profiles selected by values:
 ## Quickstart (eval only)
 
 ```sh
-helm install buzz oci://ghcr.io/block/buzz/charts/buzz --version 0.1.0 \
+helm install buzz oci://ghcr.io/snowman-ai-org/snowman-command-center/charts/buzz --version 0.1.0 \
   --create-namespace --namespace buzz \
   --set quickstart=true \
   --set postgresql.enabled=true \
@@ -54,7 +54,7 @@ The chart fails at `helm install` / `helm template` time with a clear message if
 
 ## Device pairing relay
 
-The chart can run Buzz's stateless pairing WebSocket relay as an independent
+The chart can run Snowman's stateless pairing WebSocket relay as an independent
 Deployment and Service using the same image as the main relay:
 
 ```yaml
@@ -63,7 +63,7 @@ pairingRelay:
   url: wss://pairing.example.com
 ```
 
-`pairingRelay.url` is advertised in the main relay's NIP-11 document so Buzz
+`pairingRelay.url` is advertised in the main relay's NIP-11 document so Snowman
 clients connect directly to the dedicated endpoint. The chart does not create
 an Ingress or HTTPRoute for the pairing Service; route the public hostname to
 `<release>-buzz-pairing:5000` with your platform's ingress configuration.
@@ -138,7 +138,7 @@ Save these. Losing any of them is data loss. See NOTES.txt printed by `helm inst
 ## Releasing
 
 The chart is published to GHCR as an OCI artifact at
-`oci://ghcr.io/block/buzz/charts/buzz` by the `helm chart` workflow
+`oci://ghcr.io/snowman-ai-org/snowman-command-center/charts/buzz` by the `helm chart` workflow
 (`.github/workflows/helm-chart.yml`), versioned independently of the desktop app
 and the relay image via its own `chart-v*` tags. Every PR/`main` push still
 lints, unit-tests, and render-checks the chart; only a `chart-v*` tag publishes,

@@ -416,8 +416,8 @@ impl DesktopMeshRuntime {
                     .console_port(console_port)
                     // No-leak invariants: never publish mesh presence, never
                     // auto-discover other meshes, no public Nostr relays.
-                    // Iroh relays are transport-only and enabled by default
-                    // (see MESH_IROH_RELAYS_ENV); everything else stays closed.
+                    // Iroh relays are transport-only and disabled unless an
+                    // explicit Snowman-controlled allowlist is configured.
                     .publish(false)
                     .auto_join(false)
                     .discovery_mode(MeshDiscoveryMode::Nostr)
@@ -425,7 +425,6 @@ impl DesktopMeshRuntime {
                     .console_ui(true);
                 builder = match iroh_relay_mode()? {
                     IrohRelayMode::Disabled => builder.disable_iroh_relays(true),
-                    IrohRelayMode::Default => builder.disable_iroh_relays(false),
                     IrohRelayMode::Custom(urls) => builder
                         .disable_iroh_relays(false)
                         .iroh_relays(urls.into_iter().map(|url| url.to_string())),
@@ -462,7 +461,6 @@ impl DesktopMeshRuntime {
                     .console_ui(true);
                 builder = match iroh_relay_mode()? {
                     IrohRelayMode::Disabled => builder.disable_iroh_relays(true),
-                    IrohRelayMode::Default => builder.disable_iroh_relays(false),
                     IrohRelayMode::Custom(urls) => builder
                         .disable_iroh_relays(false)
                         .iroh_relays(urls.into_iter().map(|url| url.to_string())),

@@ -1,9 +1,8 @@
 import * as React from "react";
 
-import { BuzzMark } from "@/shared/ui/buzz-logo/BuzzMark";
-import { FlappingBee } from "@/shared/ui/buzz-logo/FlappingBee";
+import { SnowmanMark } from "@/shared/ui/snowman-logo/SnowmanMark";
 
-type Bee = {
+type SnowParticle = {
   top: string;
   left: string;
   size: number;
@@ -12,61 +11,80 @@ type Bee = {
 };
 
 const WHITE = "#FFFFFF";
-const YELLOW = "#E9E94F";
+const GLACIER = "#55C2FF";
 
 // Fixed scatter so the field doesn't shimmer between renders.
-const BEES: Bee[] = [
+const SNOW_PARTICLES: SnowParticle[] = [
   { top: "4%", left: "27%", size: 34, rotate: -12, color: WHITE },
-  { top: "7%", left: "58%", size: 28, rotate: 18, color: YELLOW },
+  { top: "7%", left: "58%", size: 28, rotate: 18, color: GLACIER },
   { top: "5%", left: "88%", size: 32, rotate: -20, color: WHITE },
-  { top: "13%", left: "12%", size: 36, rotate: 18, color: YELLOW },
+  { top: "13%", left: "12%", size: 36, rotate: 18, color: GLACIER },
   { top: "12%", left: "73%", size: 26, rotate: -8, color: WHITE },
-  { top: "18%", left: "44%", size: 24, rotate: 25, color: YELLOW },
+  { top: "18%", left: "44%", size: 24, rotate: 25, color: GLACIER },
   { top: "22%", left: "90%", size: 34, rotate: 10, color: WHITE },
-  { top: "28%", left: "5%", size: 28, rotate: -18, color: YELLOW },
-  { top: "31%", left: "21%", size: 24, rotate: 8, color: YELLOW },
+  { top: "28%", left: "5%", size: 28, rotate: -18, color: GLACIER },
+  { top: "31%", left: "21%", size: 24, rotate: 8, color: GLACIER },
   { top: "35%", left: "84%", size: 32, rotate: -14, color: WHITE },
-  { top: "45%", left: "13%", size: 32, rotate: 20, color: YELLOW },
-  { top: "47%", left: "93%", size: 26, rotate: -6, color: YELLOW },
+  { top: "45%", left: "13%", size: 32, rotate: 20, color: GLACIER },
+  { top: "47%", left: "93%", size: 26, rotate: -6, color: GLACIER },
   { top: "55%", left: "30%", size: 26, rotate: -24, color: WHITE },
-  { top: "57%", left: "70%", size: 34, rotate: 12, color: YELLOW },
+  { top: "57%", left: "70%", size: 34, rotate: 12, color: GLACIER },
   { top: "63%", left: "8%", size: 34, rotate: 16, color: WHITE },
-  { top: "66%", left: "88%", size: 28, rotate: -10, color: YELLOW },
-  { top: "72%", left: "48%", size: 26, rotate: 22, color: YELLOW },
+  { top: "66%", left: "88%", size: 28, rotate: -10, color: GLACIER },
+  { top: "72%", left: "48%", size: 26, rotate: 22, color: GLACIER },
   { top: "76%", left: "18%", size: 32, rotate: -16, color: WHITE },
-  { top: "80%", left: "64%", size: 28, rotate: 8, color: YELLOW },
+  { top: "80%", left: "64%", size: 28, rotate: 8, color: GLACIER },
   { top: "86%", left: "34%", size: 34, rotate: -20, color: WHITE },
-  { top: "88%", left: "80%", size: 32, rotate: 14, color: YELLOW },
-  { top: "92%", left: "10%", size: 26, rotate: -8, color: YELLOW },
+  { top: "88%", left: "80%", size: 32, rotate: 14, color: GLACIER },
+  { top: "92%", left: "10%", size: 26, rotate: -8, color: GLACIER },
   { top: "3%", left: "42%", size: 22, rotate: 14, color: WHITE },
-  { top: "9%", left: "5%", size: 24, rotate: -22, color: YELLOW },
-  { top: "16%", left: "62%", size: 30, rotate: -4, color: YELLOW },
+  { top: "9%", left: "5%", size: 24, rotate: -22, color: GLACIER },
+  { top: "16%", left: "62%", size: 30, rotate: -4, color: GLACIER },
   { top: "20%", left: "30%", size: 22, rotate: 12, color: WHITE },
-  { top: "26%", left: "52%", size: 26, rotate: -14, color: YELLOW },
+  { top: "26%", left: "52%", size: 26, rotate: -14, color: GLACIER },
   { top: "33%", left: "68%", size: 22, rotate: 24, color: WHITE },
-  { top: "40%", left: "40%", size: 24, rotate: -10, color: YELLOW },
-  { top: "42%", left: "78%", size: 28, rotate: 6, color: YELLOW },
+  { top: "40%", left: "40%", size: 24, rotate: -10, color: GLACIER },
+  { top: "42%", left: "78%", size: 28, rotate: 6, color: GLACIER },
   { top: "52%", left: "55%", size: 22, rotate: -18, color: WHITE },
-  { top: "60%", left: "42%", size: 28, rotate: 10, color: YELLOW },
+  { top: "60%", left: "42%", size: 28, rotate: 10, color: GLACIER },
   { top: "68%", left: "26%", size: 24, rotate: -6, color: WHITE },
-  { top: "70%", left: "76%", size: 30, rotate: 18, color: YELLOW },
+  { top: "70%", left: "76%", size: 30, rotate: 18, color: GLACIER },
   { top: "82%", left: "6%", size: 28, rotate: 22, color: WHITE },
-  { top: "84%", left: "50%", size: 24, rotate: -12, color: YELLOW },
-  { top: "94%", left: "60%", size: 28, rotate: 16, color: YELLOW },
+  { top: "84%", left: "50%", size: 24, rotate: -12, color: GLACIER },
+  { top: "94%", left: "60%", size: 28, rotate: 16, color: GLACIER },
   { top: "95%", left: "90%", size: 22, rotate: -24, color: WHITE },
 ];
 
 const REPEL_RADIUS = 180;
 const REPEL_STRENGTH = 110;
-// Autonomous wander: each bee drifts on its own smooth loop.
+// Autonomous wander: each snow crystal drifts on its own smooth loop.
 const WANDER_X = 26;
 const WANDER_Y = 20;
 
+function SnowCrystal({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      viewBox="0 0 32 32"
+    >
+      <path
+        d="M16 2v28M4 9l24 14M28 9 4 23M11 5l5 4 5-4M11 27l5-4 5 4M4 15l6-2-1-6M28 17l-6 2 1 6M28 15l-6-2 1-6M4 17l6 2-1 6"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
 export function LandingBees() {
   const fieldRef = React.useRef<HTMLDivElement>(null);
-  const beeRefs = React.useRef<(HTMLSpanElement | null)[]>([]);
+  const particleRefs = React.useRef<(HTMLSpanElement | null)[]>([]);
   const pointer = React.useRef<{ x: number; y: number } | null>(null);
-  const offsets = React.useRef(BEES.map(() => ({ x: 0, y: 0 })));
+  const offsets = React.useRef(SNOW_PARTICLES.map(() => ({ x: 0, y: 0 })));
 
   React.useEffect(() => {
     const field = fieldRef.current;
@@ -79,10 +97,10 @@ export function LandingBees() {
       const t = (now - start) / 1000;
       const rect = field.getBoundingClientRect();
       const p = pointer.current;
-      beeRefs.current.forEach((el, i) => {
+      particleRefs.current.forEach((el, i) => {
         if (!el) return;
-        const bee = BEES[i];
-        // Per-bee wander: two incommensurate sine waves, phase-shifted by index.
+        const particle = SNOW_PARTICLES[i];
+        // Per-particle wander: two smooth waves phase-shifted by index.
         const phase = i * 1.7;
         const wx =
           Math.sin(t * (0.7 + (i % 5) * 0.13) + phase) * WANDER_X +
@@ -93,8 +111,8 @@ export function LandingBees() {
         let rx = 0;
         let ry = 0;
         if (p) {
-          const cx = rect.left + (rect.width * parseFloat(bee.left)) / 100;
-          const cy = rect.top + (rect.height * parseFloat(bee.top)) / 100;
+          const cx = rect.left + (rect.width * parseFloat(particle.left)) / 100;
+          const cy = rect.top + (rect.height * parseFloat(particle.top)) / 100;
           const ox = cx - p.x;
           const oy = cy - p.y;
           const dist = Math.hypot(ox, oy);
@@ -110,7 +128,7 @@ export function LandingBees() {
         const cur = offsets.current[i];
         cur.x += (target.x - cur.x) * 0.12;
         cur.y += (target.y - cur.y) * 0.12;
-        el.style.transform = `translate(${cur.x}px, ${cur.y}px) rotate(${bee.rotate}deg)`;
+        el.style.transform = `translate(${cur.x}px, ${cur.y}px) rotate(${particle.rotate}deg)`;
       });
       raf = requestAnimationFrame(tick);
     };
@@ -142,25 +160,25 @@ export function LandingBees() {
       className="pointer-events-none absolute inset-0 overflow-hidden"
     >
       <span className="absolute left-6 top-12 block w-11 text-[#231E1E]">
-        <BuzzMark className="h-auto w-full" />
+        <SnowmanMark className="h-auto w-full" />
       </span>
-      {BEES.map((bee, i) => (
+      {SNOW_PARTICLES.map((particle, i) => (
         <span
-          key={`${bee.top}-${bee.left}`}
+          key={`${particle.top}-${particle.left}`}
           ref={(el) => {
-            beeRefs.current[i] = el;
+            particleRefs.current[i] = el;
           }}
           className="absolute block will-change-transform"
           style={{
-            top: bee.top,
-            left: bee.left,
-            width: bee.size,
-            color: bee.color,
-            transform: `rotate(${bee.rotate}deg)`,
+            top: particle.top,
+            left: particle.left,
+            width: particle.size,
+            color: particle.color,
+            transform: `rotate(${particle.rotate}deg)`,
             opacity: 0.9,
           }}
         >
-          <FlappingBee className="w-full" />
+          <SnowCrystal className="w-full drop-shadow-[0_0_8px_currentColor]" />
         </span>
       ))}
     </div>

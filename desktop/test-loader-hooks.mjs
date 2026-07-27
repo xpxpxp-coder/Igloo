@@ -1,4 +1,4 @@
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
@@ -63,7 +63,7 @@ export function resolve(specifier, context, nextResolve) {
   }
   if (specifier === "@features-manifest") {
     const resolved = path.join(repoRoot, "preview-features.json");
-    return nextResolve(resolved, context);
+    return nextResolve(pathToFileURL(resolved).href, context);
   }
   if (specifier.startsWith("@/")) {
     const stripped = specifier.slice(2);
@@ -73,7 +73,10 @@ export function resolve(specifier, context, nextResolve) {
     // Otherwise paths like `@/.../foo.mjs` would be coerced into `foo.mjs.ts`
     // and fail to resolve.
     const resolved = resolveSourcePath(`${srcRoot}/${stripped}`);
-    return nextResolve(resolved ?? `${srcRoot}/${stripped}`, context);
+    return nextResolve(
+      pathToFileURL(resolved ?? `${srcRoot}/${stripped}`).href,
+      context,
+    );
   }
   // Resolve extensionless relative TS imports (e.g. `./parseImeta`) — the app's
   // bundler adds the extension, but node's ESM resolver does not. Without this,
@@ -90,7 +93,7 @@ export function resolve(specifier, context, nextResolve) {
       path.resolve(path.dirname(parentPath), specifier),
     );
     if (resolved) {
-      return nextResolve(resolved, context);
+      return nextResolve(pathToFileURL(resolved).href, context);
     }
     return nextResolve(specifier, context);
   }

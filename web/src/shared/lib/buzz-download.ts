@@ -1,15 +1,17 @@
-export const BUZZ_RELEASES_URL = "https://github.com/block/buzz/releases";
-const BUZZ_RELEASES_API_URL =
-  "https://api.github.com/repos/block/buzz/releases?per_page=10";
-const CACHE_KEY = "buzz.latestDownload.v1";
+// Same-origin Snowman routes are the only release authority. The edge/service
+// behind these paths may read a Snowman-controlled registry, but the browser
+// never contacts an upstream GitHub or Block endpoint directly.
+export const SNOWMAN_RELEASES_URL = "/downloads";
+const SNOWMAN_RELEASES_API_URL = "/api/releases?per_page=10";
+const CACHE_KEY = "snowman.latestDownload.v1";
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
-export type BuzzDownloadPlatform = {
+export type SnowmanDownloadPlatform = {
   operatingSystem: "linux" | "macos" | "windows" | "unknown";
   architecture: "arm64" | "x64" | "unknown";
 };
 
-type GitHubRelease = {
+type ReleaseManifest = {
   draft: boolean;
   prerelease: boolean;
   assets: Array<{ name: string; browser_download_url: string }>;
@@ -26,7 +28,7 @@ type UserAgentData = {
 function normalizeOperatingSystem(
   navigatorValue: Navigator,
   userAgentData?: UserAgentData,
-): BuzzDownloadPlatform["operatingSystem"] {
+): SnowmanDownloadPlatform["operatingSystem"] {
   const userAgent = navigatorValue.userAgent.toLowerCase();
   const platform = (
     userAgentData?.platform ??
@@ -70,16 +72,16 @@ function normalizeOperatingSystem(
 
 function normalizeArchitecture(
   value: string,
-): BuzzDownloadPlatform["architecture"] {
+): SnowmanDownloadPlatform["architecture"] {
   const normalized = value.toLowerCase();
   if (/arm|aarch64/.test(normalized)) return "arm64";
   if (/x86|x64|amd64|64/.test(normalized)) return "x64";
   return "unknown";
 }
 
-export async function detectBuzzDownloadPlatform(
+export async function detectSnowmanDownloadPlatform(
   navigatorValue: Navigator,
-): Promise<BuzzDownloadPlatform> {
+): Promise<SnowmanDownloadPlatform> {
   const userAgentData = (
     navigatorValue as Navigator & { userAgentData?: UserAgentData }
   ).userAgentData;
@@ -107,7 +109,7 @@ export async function detectBuzzDownloadPlatform(
   return { operatingSystem, architecture };
 }
 
-function assetPattern(platform: BuzzDownloadPlatform): RegExp | undefined {
+function assetPattern(platform: SnowmanDownloadPlatform): RegExp | undefined {
   switch (platform.operatingSystem) {
     case "macos":
       if (platform.architecture === "arm64") return /_aarch64\.dmg$/i;
@@ -124,9 +126,9 @@ function assetPattern(platform: BuzzDownloadPlatform): RegExp | undefined {
   }
 }
 
-export function selectBuzzDownloadUrl(
-  releases: GitHubRelease[],
-  platform: BuzzDownloadPlatform,
+export function selectSnowmanDownloadUrl(
+  releases: ReleaseManifest[],
+  platform: SnowmanDownloadPlatform,
 ): string | undefined {
   const pattern = assetPattern(platform);
   if (!pattern) return undefined;
@@ -134,18 +136,22 @@ export function selectBuzzDownloadUrl(
   for (const release of releases) {
     if (release.draft || release.prerelease) continue;
     const asset = release.assets.find(({ name }) => pattern.test(name));
-    if (asset) return asset.browser_download_url;
+    if (
+      asset?.browser_download_url.startsWith("/") &&
+      !asset.browser_download_url.startsWith("//")
+    )
+      return asset.browser_download_url;
   }
   return undefined;
 }
 
-export async function resolveBuzzDownloadUrlForPlatform(
-  platform: BuzzDownloadPlatform,
+export async function resolveSnowmanDownloadUrlForPlatform(
+  platform: SnowmanDownloadPlatform,
 ): Promise<string> {
   try {
     const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) ?? "null") as {
       expiresAt: number;
-      platform: BuzzDownloadPlatform;
+      platform: SnowmanDownloadPlatform;
       url: string;
     } | null;
     if (
@@ -161,15 +167,15 @@ export async function resolveBuzzDownloadUrlForPlatform(
   }
 
   try {
-    const response = await fetch(BUZZ_RELEASES_API_URL, {
-      headers: { Accept: "application/vnd.github+json" },
+    const response = await fetch(SNOWMAN_RELEASES_API_URL, {
+      headers: { Accept: "application/json" },
     });
-    if (!response.ok) return BUZZ_RELEASES_URL;
-    const url = selectBuzzDownloadUrl(
-      (await response.json()) as GitHubRelease[],
+    if (!response.ok) return SNOWMAN_RELEASES_URL;
+    const url = selectSnowmanDownloadUrl(
+      (await response.json()) as ReleaseManifest[],
       platform,
     );
-    if (!url) return BUZZ_RELEASES_URL;
+    if (!url) return SNOWMAN_RELEASES_URL;
     try {
       sessionStorage.setItem(
         CACHE_KEY,
@@ -184,12 +190,12 @@ export async function resolveBuzzDownloadUrlForPlatform(
     }
     return url;
   } catch {
-    return BUZZ_RELEASES_URL;
+    return SNOWMAN_RELEASES_URL;
   }
 }
 
-export async function resolveBuzzDownloadUrl(): Promise<string> {
-  return resolveBuzzDownloadUrlForPlatform(
-    await detectBuzzDownloadPlatform(navigator),
+export async function resolveSnowmanDownloadUrl(): Promise<string> {
+  return resolveSnowmanDownloadUrlForPlatform(
+    await detectSnowmanDownloadPlatform(navigator),
   );
 }

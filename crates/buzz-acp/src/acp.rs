@@ -20,6 +20,64 @@ use crate::usage::{TurnUsage, UsageTracker};
 /// Lines exceeding this limit are rejected to prevent OOM from rogue agents.
 const MAX_LINE_SIZE: usize = 10_000_000; // 10 MB
 
+/// Maximum final-answer text retained for one prompt. Tool output, thoughts,
+/// and raw protocol frames are never included in this buffer.
+const MAX_CAPTURED_TURN_OUTPUT: usize = 1_000_000;
+
+/// Long-lived identities and provider/cloud credentials belong to the harness
+/// or a purpose-specific Snowman broker, never the untrusted ACP subprocess.
+const SENSITIVE_AGENT_ENV_KEYS: &[&str] = &[
+    "BUZZ_PRIVATE_KEY",
+    "NOSTR_PRIVATE_KEY",
+    "BUZZ_AUTH_TAG",
+    "BUZZ_API_TOKEN",
+    "BUZZ_ACP_PRIVATE_KEY",
+    "BUZZ_ACP_API_TOKEN",
+    "SNOWMAN_AGENT_SHELL_CAPABILITY",
+    "SNOWMAN_AGENT_NETWORK_CAPABILITY",
+    "SNOWMAN_AGENT_JOB_ID",
+    "SNOWMAN_AGENT_TENANT_ID",
+    "SNOWMAN_AGENT_JOB_TOKEN",
+    "SNOWMAN_AGENT_MODEL_TOKEN",
+    "SNOWMAN_AGENT_BROKER_TOKEN",
+    "SNOWMAN_AGENT_CONTEXT_TOKEN",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_COMPAT_API_KEY",
+    "OPENAI_COMPAT_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "DATABRICKS_TOKEN",
+    "DATABRICKS_HOST",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "CLOUDFLARE_API_TOKEN",
+    "CLOUDFLARE_API_KEY",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "SSH_AUTH_SOCK",
+    "SSH_AGENT_PID",
+    "GIT_ASKPASS",
+    "GIT_SSH_COMMAND",
+    "KUBECONFIG",
+    "DOCKER_HOST",
+];
+
+fn is_sensitive_agent_env(key: &str) -> bool {
+    SENSITIVE_AGENT_ENV_KEYS
+        .iter()
+        .any(|sensitive| sensitive.eq_ignore_ascii_case(key))
+}
+
 /// An MCP server configuration passed to `session/new`.
 ///
 /// Corresponds to the `McpServerStdio` variant in the ACP schema.
@@ -55,6 +113,30 @@ pub enum StopReason {
     /// Agent refused the prompt (`"refusal"`).
     /// Note: refused turns are dropped from history by the agent.
     Refusal,
+}
+
+/// Local ACP permission-request handling policy.
+///
+/// Desktop compatibility uses [`AllowOnce`](Self::AllowOnce). Governed remote
+/// execution must use [`RejectOnce`](Self::RejectOnce) so a runtime cannot
+/// convert an adapter-local permission prompt into authority that bypasses the
+/// Snowman action broker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionPolicy {
+    /// Select an adapter-advertised `allow_once` option when present.
+    AllowOnce,
+    /// Select `reject_once`, or cancel the request when no rejection option is
+    /// advertised.
+    RejectOnce,
+}
+
+/// Bounded user-facing text captured from one ACP turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedTurnOutput {
+    /// Concatenated `agent_message_chunk` text.
+    pub text: String,
+    /// True when additional bytes were discarded at the capture ceiling.
+    pub truncated: bool,
 }
 
 impl StopReason {
@@ -200,6 +282,12 @@ pub struct AcpClient {
     /// deltas. Both goose and buzz-agent emit this notification; goose gates
     /// on client capability advertisement, buzz-agent emits unconditionally.
     goose_usage: UsageTracker,
+    /// How adapter-originated permission requests are answered.
+    permission_policy: PermissionPolicy,
+    /// Bounded final-answer text for the current turn only.
+    captured_turn_output: String,
+    /// Whether final-answer capture reached its byte ceiling.
+    captured_turn_output_truncated: bool,
 }
 
 /// Recursively merge `overlay` into `base`, with `overlay` winning on scalar/shape
@@ -242,8 +330,8 @@ fn deep_merge(
 /// 3. **Parent-env precedence** — if `parent_codex_config` is `Some`, its keys are
 ///    deep-merged into the result (parent wins on colliding keys at every nesting level;
 ///    unrelated keys from either side survive).
-/// 4. **Forced overlay** — `sandbox_workspace_write.network_access = true` is applied
-///    last so relay access is guaranteed regardless of operator / persona config.
+/// 4. **Forced overlay** — `sandbox_workspace_write.network_access = false` is applied
+///    last so parent/persona configuration cannot widen tool egress.
 ///
 /// When `has_generated_codex_config` is false, the function returns `None` and the
 /// caller handles any persona-supplied `CODEX_CONFIG` with ordinary operator-wins
@@ -324,18 +412,18 @@ pub(crate) fn build_codex_config_env(
         }
     }
 
-    // Force sandbox_workspace_write.network_access = true (our invariant, always wins).
+    // Force sandbox_workspace_write.network_access = false (our invariant, always wins).
     let sws_entry = base
         .entry("sandbox_workspace_write")
         .or_insert_with(|| serde_json::json!({}));
     match sws_entry {
         serde_json::Value::Object(sws_obj) => {
-            sws_obj.insert("network_access".to_string(), serde_json::Value::Bool(true));
+            sws_obj.insert("network_access".to_string(), serde_json::Value::Bool(false));
         }
         other => {
             return Err(AcpError::Protocol(format!(
                 "CODEX_CONFIG sandbox_workspace_write is not an object (got {}); \
-                 cannot set network_access=true",
+                 cannot set network_access=false",
                 other
             )));
         }
@@ -401,7 +489,7 @@ impl AcpClient {
     ///
     /// `has_generated_codex_config` must be true when `codex_network_env()` successfully
     /// injected a `CODEX_CONFIG` entry into `extra_env`.  The spawn path uses it to
-    /// trigger the recursive merge + forced `network_access=true` in
+    /// trigger the recursive merge + forced `network_access=false` in
     /// `build_codex_config_env`.  Pass `false` for test spawns and non-Codex agents.
     ///
     /// After spawning, call [`initialize`](Self::initialize) before any other method.
@@ -411,17 +499,51 @@ impl AcpClient {
         extra_env: &[(String, String)],
         has_generated_codex_config: bool,
     ) -> Result<Self, AcpError> {
+        Self::spawn_with_stderr(command, args, extra_env, has_generated_codex_config, true).await
+    }
+
+    /// Spawn an agent for governed remote execution without inheriting stderr.
+    ///
+    /// Adapter diagnostics can contain prompts, responses, or tool arguments.
+    /// The remote executor therefore discards the child diagnostic stream and
+    /// records only Snowman-generated lifecycle and outcome receipts.
+    pub async fn spawn_governed(
+        command: &str,
+        args: &[String],
+        extra_env: &[(String, String)],
+        has_generated_codex_config: bool,
+    ) -> Result<Self, AcpError> {
+        Self::spawn_with_stderr(command, args, extra_env, has_generated_codex_config, false).await
+    }
+
+    async fn spawn_with_stderr(
+        command: &str,
+        args: &[String],
+        extra_env: &[(String, String)],
+        has_generated_codex_config: bool,
+        inherit_stderr: bool,
+    ) -> Result<Self, AcpError> {
         use std::process::Stdio;
 
         let mut cmd = tokio::process::Command::new(command);
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            // Inherit stderr so agent logs are visible in the harness terminal.
-            .stderr(Stdio::inherit())
+            .stderr(if inherit_stderr {
+                // Local interactive harnesses retain operator diagnostics.
+                Stdio::inherit()
+            } else {
+                // Governed jobs must not copy prompt or tool content into the
+                // container log stream through adapter-controlled diagnostics.
+                Stdio::null()
+            })
             // Ensure the child is killed when the AcpClient is dropped (best-effort).
             // Callers MUST still call shutdown().await for guaranteed cleanup.
             .kill_on_drop(true);
+
+        for key in SENSITIVE_AGENT_ENV_KEYS {
+            cmd.env_remove(key);
+        }
 
         // Per-persona env vars (e.g., GOOSE_PROVIDER, BUZZ_AGENT_PROVIDER).
         // For most keys, operator precedence wins: skip injection if already set
@@ -429,7 +551,7 @@ impl AcpClient {
         //
         // CODEX_CONFIG is handled specially via build_codex_config_env:
         //   • has_generated_codex_config=true: merge all CODEX_CONFIG entries + parent
-        //     recursively and force network_access=true.
+        //     recursively and force network_access=false.
         //   • has_generated_codex_config=false: return None; any persona-supplied
         //     CODEX_CONFIG falls through to the normal operator-wins loop below.
         let has_codex_config = extra_env.iter().any(|(k, _)| k == "CODEX_CONFIG");
@@ -448,6 +570,13 @@ impl AcpClient {
         let codex_merge_active = codex_config_value.is_some();
 
         for (key, value) in extra_env {
+            if is_sensitive_agent_env(key) {
+                tracing::warn!(
+                    key,
+                    "refusing to forward sensitive environment key to ACP agent"
+                );
+                continue;
+            }
             if key == "CODEX_CONFIG" && codex_merge_active {
                 // Handled by build_codex_config_env; skip here to avoid double-setting.
                 continue;
@@ -496,7 +625,23 @@ impl AcpClient {
             active_run_id: None,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
+            permission_policy: PermissionPolicy::AllowOnce,
+            captured_turn_output: String::new(),
+            captured_turn_output_truncated: false,
         })
+    }
+
+    /// Set how adapter-local permission requests are handled.
+    pub fn set_permission_policy(&mut self, policy: PermissionPolicy) {
+        self.permission_policy = policy;
+    }
+
+    /// Consume the bounded final-answer text captured from the last prompt.
+    pub fn take_captured_turn_output(&mut self) -> CapturedTurnOutput {
+        CapturedTurnOutput {
+            text: std::mem::take(&mut self.captured_turn_output),
+            truncated: std::mem::take(&mut self.captured_turn_output_truncated),
+        }
     }
 
     /// Attach a local observer feed to this ACP client.
@@ -680,6 +825,8 @@ impl AcpClient {
         idle_timeout: std::time::Duration,
         max_duration: std::time::Duration,
     ) -> Result<StopReason, AcpError> {
+        self.captured_turn_output.clear();
+        self.captured_turn_output_truncated = false;
         let params = build_prompt_params(session_id, prompt_blocks);
         let hard_deadline = tokio::time::Instant::now() + max_duration;
         self.current_hard_deadline = Some(hard_deadline);
@@ -1065,7 +1212,8 @@ impl AcpClient {
     ///
     /// While waiting, handles:
     /// - `session/update` notifications → logged via tracing
-    /// - `session/request_permission` requests → auto-approved with `allow_once`
+    /// - `session/request_permission` requests → resolved by the configured
+    ///   [`PermissionPolicy`]
     /// - Any other messages → debug-logged and ignored; if they carry an `id`
     ///   (i.e. they are requests, not notifications), a JSON-RPC -32601 error is sent.
     ///
@@ -1534,29 +1682,17 @@ impl AcpClient {
         match update_type {
             "agent_message_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
-                    tracing::info!(target: "acp::stream", "{text}");
+                    self.capture_agent_message(text);
+                    tracing::info!(target: "acp::stream", chunk_bytes = text.len(), "agent message chunk");
                 }
                 false
             }
             "tool_call" => {
-                let title = update
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let kind = update
-                    .get("kind")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                tracing::info!(target: "acp::tool", "tool_call: {title} ({kind})");
+                tracing::info!(target: "acp::tool", "agent tool call started");
                 true
             }
             "tool_call_update" => {
-                let tool_id = update
-                    .get("toolCallId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                let status = update.get("status").and_then(|v| v.as_str()).unwrap_or("?");
-                tracing::info!(target: "acp::tool", "tool_call_update: {tool_id} → {status}");
+                tracing::info!(target: "acp::tool", "agent tool call updated");
                 false
             }
             "plan" => {
@@ -1565,22 +1701,18 @@ impl AcpClient {
             }
             "agent_thought_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
-                    tracing::debug!(target: "acp::thought", "{text}");
+                    tracing::debug!(target: "acp::thought", chunk_bytes = text.len(), "agent thought chunk");
                 }
                 false
             }
             "available_commands_update" => {
                 // Advertised slash commands (ACP slash-commands extension).
                 // Logged for observability; UI surfacing is a follow-up.
-                let names: Vec<&str> = update["availableCommands"]
-                    .as_array()
-                    .map(|cmds| cmds.iter().filter_map(|c| c["name"].as_str()).collect())
-                    .unwrap_or_default();
+                let count = update["availableCommands"].as_array().map_or(0, Vec::len);
                 tracing::info!(
                     target: "acp::update",
-                    "available_commands_update: {} commands [{}]",
-                    names.len(),
-                    names.join(", ")
+                    count,
+                    "available commands updated"
                 );
                 false
             }
@@ -1628,6 +1760,25 @@ impl AcpClient {
         }
     }
 
+    fn capture_agent_message(&mut self, text: &str) {
+        if self.captured_turn_output_truncated {
+            return;
+        }
+        let remaining = MAX_CAPTURED_TURN_OUTPUT.saturating_sub(self.captured_turn_output.len());
+        if text.len() <= remaining {
+            self.captured_turn_output.push_str(text);
+            return;
+        }
+        let boundary = text
+            .char_indices()
+            .map(|(index, _)| index)
+            .take_while(|index| *index <= remaining)
+            .last()
+            .unwrap_or(0);
+        self.captured_turn_output.push_str(&text[..boundary]);
+        self.captured_turn_output_truncated = true;
+    }
+
     /// Parse a `_goose/unstable/session/update` notification and record the
     /// usage snapshot in the per-session tracker.
     ///
@@ -1668,10 +1819,8 @@ impl AcpClient {
         }
     }
 
-    /// Auto-approve a `session/request_permission` request from the agent.
-    ///
-    /// Finds the option with `kind == "allow_once"` and responds with its `optionId`.
-    /// If no `allow_once` option exists, falls back to `reject_once`.
+    /// Resolve a `session/request_permission` request under the configured
+    /// compatibility or governed-execution policy.
     ///
     /// **Critical:** Never hardcode `optionId` — always find it dynamically by `kind`.
     ///
@@ -1699,40 +1848,7 @@ impl AcpClient {
             options.len()
         );
 
-        // Find allow_once by kind — NEVER hardcode optionId.
-        let allow_once = options
-            .iter()
-            .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("allow_once"));
-
-        let response = if let Some(opt) = allow_once {
-            let option_id = opt["optionId"]
-                .as_str()
-                .ok_or_else(|| AcpError::Protocol("allow_once option missing optionId".into()))?;
-            tracing::info!(
-                target: "acp::permission",
-                "auto-approving permission id={id} with allow_once optionId={option_id:?}"
-            );
-            permission_response_selected(&id, option_id)
-        } else {
-            // No allow_once — fall back to reject_once.
-            tracing::warn!(
-                target: "acp::permission",
-                "no allow_once option found in permission request id={id}, falling back to reject_once"
-            );
-            let reject = options
-                .iter()
-                .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("reject_once"));
-
-            if let Some(opt) = reject {
-                let option_id = opt["optionId"].as_str().unwrap_or("reject");
-                permission_response_selected(&id, option_id)
-            } else {
-                return Err(AcpError::Protocol(
-                    "no suitable permission option found (neither allow_once nor reject_once)"
-                        .into(),
-                ));
-            }
-        };
+        let response = permission_response_for_policy(&id, options, self.permission_policy);
 
         // Write the response first, then mark as responded.
         //
@@ -1820,6 +1936,40 @@ fn permission_response_cancelled(id: &serde_json::Value) -> serde_json::Value {
         "id": id,
         "result": { "outcome": { "outcome": "cancelled" } }
     })
+}
+
+fn permission_response_for_policy(
+    id: &serde_json::Value,
+    options: &[serde_json::Value],
+    policy: PermissionPolicy,
+) -> serde_json::Value {
+    let find_option = |kind: &str| {
+        options
+            .iter()
+            .find(|option| option.get("kind").and_then(|value| value.as_str()) == Some(kind))
+            .and_then(|option| option.get("optionId"))
+            .and_then(|value| value.as_str())
+    };
+
+    match policy {
+        PermissionPolicy::AllowOnce => match find_option("allow_once") {
+            Some(option_id) => {
+                tracing::info!(target: "acp::permission", "selecting one-time adapter permission");
+                permission_response_selected(id, option_id)
+            }
+            None => match find_option("reject_once") {
+                Some(option_id) => permission_response_selected(id, option_id),
+                None => permission_response_cancelled(id),
+            },
+        },
+        PermissionPolicy::RejectOnce => match find_option("reject_once") {
+            Some(option_id) => {
+                tracing::info!(target: "acp::permission", "rejecting adapter-local permission; broker authority required");
+                permission_response_selected(id, option_id)
+            }
+            None => permission_response_cancelled(id),
+        },
+    }
 }
 
 /// Full `session/new` response — session ID plus the raw JSON result.
@@ -2009,6 +2159,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn acp_agent_environment_denylist_covers_identity_cloud_and_provider_secrets() {
+        for key in [
+            "BUZZ_PRIVATE_KEY",
+            "nostr_private_key",
+            "AWS_SESSION_TOKEN",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "OPENAI_API_KEY",
+            "OPENAI_COMPAT_BASE_URL",
+            "ANTHROPIC_API_KEY",
+            "GITHUB_TOKEN",
+            "CLOUDFLARE_API_TOKEN",
+            "HTTPS_PROXY",
+            "SSH_AUTH_SOCK",
+            "SNOWMAN_AGENT_SHELL_CAPABILITY",
+            "SNOWMAN_AGENT_MODEL_TOKEN",
+        ] {
+            assert!(is_sensitive_agent_env(key), "missing denylist entry: {key}");
+        }
+        assert!(!is_sensitive_agent_env("BUZZ_ACP_MODEL"));
+        assert!(!is_sensitive_agent_env("SNOWMAN_MODEL_GATEWAY_SOCKET"));
+    }
+
+    #[test]
     fn stop_reason_parses_all_known_values() {
         assert_eq!(StopReason::from_str("end_turn"), Some(StopReason::EndTurn));
         assert_eq!(
@@ -2109,6 +2282,60 @@ mod tests {
             .find(|opt| opt.get("kind").and_then(|k| k.as_str()) == Some("reject_once"));
         assert!(reject_once.is_some());
         assert_eq!(reject_once.unwrap()["optionId"].as_str(), Some("rej-x"));
+    }
+
+    #[test]
+    fn governed_permission_policy_never_selects_allow_once() {
+        let id = serde_json::json!(7);
+        let options = serde_json::json!([
+            {"optionId": "allow", "kind": "allow_once"},
+            {"optionId": "reject", "kind": "reject_once"}
+        ]);
+        let response = permission_response_for_policy(
+            &id,
+            options.as_array().unwrap(),
+            PermissionPolicy::RejectOnce,
+        );
+        assert_eq!(
+            response["result"]["outcome"]["optionId"].as_str(),
+            Some("reject")
+        );
+    }
+
+    #[test]
+    fn governed_permission_policy_cancels_when_reject_is_not_advertised() {
+        let id = serde_json::json!(8);
+        let options = serde_json::json!([
+            {"optionId": "allow", "kind": "allow_once"},
+            {"optionId": "always", "kind": "allow_always"}
+        ]);
+        let response = permission_response_for_policy(
+            &id,
+            options.as_array().unwrap(),
+            PermissionPolicy::RejectOnce,
+        );
+        assert_eq!(
+            response["result"]["outcome"]["outcome"].as_str(),
+            Some("cancelled")
+        );
+    }
+
+    #[tokio::test]
+    async fn final_answer_capture_is_bounded_and_excludes_thoughts() {
+        let mut client = spawn_script("sleep 10").await;
+        client.handle_session_update(&serde_json::json!({
+            "params": {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"text": "secret reasoning"}}}
+        }));
+        client.handle_session_update(&serde_json::json!({
+            "params": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"text": "client-ready"}}}
+        }));
+        client.capture_agent_message(&"x".repeat(MAX_CAPTURED_TURN_OUTPUT));
+        let captured = client.take_captured_turn_output();
+        assert!(captured.text.starts_with("client-ready"));
+        assert!(!captured.text.contains("secret reasoning"));
+        assert_eq!(captured.text.len(), MAX_CAPTURED_TURN_OUTPUT);
+        assert!(captured.truncated);
+        client.shutdown().await;
     }
 
     #[test]
@@ -2868,8 +3095,9 @@ mod tests {
 
     #[tokio::test]
     async fn keepalive_resets_idle_past_deadline() {
-        // Keepalive session/update lines every 50ms against a 100ms idle deadline.
-        // The turn should survive well past the 100ms deadline (proves the fix).
+        // Keepalive session/update lines every 50ms against a 250ms idle deadline.
+        // The margin tolerates loaded CI/WSL schedulers while remaining much
+        // shorter than the ~1s stream and proving repeated deadline renewal.
         let mut client = spawn_script(
             r#"for i in $(seq 1 20); do echo '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"keepalive"}}}'; sleep 0.05; done; sleep 10"#,
         )
@@ -2881,14 +3109,14 @@ mod tests {
             .read_until_response_with_idle_timeout(
                 "test",
                 999,
-                std::time::Duration::from_millis(100),
+                std::time::Duration::from_millis(250),
                 hard_deadline,
                 max_dur,
             )
             .await;
         let elapsed = start.elapsed();
-        // 20 keepalives × 50ms = ~1000ms of activity, then idle fires after 100ms more.
-        // Must survive well past the 100ms deadline.
+        // 20 keepalives × 50ms = ~1000ms of activity, then idle fires after
+        // 250ms more. Must survive well past the initial 250ms deadline.
         assert!(
             elapsed >= std::time::Duration::from_millis(500),
             "keepalive should reset idle past the deadline; elapsed only {elapsed:?}"
@@ -3492,7 +3720,7 @@ mod tests {
             .collect()
     }
 
-    const GENERATED: &str = r#"{"sandbox_workspace_write":{"network_access":true}}"#;
+    const GENERATED: &str = r#"{"sandbox_workspace_write":{"network_access":false}}"#;
 
     #[test]
     fn build_codex_config_env_returns_none_when_no_codex_config_in_extra_env() {
@@ -3516,10 +3744,10 @@ mod tests {
             .unwrap()
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        // network_access forced true even though only one entry in extra_env.
+        // network_access is forced false even though only one entry is generated.
         assert_eq!(
-            v["sandbox_workspace_write"]["network_access"], true,
-            "network_access must be forced true with signal=true"
+            v["sandbox_workspace_write"]["network_access"], false,
+            "network_access must be forced false with signal=true"
         );
         // Operator key preserved via deep_merge.
         assert_eq!(
@@ -3559,18 +3787,18 @@ mod tests {
 
     #[test]
     fn build_codex_config_env_sets_network_access_from_scratch() {
-        // Persona + generated overlay, signal=true: network_access is forced true.
+        // Persona + generated overlay: network_access is forced false.
         let persona = r#"{}"#;
         let extra = env(&[("CODEX_CONFIG", persona), ("CODEX_CONFIG", GENERATED)]);
         let merged = build_codex_config_env(&extra, None, true).unwrap().unwrap();
         let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        assert_eq!(v["sandbox_workspace_write"]["network_access"], true);
+        assert_eq!(v["sandbox_workspace_write"]["network_access"], false);
     }
 
     #[test]
     fn build_codex_config_env_persona_keys_survive_merge() {
         // Persona has CODEX_CONFIG with unrelated keys; generated overlay must
-        // force network_access=true without erasing persona keys.
+        // force network_access=false without erasing persona keys.
         let persona_cfg = r#"{"some_feature":{"enabled":true}}"#;
         // Config::from_args appends generated AFTER persona env vars.
         let extra = env(&[("CODEX_CONFIG", persona_cfg), ("CODEX_CONFIG", GENERATED)]);
@@ -3581,8 +3809,8 @@ mod tests {
             "persona key must survive merge"
         );
         assert_eq!(
-            v["sandbox_workspace_write"]["network_access"], true,
-            "network_access must be forced true"
+            v["sandbox_workspace_write"]["network_access"], false,
+            "network_access must be forced false"
         );
     }
 
@@ -3591,7 +3819,7 @@ mod tests {
         // Persona has sandbox_workspace_write.persona_only; parent has
         // sandbox_workspace_write.parent_only.  A flat top-level spread would drop
         // persona_only.  deep_merge must preserve both nested keys, and
-        // network_access must be forced true last.
+        // network_access must be forced false last.
         let persona_cfg = r#"{"sandbox_workspace_write":{"persona_only":"keep_me"}}"#;
         let extra = env(&[("CODEX_CONFIG", persona_cfg), ("CODEX_CONFIG", GENERATED)]);
         let parent = r#"{"sandbox_workspace_write":{"parent_only":"also_here"}}"#;
@@ -3610,8 +3838,8 @@ mod tests {
         );
         // Forced last.
         assert_eq!(
-            v["sandbox_workspace_write"]["network_access"], true,
-            "network_access must be forced true"
+            v["sandbox_workspace_write"]["network_access"], false,
+            "network_access must be forced false"
         );
     }
 
@@ -3619,7 +3847,7 @@ mod tests {
     fn build_codex_config_env_parent_env_wins_on_collisions_persona_keys_survive() {
         // Parent env has CODEX_CONFIG with some keys; persona has different keys.
         // Parent wins on collision; unrelated persona keys survive.
-        // network_access is always forced true.
+        // network_access is always forced false.
         let persona_cfg = r#"{"persona_key":"persona_val","shared_key":"persona_version"}"#;
         // Config::from_args appends generated AFTER persona env vars.
         let extra = env(&[("CODEX_CONFIG", persona_cfg), ("CODEX_CONFIG", GENERATED)]);
@@ -3643,24 +3871,24 @@ mod tests {
             v["shared_key"], "parent_version",
             "parent must win on colliding key"
         );
-        // network_access always true (forced last)
-        assert_eq!(v["sandbox_workspace_write"]["network_access"], true);
+        // network_access always false (forced last)
+        assert_eq!(v["sandbox_workspace_write"]["network_access"], false);
     }
 
     #[test]
     fn build_codex_config_env_parent_has_existing_sandbox_other_keys_survive() {
         // Parent env has sandbox_workspace_write with extra keys; after merge
-        // those extra keys survive alongside network_access=true.
+        // those extra keys survive alongside network_access=false.
         let persona = r#"{}"#;
         let extra = env(&[("CODEX_CONFIG", persona), ("CODEX_CONFIG", GENERATED)]);
         let parent =
-            r#"{"sandbox_workspace_write":{"network_access":false,"other_sandbox_key":"val"}}"#;
+            r#"{"sandbox_workspace_write":{"network_access":true,"other_sandbox_key":"val"}}"#;
         let merged = build_codex_config_env(&extra, Some(parent), true)
             .unwrap()
             .unwrap();
         let v: serde_json::Value = serde_json::from_str(&merged).unwrap();
-        // network_access forced true even though parent set false
-        assert_eq!(v["sandbox_workspace_write"]["network_access"], true);
+        // network_access forced false even though parent attempted to enable it.
+        assert_eq!(v["sandbox_workspace_write"]["network_access"], false);
         // other_sandbox_key survives (parent's sws merged, then network_access forced)
         assert_eq!(v["sandbox_workspace_write"]["other_sandbox_key"], "val");
     }

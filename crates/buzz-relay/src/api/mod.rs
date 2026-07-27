@@ -1,6 +1,7 @@
 //! HTTP API — media, git, NIP-05, and the Nostr HTTP bridge.
 
 pub mod admin;
+pub mod analyst_integration;
 pub mod bridge;
 pub mod events;
 pub mod git;
@@ -9,6 +10,8 @@ pub mod media;
 pub mod mesh_demo;
 pub mod nip05;
 pub mod operator;
+pub mod workforce;
+pub mod workforce_identity;
 
 // Re-export imeta helpers used by ingest pipeline.
 pub use crate::handlers::imeta::{validate_imeta_tags, verify_imeta_blobs};

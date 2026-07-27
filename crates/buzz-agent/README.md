@@ -1,6 +1,6 @@
 # buzz-agent
 
-> Minimal, unbreakable ACP-compliant LLM agent. Stdio in, tool calls out. Non-streaming. No persistence. No cleverness.
+> Snowman ACP specialist runtime. Stdio in, governed tool calls out. Non-streaming. No local persistence.
 
 [ACP](https://agentclientprotocol.com) is the Agent Client Protocol — JSON-RPC 2.0 over stdio between a client (Zed, JetBrains, buzz-acp, …) and an agent. [MCP](https://modelcontextprotocol.io) is how the agent talks to its tools.
 
@@ -21,10 +21,8 @@
                                             HTTPS
                                               │
                                               ▼
-                                  Anthropic Messages API
-                                   or any OpenAI-compat
-                                  (vLLM, llama.cpp, OpenRouter,
-                                   Block Gateway, Ollama, …)
+                                  Snowman model gateway
+                              (governed model or local loopback)
 ```
 
 A client sends `session/prompt`. The agent loops: call the LLM → get tool calls → run them via MCP → feed results back → repeat. The loop terminates when the LLM stops asking for tools, the round cap is hit, or the client cancels.
@@ -37,22 +35,22 @@ The agent's **output is its tool calls**. Generated text is forwarded to the cli
 # Build
 cargo build --release -p buzz-agent
 
-# Run against Anthropic
+# Run through the Snowman Anthropic-compatible gateway route
 BUZZ_AGENT_PROVIDER=anthropic \
-ANTHROPIC_API_KEY=sk-ant-... \
+ANTHROPIC_API_KEY=snowman-brokered-token \
 ANTHROPIC_MODEL=claude-sonnet-4-5 \
   ./target/release/buzz-agent
 
-# Or any OpenAI-compatible endpoint
+# Or the Snowman OpenAI-compatible gateway route
 BUZZ_AGENT_PROVIDER=openai \
-OPENAI_COMPAT_API_KEY=sk-... \
+OPENAI_COMPAT_API_KEY=snowman-brokered-token \
 OPENAI_COMPAT_MODEL=gpt-5 \
-OPENAI_COMPAT_BASE_URL=https://api.openai.com/v1 \
+OPENAI_COMPAT_BASE_URL=https://models.snowmanai.org/openai/v1 \
   ./target/release/buzz-agent
 
-# Or Databricks model serving via OAuth 2.0 PKCE
+# Local isolated inference is available for development
 BUZZ_AGENT_PROVIDER=databricks \
-DATABRICKS_HOST=https://dbc-...cloud.databricks.com \
+DATABRICKS_HOST=http://127.0.0.1:8080 \
 DATABRICKS_MODEL=goose-claude-4-6-sonnet \
   ./target/release/buzz-agent
 ```
@@ -132,13 +130,13 @@ Everything is environment variables. No flags, no config files. (We are a subpro
 | `BUZZ_AGENT_PROVIDER` | — | Required. `anthropic`, `openai`, `databricks`, or `databricks_v2`. No implicit fallback — the agent errors at startup when this is unset. |
 | `ANTHROPIC_API_KEY` | — | Required when provider=anthropic. |
 | `ANTHROPIC_MODEL` | — | Required when provider=anthropic. |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | |
+| `ANTHROPIC_BASE_URL` | `https://models.snowmanai.org/anthropic` | Snowman-controlled or loopback endpoints only. |
 | `ANTHROPIC_API_VERSION` | `2023-06-01` | |
 | `OPENAI_COMPAT_API_KEY` | — | Required when provider=openai. |
 | `OPENAI_COMPAT_MODEL` | — | Required when provider=openai. |
-| `OPENAI_COMPAT_BASE_URL` | `https://api.openai.com/v1` | Point at vLLM, llama.cpp, OpenRouter, Ollama, etc. |
-| `OPENAI_COMPAT_API` | `auto` | `auto` \| `chat` \| `responses`. `auto` picks Responses for `*.openai.com`, Chat Completions everywhere else. |
-| `DATABRICKS_HOST` | — | Required when provider=databricks or provider=databricks_v2. |
+| `OPENAI_COMPAT_BASE_URL` | `https://models.snowmanai.org/openai/v1` | Snowman-controlled or loopback endpoints only. |
+| `OPENAI_COMPAT_API` | `auto` | `auto` \| `chat` \| `responses`. The Snowman OpenAI gateway route uses Responses; other local compatible routes use Chat Completions. |
+| `DATABRICKS_HOST` | — | Required when provider=databricks or provider=databricks_v2; Snowman-controlled or loopback endpoints only. |
 | `DATABRICKS_MODEL` | — | Required when provider=databricks or provider=databricks_v2. |
 | `DATABRICKS_TOKEN` | — | Optional static bearer escape hatch. If unset, Databricks uses browser OAuth + refresh cache. |
 | `BUZZ_AGENT_SYSTEM_PROMPT` | built-in | Inline system prompt. |
@@ -167,8 +165,6 @@ Everything is environment variables. No flags, no config files. (We are a subpro
 | vLLM | `openai` | `POST {base}/chat/completions` | any tool-calling model |
 | llama.cpp | `openai` | `POST {base}/chat/completions` | any tool-calling GGUF |
 | Ollama | `openai` | `POST {base}/chat/completions` | llama3.1, qwen2.5-coder |
-| OpenRouter | `openai` | `POST {base}/chat/completions` | anything they route |
-| Block Gateway | `openai` | `POST {base}/chat/completions` | gpt-5, claude |
 | Databricks | `databricks` | `POST {host}/serving-endpoints/{model}/invocations` | goose-claude-4-6-sonnet |
 | Databricks AI Gateway v2 | `databricks_v2` | `POST {host}/ai-gateway/{provider}/v1/...` | databricks-gpt-5-5, databricks-claude-opus-4-7 |
 
@@ -176,7 +172,7 @@ If `BUZZ_AGENT_PROVIDER=anthropic` is selected without `ANTHROPIC_API_KEY`, or `
 
 `provider=openai` speaks two HTTP dialects: the [Responses API](https://platform.openai.com/docs/api-reference/responses) (`/v1/responses`, required for GPT-5 / o-series tool-calling on OpenAI's own service) and the [Chat Completions API](https://platform.openai.com/docs/api-reference/chat) (`/chat/completions`, the broadly-supported OpenAI-compatible wire format).
 
-By default (`OPENAI_COMPAT_API=auto`) the agent picks **Responses** when `OPENAI_COMPAT_BASE_URL` points at an `*.openai.com` host and **Chat Completions** everywhere else. Pin the choice explicitly with `OPENAI_COMPAT_API=chat` or `OPENAI_COMPAT_API=responses` for providers that diverge from the default (e.g. a Responses-compatible self-hosted gateway).
+By default (`OPENAI_COMPAT_API=auto`) the agent picks **Responses** for the Snowman OpenAI gateway route and recognized OpenAI-compatible upstream routing inside the gateway, and **Chat Completions** for other allowed loopback routes. Production clients never call a model vendor directly. Pin the choice explicitly with `OPENAI_COMPAT_API=chat` or `OPENAI_COMPAT_API=responses` for a compatible Snowman-hosted route that diverges from the default.
 
 `Provider` is a Rust `enum` with one `match` in `Llm::complete`. There is no trait, no `Box<dyn>`, no async-trait. Adding a provider is a `match` arm and one `body`/`parse` pair in `llm.rs`.
 

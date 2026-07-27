@@ -24,7 +24,4 @@ chrono      = { workspace = true }
 tokio       = { workspace = true }
 tracing     = { workspace = true }
 thiserror   = { workspace = true }
-reqwest     = { workspace = true, optional = true }
-
-[features]
-reqwest = ["dep:reqwest"]
+url         = { workspace = true }

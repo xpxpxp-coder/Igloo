@@ -1,0 +1,30 @@
+[package]
+name = "snowman-audit-checkpoint"
+description = "Externally anchored Snowman audit-chain checkpoint publisher and verifier"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-kms = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+base64 = { workspace = true }
+buzz-audit = { workspace = true }
+buzz-core = { workspace = true }
+buzz-db = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }

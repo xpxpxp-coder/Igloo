@@ -110,6 +110,48 @@ impl Scope {
         ]
     }
 
+    /// Return the scopes granted to a tenant relay role in Snowman's governed
+    /// authorization mode.
+    ///
+    /// `None` means the role is unknown and must fail closed. The mapping is
+    /// deliberately centralized here so WebSocket, audio, and future HTTP
+    /// session paths cannot grow different interpretations of the same role.
+    pub fn for_relay_role(role: &str) -> Option<Vec<Scope>> {
+        match role {
+            "owner" | "admin" => Some(Self::all_known()),
+            "member" => Some(Self::all_non_admin()),
+            "guest" => Some(vec![
+                Self::MessagesRead,
+                Self::ChannelsRead,
+                Self::UsersRead,
+                Self::JobsRead,
+                Self::FilesRead,
+                Self::ReposRead,
+            ]),
+            "bot" | "agent" => Some(Self::for_agent()),
+            _ => None,
+        }
+    }
+
+    /// Return the default, deny-by-omission scope set for a delegated agent.
+    ///
+    /// Agents may collaborate, inspect job state, submit jobs, and exchange
+    /// bounded files. They do not receive tenant administration, subscription,
+    /// repository-write, or user-profile-write authority from their owner.
+    pub fn for_agent() -> Vec<Scope> {
+        vec![
+            Self::MessagesRead,
+            Self::MessagesWrite,
+            Self::ChannelsRead,
+            Self::UsersRead,
+            Self::JobsRead,
+            Self::JobsWrite,
+            Self::FilesRead,
+            Self::FilesWrite,
+            Self::ReposRead,
+        ]
+    }
+
     /// Return the canonical wire-format string for this scope (e.g. `"messages:read"`).
     pub fn as_str(&self) -> &str {
         match self {
@@ -245,5 +287,23 @@ mod tests {
                 "all_known() must not contain Unknown variants"
             );
         }
+    }
+
+    #[test]
+    fn governed_role_mapping_fails_closed_and_agents_do_not_inherit_admin() {
+        assert!(Scope::for_relay_role("unknown").is_none());
+
+        let owner = Scope::for_relay_role("owner").expect("owner role");
+        assert!(owner.contains(&Scope::AdminUsers));
+        assert!(owner.contains(&Scope::SubscriptionsWrite));
+
+        let agent = Scope::for_relay_role("agent").expect("agent role");
+        assert!(agent.contains(&Scope::JobsWrite));
+        assert!(agent.contains(&Scope::MessagesWrite));
+        assert!(!agent.contains(&Scope::AdminUsers));
+        assert!(!agent.contains(&Scope::AdminChannels));
+        assert!(!agent.contains(&Scope::SubscriptionsWrite));
+        assert!(!agent.contains(&Scope::ReposWrite));
+        assert!(!agent.contains(&Scope::UsersWrite));
     }
 }

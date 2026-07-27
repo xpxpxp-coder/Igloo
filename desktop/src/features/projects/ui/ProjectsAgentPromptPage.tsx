@@ -239,8 +239,13 @@ function ConversationThread({
         );
       })}
       {agentWorking.working ? (
-        <div className="flex items-center gap-2 pl-11 text-sm text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <div
+          aria-atomic="true"
+          aria-live="polite"
+          className="flex items-center gap-2 pl-11 text-sm text-muted-foreground"
+          role="status"
+        >
+          <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />
           {agent.name} is working…
         </div>
       ) : null}

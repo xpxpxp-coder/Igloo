@@ -1,8 +1,9 @@
+@import "./snowman-brand.generated.css";
+
 :root {
-  font-family:
-    "Helvetica Neue", Helvetica, Arial, ui-sans-serif, system-ui, sans-serif;
-  color: #231e1e;
-  background: #d7e7f6;
+  font-family: var(--snowman-font-sans);
+  color: var(--snowman-text);
+  background: var(--snowman-color-frost);
   font-synthesis: none;
 }
 
@@ -12,6 +13,28 @@
 
 body {
   margin: 0;
+}
+
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid #231e1e;
+  outline-offset: 3px;
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 1000;
+  border-radius: 0.5rem;
+  background: white;
+  padding: 0.7rem 0.9rem;
+  box-shadow: 0 0 0 3px #231e1e;
+  transform: translateY(calc(-100% - 1rem));
+  transition: transform 160ms ease;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
 }
 
 a {
@@ -72,13 +95,12 @@ button {
   display: grid;
   place-items: center;
   border-radius: 0.7rem;
-  color: #d7d72e;
-  background: #231e1e;
+  color: var(--snowman-color-glacier);
+  background: transparent;
 }
 
 .brand-mark svg {
-  width: 1.7rem;
-  fill: currentColor;
+  width: 2.2rem;
 }
 
 nav {
@@ -633,6 +655,22 @@ dd {
 
 .state.error {
   color: #9f2424;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
 }
 
 @media (max-width: 720px) {

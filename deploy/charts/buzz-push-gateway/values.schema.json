@@ -12,7 +12,7 @@
       "minLength": 1
     },
     "publicDeliveryUrl": {
-      "const": "https://push.buzz.xyz/v1/deliveries/apns"
+      "const": "https://push.snowmanai.org/v1/deliveries/apns"
     },
     "maxGrantLifetimeSeconds": {
       "type": "integer",
@@ -40,7 +40,7 @@
         "hostnames": {
           "type": "array",
           "contains": {
-            "const": "push.buzz.xyz"
+            "const": "push.snowmanai.org"
           }
         }
       },

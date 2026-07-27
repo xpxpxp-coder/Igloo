@@ -72,6 +72,82 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/query", post(api::bridge::query_events))
         .route("/count", post(api::bridge::count_events))
         .route(
+            "/api/snowman/v1/work-requests",
+            post(api::workforce::create_work_request),
+        )
+        .route(
+            "/api/snowman/v1/work-requests/{request_id}",
+            get(api::workforce::get_work_request),
+        )
+        .route(
+            "/api/snowman/v1/work-requests/{request_id}/cancel",
+            post(api::workforce::cancel_work_request),
+        )
+        .route(
+            "/api/snowman/v1/work-requests/{request_id}/tasks/{task_id}/approval",
+            post(api::workforce::decide_work_task_approval),
+        )
+        .route(
+            "/api/snowman/v1/work-requests/{request_id}/schedules",
+            post(api::workforce::create_work_schedule),
+        )
+        .route(
+            "/api/snowman/v1/work-requests/{request_id}/schedules/{schedule_id}/cancel",
+            post(api::workforce::cancel_work_schedule),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/sessions/enroll",
+            post(api::workforce_identity::enroll_human_session),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/sessions/revoke",
+            post(api::workforce_identity::revoke_human_session),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/tasks/claim",
+            post(api::workforce::claim_work_task),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/schedules/claim",
+            post(api::workforce::claim_work_schedule),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/maintenance/tick",
+            post(api::workforce::tick_workforce_maintenance),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/requests/{request_id}/context-packets",
+            get(api::workforce::list_context_packets).post(api::workforce::publish_context_packet),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/requests/{request_id}/proactive-actions",
+            post(api::workforce::propose_proactive_action),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/heartbeat",
+            post(api::workforce::heartbeat_work_task),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/plan",
+            post(api::workforce::commit_team_plan),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/spend",
+            post(api::workforce::record_work_spend),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/finish",
+            post(api::workforce::finish_work_task),
+        )
+        .route(
+            "/internal/snowman/v1/workforce/tasks/{task_id}/reminder",
+            post(api::workforce::deliver_work_reminder),
+        )
+        .route(
+            "/internal/snowman/v1/analyst-events",
+            post(api::analyst_integration::receive_analyst_event),
+        )
+        .route(
             "/operator/communities",
             get(api::operator::list_owned_communities).post(api::operator::provision_community),
         )
@@ -248,10 +324,7 @@ async fn nip11_or_ws_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let raw_host = headers
-        .get(axum::http::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let raw_host = crate::tenant::authoritative_host(&headers);
 
     // `/` is an explicit relay route, so it never reaches the SPA fallback.
     // Short-circuit the exact admin authority here and never let it serve the

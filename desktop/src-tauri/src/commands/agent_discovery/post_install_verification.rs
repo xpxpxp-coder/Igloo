@@ -32,7 +32,7 @@ fn failure(
         ),
         exit_code: None,
         hint: Some(
-            "Buzz requires the vendor CLI executable, not only its desktop app. If the CLI was installed while Buzz was open, restart Buzz and check again."
+            "Snowman Command Center requires the vendor CLI executable, not only its desktop app. If the CLI was installed while Snowman Command Center was open, restart Snowman Command Center and check again."
                 .to_string(),
         ),
     })

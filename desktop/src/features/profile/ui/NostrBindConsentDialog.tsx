@@ -11,7 +11,10 @@ import type { NostrBindDeepLinkPayload } from "@/shared/deep-link";
 import { listenForNostrBindDeepLinks } from "@/shared/deep-link";
 import { OnboardingSlideTransition } from "@/features/onboarding/ui/OnboardingSlideTransition";
 import { buildNostrBindCallbackUrl } from "@/features/profile/lib/nostrBindCallback";
-import { signNostrIdentityBinding } from "@/features/profile/lib/nostrIdentityBinding";
+import {
+  signNostrIdentityBinding,
+  signSnowmanWorkforceEnrollment,
+} from "@/features/profile/lib/nostrIdentityBinding";
 import { cn } from "@/shared/lib/cn";
 import { useSystemColorScheme } from "@/shared/theme/useSystemColorScheme";
 import { Button } from "@/shared/ui/button";
@@ -19,9 +22,10 @@ import { StartupWindowDragRegion } from "@/shared/ui/StartupWindowDragRegion";
 import { writeTextToClipboard } from "@/shared/lib/clipboard";
 
 const COPY_SUCCESS_MESSAGE =
-  "Signed response copied. Paste it into the Buzz admin console.";
+  "Signed response copied. Paste it into Snowman Operations.";
 const PREVIEW_COPY_SUCCESS_MESSAGE = "Preview response copied.";
-const COPY_FAILURE_MESSAGE = "Buzz couldn't access the clipboard. Try again.";
+const COPY_FAILURE_MESSAGE =
+  "Snowman Command Center couldn't access the clipboard. Try again.";
 const EXPIRED_LINK_MESSAGE =
   "This binding link has expired. Request a new one from the requesting app.";
 const VERIFICATION_CODE_LENGTH = 6;
@@ -31,6 +35,7 @@ const VERIFICATION_CODE_MISMATCH_MESSAGE =
 const COPY_BUTTON_LABEL_CLASS =
   "col-start-1 row-start-1 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:translate-y-0 motion-reduce:duration-0";
 const NOSTR_BIND_PREVIEW_PAYLOAD: NostrBindDeepLinkPayload = {
+  bindingKind: "nostr_identity",
   challengeId: "550e8400-e29b-41d4-a716-446655440000",
   nonce: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi01234567",
   verificationCode: "123456",
@@ -132,9 +137,12 @@ async function notifySignedResponseReady(callbackUrl: string | undefined) {
 async function returnSignedResponseToBrowser(
   callbackUrl: string,
   signedResponse: string,
+  fragmentKey: string,
 ): Promise<string | null> {
   try {
-    await openUrl(buildNostrBindCallbackUrl(callbackUrl, signedResponse));
+    await openUrl(
+      buildNostrBindCallbackUrl(callbackUrl, signedResponse, fragmentKey),
+    );
     return null;
   } catch (error) {
     console.warn("return signed nostr binding response failed:", error);
@@ -298,7 +306,7 @@ export function NostrBindConsentDialog() {
         .catch((error) => {
           console.warn("get_identity for nostr bind failed:", error);
           setIdentity(null);
-          setError("Could not load the current Buzz identity.");
+          setError("Could not load the current Snowman identity.");
         });
     });
 
@@ -536,15 +544,34 @@ export function NostrBindConsentDialog() {
     setError(null);
     setCopyFailed(false);
     try {
-      const signed = isPreview
-        ? NOSTR_BIND_PREVIEW_SIGNED_RESPONSE
-        : await signNostrIdentityBinding({
-            challengeId: payload.challengeId,
-            nonce: payload.nonce,
-            verificationCode: enteredVerificationCode,
-            origin: payload.origin,
-            expiresAt: payload.expiresAt,
-          });
+      let signed: string;
+      if (isPreview) {
+        signed = NOSTR_BIND_PREVIEW_SIGNED_RESPONSE;
+      } else if (payload.bindingKind === "snowman_workforce_session") {
+        if (!payload.broker || !payload.community || !payload.purpose) {
+          throw new Error("Snowman workforce enrollment link is incomplete.");
+        }
+        signed = await signSnowmanWorkforceEnrollment({
+          assertionId: payload.challengeId,
+          broker: payload.broker,
+          community: payload.community,
+          purpose: payload.purpose,
+          nonce: payload.nonce,
+          verificationCode: enteredVerificationCode,
+          origin: payload.origin,
+          expiresAt: payload.expiresAt,
+          protocol: "snowman-workforce-device-proof",
+          version: "1",
+        });
+      } else {
+        signed = await signNostrIdentityBinding({
+          challengeId: payload.challengeId,
+          nonce: payload.nonce,
+          verificationCode: enteredVerificationCode,
+          origin: payload.origin,
+          expiresAt: payload.expiresAt,
+        });
+      }
       if (activeSignAttemptRef.current !== attempt) {
         return;
       }
@@ -554,6 +581,9 @@ export function NostrBindConsentDialog() {
         const callbackError = await returnSignedResponseToBrowser(
           payload.callbackUrl,
           signed,
+          payload.bindingKind === "snowman_workforce_session"
+            ? "snowman_enrollment"
+            : "buzz_bind",
         );
         if (activeSignAttemptRef.current !== attempt) {
           return;
@@ -652,7 +682,7 @@ export function NostrBindConsentDialog() {
             <StartupWindowDragRegion />
             <div className="m-auto flex w-full max-w-[500px] flex-col items-center text-center">
               <img
-                alt="Buzz"
+                alt="Snowman Command Center"
                 className="h-14 w-14 rounded-xl shadow-xs"
                 src="/app-icon@2x.png"
                 srcSet="/app-icon@2x.png 1x, /app-icon@3x.png 2x"
@@ -668,15 +698,15 @@ export function NostrBindConsentDialog() {
                   <DialogPrimitive.Title className="mt-6 text-3xl font-semibold tracking-tight">
                     {payload.returnMode === "browser_fragment_v1"
                       ? "Continue in your browser"
-                      : "Finish on the Buzz website"}
+                      : "Finish on the Snowman website"}
                   </DialogPrimitive.Title>
                   <DialogPrimitive.Description
                     className="mt-3 max-w-[440px] text-sm leading-6 text-muted-foreground"
                     id="nostr-bind-description"
                   >
                     {payload.returnMode === "browser_fragment_v1"
-                      ? "Buzz opened your browser to finish verification."
-                      : "Copy the response below, then paste it into the Buzz website to finish verification."}
+                      ? "Snowman Command Center opened your browser to finish verification."
+                      : "Copy the response below, then paste it into the Snowman website to finish verification."}
                   </DialogPrimitive.Description>
 
                   {error ? (

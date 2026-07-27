@@ -1,8 +1,7 @@
 replicaCount: 2
 image:
-  repository: ghcr.io/block/buzz-push-gateway
-  # `main` is published by the push-gateway lane on every main push.
-  tag: main
+  repository: ghcr.io/snowman-ai-org/snowman-push-gateway
+  tag: ""
   digest: ""
   pullPolicy: IfNotPresent
   pullSecrets: []
@@ -18,12 +17,12 @@ migration:
   resources:
     requests: {cpu: 50m, memory: 64Mi}
     limits: {cpu: 250m, memory: 128Mi}
-publicDeliveryUrl: https://push.buzz.xyz/v1/deliveries/apns
+publicDeliveryUrl: https://push.snowmanai.org/v1/deliveries/apns
 maxGrantLifetimeSeconds: 2592000
-enabledProfiles: buzz-ios-production
+enabledProfiles: snowman-ios-production
 # Example App Attest identifier. Production MUST override this with the exact
 # Apple TEAMID.bundle-id value (see values-production.yaml).
-appAttestAppId: TEAMID.xyz.buzz
+appAttestAppId: TEAMID.ai.snowman.commandcenter
 appAttestRoot:
   secretName: buzz-push-gateway
   secretKey: app-attest-root.pem
@@ -37,7 +36,7 @@ httpRoute:
   # Production enables this with an explicit Gateway parentRef.
   enabled: false
   parentRefs: []
-  hostnames: [push.buzz.xyz]
+  hostnames: [push.snowmanai.org]
 resources:
   requests: {cpu: 100m, memory: 128Mi}
   limits: {cpu: "1", memory: 512Mi}

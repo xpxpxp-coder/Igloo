@@ -2205,11 +2205,12 @@ mod tests {
     use nostr::{Alphabet, EventBuilder, Keys, Kind, SingleLetterTag, Tag};
     use std::sync::Mutex;
 
-    fn redis_pool() -> deadpool_redis::Pool {
+    fn redis_pool() -> buzz_pubsub::RedisPool {
         let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
-        deadpool_redis::Config::from_url(url)
+        let pool = deadpool_redis::Config::from_url(&url)
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .expect("create redis pool")
+            .expect("create redis pool");
+        buzz_pubsub::RedisPool::from_deadpool(&url, pool).expect("wrap redis pool")
     }
 
     fn fresh_tenant(host: &str) -> TenantContext {

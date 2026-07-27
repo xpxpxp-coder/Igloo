@@ -24,10 +24,9 @@ use buzz_media::MediaStorage;
 use buzz_pubsub::cache_invalidation::CacheInvalidation;
 use buzz_pubsub::conn_control::ConnControl;
 use buzz_pubsub::rate_limiter::RedisRateLimiter;
-use buzz_pubsub::{PubSubManager, RedisNip98ReplayGuard};
+use buzz_pubsub::{PubSubManager, RedisNip98ReplayGuard, RedisPool};
 use buzz_search::SearchService;
 use buzz_workflow::WorkflowEngine;
-use deadpool_redis;
 
 use crate::audio::AudioRoomManager;
 use crate::config::Config;
@@ -491,7 +490,7 @@ pub struct AppState {
     /// Database connection pool.
     pub db: Db,
     /// Redis pool for readiness health checks.
-    pub redis_pool: deadpool_redis::Pool,
+    pub redis_pool: RedisPool,
     /// Audit event service, absent when audit logging is disabled.
     pub audit: Option<Arc<AuditService>>,
     /// Pub/sub manager for broadcasting events to subscribers.
@@ -637,7 +636,7 @@ impl AppState {
     pub fn new(
         config: Config,
         db: Db,
-        redis_pool: deadpool_redis::Pool,
+        redis_pool: impl buzz_pubsub::IntoRedisPool,
         audit: impl Into<Option<AuditService>>,
         pubsub: Arc<PubSubManager>,
         auth: AuthService,
@@ -646,6 +645,9 @@ impl AppState {
         relay_keypair: nostr::Keys,
         media_storage: MediaStorage,
     ) -> (Self, AuditShutdownHandle) {
+        let redis_pool = redis_pool
+            .into_redis_pool(&config.redis_url)
+            .expect("Redis URL was validated before AppState construction");
         let max_connections = config.max_connections;
         let max_concurrent_handlers = config.max_concurrent_handlers;
         let search_arc = Arc::new(search);

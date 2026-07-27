@@ -669,6 +669,14 @@ class PairingNotifier extends Notifier<PairingState> {
       return;
     }
 
+    if (!kDebugMode &&
+        host != 'snowmanai.org' &&
+        !host.endsWith('.snowmanai.org')) {
+      throw const FormatException(
+        'Relay URL is outside the Snowman-controlled boundary',
+      );
+    }
+
     final ip = Uri.tryParse('http://$host')?.host ?? host;
     if (_isPrivateHost(ip)) {
       throw const FormatException(

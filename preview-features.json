@@ -40,6 +40,14 @@
       "platforms": [
         "desktop"
       ]
+    },
+    {
+      "id": "teamOperations",
+      "name": "AI Workforce command view",
+      "description": "Preview governed requests, specialist teams, progress, approvals, evidence, budgets, and continuity. Live actions remain off until the private orchestration API is verified.",
+      "platforms": [
+        "desktop"
+      ]
     }
   ]
 }

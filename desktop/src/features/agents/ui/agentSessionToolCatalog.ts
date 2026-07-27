@@ -11,6 +11,8 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { COMMAND_CENTER_NAME } from "@/shared/product/identity.generated";
+
 import type { BuzzToolInfo, ToolStatus } from "./agentSessionTypes";
 
 export function normalizeToolStatus(status: string): ToolStatus {
@@ -148,8 +150,8 @@ export function getBuzzToolInfo(title: string): BuzzToolInfo | null {
     return {
       icon: Workflow,
       label: isRead
-        ? "Reads workflow state from Buzz."
-        : "Updates workflow state in Buzz.",
+        ? `Reads workflow state from ${COMMAND_CENTER_NAME}.`
+        : `Updates workflow state in ${COMMAND_CENTER_NAME}.`,
       tone: isWrite ? "write" : "read",
     };
   }
@@ -161,8 +163,8 @@ export function getBuzzToolInfo(title: string): BuzzToolInfo | null {
     return {
       icon: Hash,
       label: isRead
-        ? "Reads channel context from the Buzz relay."
-        : "Changes channel state in the Buzz relay.",
+        ? `Reads channel context from the ${COMMAND_CENTER_NAME} relay.`
+        : `Changes channel state in the ${COMMAND_CENTER_NAME} relay.`,
       tone: isWrite ? "write" : "read",
     };
   }
@@ -174,15 +176,15 @@ export function getBuzzToolInfo(title: string): BuzzToolInfo | null {
     return {
       icon: Users,
       label: isRead
-        ? "Reads Buzz identity or presence data."
-        : "Updates Buzz identity or membership data.",
+        ? `Reads ${COMMAND_CENTER_NAME} identity or presence data.`
+        : `Updates ${COMMAND_CENTER_NAME} identity or membership data.`,
       tone: isWrite ? "write" : "admin",
     };
   }
   if (name.includes("search") || name === "get_feed") {
     return {
       icon: Search,
-      label: "Searches relay-visible Buzz history.",
+      label: "Searches relay-visible Snowman history.",
       tone: "read",
     };
   }
@@ -193,14 +195,14 @@ export function getBuzzToolInfo(title: string): BuzzToolInfo | null {
   ) {
     return {
       icon: Send,
-      label: "Publishes relay-visible Buzz activity.",
+      label: "Publishes relay-visible Snowman activity.",
       tone: "write",
     };
   }
 
   return {
     icon: MessageSquare,
-    label: isRead ? "Reads from Buzz." : "Writes to Buzz.",
+    label: isRead ? "Reads from Snowman." : "Writes to Snowman.",
     tone: isWrite ? "write" : "read",
   };
 }

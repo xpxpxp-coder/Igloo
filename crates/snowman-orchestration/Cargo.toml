@@ -1,0 +1,16 @@
+[package]
+name = "snowman-orchestration"
+description = "Fail-closed contracts for Snowman specialist-team orchestration and proactive scheduling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository = "https://github.com/snowman-ai-org/snowman-command-center"
+
+[dependencies]
+chrono = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }

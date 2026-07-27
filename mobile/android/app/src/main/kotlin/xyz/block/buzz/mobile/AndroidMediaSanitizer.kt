@@ -1,4 +1,4 @@
-package xyz.block.buzz.mobile
+package ai.snowman.commandcenter
 
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets

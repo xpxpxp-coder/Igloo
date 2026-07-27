@@ -31,6 +31,12 @@ fn buzz_auto_migrate_enabled(value: Option<&str>) -> bool {
     })
 }
 
+fn relay_manages_partitions(value: Option<&str>) -> bool {
+    !value
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("external"))
+}
+
 /// Controls how many per-community gauge series the usage poller emits.
 ///
 /// Datadog cost is proportional to the number of unique time-series.  With ~25
@@ -170,8 +176,16 @@ async fn main() -> anyhow::Result<()> {
         info!("Skipping database migrations because BUZZ_AUTO_MIGRATE is not enabled");
     }
 
-    if let Err(e) = db.ensure_future_partitions(3).await {
-        error!("Failed to ensure partitions: {e}");
+    if relay_manages_partitions(
+        std::env::var("SNOWMAN_PARTITION_MAINTENANCE_MODE")
+            .ok()
+            .as_deref(),
+    ) {
+        if let Err(e) = db.ensure_future_partitions(3).await {
+            error!("Failed to ensure partitions: {e}");
+        }
+    } else {
+        info!("Database partition maintenance is owned by the governed bootstrap/scheduler");
     }
 
     // Freshness fence probe: cursor pages route to the replica only for
@@ -334,10 +348,23 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let redis_pool = {
-        let mut cfg = deadpool_redis::Config::from_url(&config.redis_url);
-        cfg.pool = Some(deadpool_redis::PoolConfig::new(config.redis_pool_size));
-        cfg.create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .map_err(|e| anyhow::anyhow!("Redis pool creation failed: {e}"))?
+        if let Some(iam) = config.snowman_valkey_iam.clone() {
+            let provider = snowman_aws_auth::ElastiCacheIamCredentials::load(iam)
+                .await
+                .map_err(|error| anyhow::anyhow!("Valkey IAM initialization failed: {error}"))?;
+            buzz_pubsub::RedisPool::managed(&config.redis_url, config.redis_pool_size, provider)
+                .await
+                .map_err(|error| anyhow::anyhow!("Valkey IAM connection failed: {error}"))?
+        } else {
+            let mut cfg = deadpool_redis::Config::from_url(&config.redis_url);
+            cfg.pool = Some(deadpool_redis::PoolConfig::new(config.redis_pool_size));
+            let pool = cfg
+                .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+                .map_err(|error| anyhow::anyhow!("Redis pool creation failed: {error}"))?;
+            buzz_pubsub::RedisPool::from_deadpool(&config.redis_url, pool).map_err(|error| {
+                anyhow::anyhow!("Redis connection configuration failed: {error}")
+            })?
+        }
     };
     let redis_health_pool = redis_pool.clone(); // cheap Arc clone — shared with readiness handler
     let pubsub = Arc::new(
@@ -1816,8 +1843,8 @@ mod tests {
 
     use super::{
         buzz_auto_migrate_enabled, dropped_in_memory_keys, idle_timeout_secs,
-        refresh_legacy_active_gauge_recency, run_periodic_until_cancelled, EmissionScope,
-        InMemoryMetricKey,
+        refresh_legacy_active_gauge_recency, relay_manages_partitions,
+        run_periodic_until_cancelled, EmissionScope, InMemoryMetricKey,
     };
     use metrics::GaugeFn;
     use metrics_util::{
@@ -1863,6 +1890,15 @@ mod tests {
         assert!(buzz_auto_migrate_enabled(Some(" 1 ")));
         assert!(buzz_auto_migrate_enabled(Some("yes")));
         assert!(buzz_auto_migrate_enabled(Some("on")));
+    }
+
+    #[test]
+    fn partition_ddl_is_external_only_when_explicitly_configured() {
+        assert!(relay_manages_partitions(None));
+        assert!(relay_manages_partitions(Some("")));
+        assert!(relay_manages_partitions(Some("relay")));
+        assert!(!relay_manages_partitions(Some("external")));
+        assert!(!relay_manages_partitions(Some(" EXTERNAL ")));
     }
 
     #[test]

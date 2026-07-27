@@ -10,7 +10,6 @@ use clap::Parser;
 use clap::ValueEnum;
 use nostr::Keys;
 use thiserror::Error;
-use url::Url;
 use uuid::Uuid;
 
 use crate::filter::SubscriptionRule;
@@ -533,10 +532,10 @@ pub struct Config {
     /// Per-persona env vars to inject at agent spawn time (e.g., GOOSE_PROVIDER, GOOSE_MODEL, BUZZ_AGENT_MODEL).
     /// Populated from persona pack resolution. Empty when no pack is configured.
     pub persona_env_vars: Vec<(String, String)>,
-    /// Whether `codex_network_env()` successfully injected a `CODEX_CONFIG` entry into
-    /// `persona_env_vars`.  When true, `AcpClient::spawn` merges all `CODEX_CONFIG` entries
-    /// and forces `sandbox_workspace_write.network_access = true` via `build_codex_config_env`.
-    /// When false (non-Codex agents or rejected relay URL), the helper returns None and
+    /// Whether `codex_network_env()` injected Snowman's fail-closed `CODEX_CONFIG` entry into
+    /// `persona_env_vars`. When true, `AcpClient::spawn` merges all `CODEX_CONFIG` entries
+    /// and forces `sandbox_workspace_write.network_access = false` via `build_codex_config_env`.
+    /// When false (non-Codex agents), the helper returns None and
     /// any persona-supplied `CODEX_CONFIG` is handled with ordinary operator-wins semantics.
     pub has_generated_codex_config: bool,
     /// Whether to publish encrypted observer frames through the relay.
@@ -623,56 +622,30 @@ fn default_agent_args(command: &str) -> Option<Vec<String>> {
     }
 }
 
-/// Build the `CODEX_CONFIG` environment variable that enables full outbound
-/// network access in Codex's macOS Seatbelt sandbox.
+/// Build the `CODEX_CONFIG` environment variable that denies outbound network
+/// access from Codex-executed tools.
 ///
-/// Codex sandboxes MCP subprocesses (including `buzz-cli`) behind a Seatbelt sandbox
-/// that blocks all outbound network by default. Without this env var, `buzz-cli`
-/// requests are blocked before they can reach the relay WebSocket.
+/// The ACP harness itself owns the authenticated relay connection. Agent tools
+/// do not need—and must not receive—general outbound network authority. Remote
+/// Snowman execution uses an infrastructure-enforced private model gateway;
+/// this local adapter setting must never widen tool egress.
 ///
-/// Returns `Some(("CODEX_CONFIG", "{\"sandbox_workspace_write\":{\"network_access\":true}}"))` for
-/// Codex agents, or `None` for non-Codex agents or when the relay URL cannot be parsed.
+/// Returns a fail-closed `CODEX_CONFIG` for Codex agents, or `None` for
+/// non-Codex agents. The relay URL is deliberately irrelevant: malformed
+/// configuration must not disable the deny overlay.
 ///
 /// The env var is forwarded by the `@agentclientprotocol/codex-acp` adapter (1.x) as a
 /// session-level config override (via `CODEX_CONFIG` → `thread/start config`), which is
-/// equivalent to the TOML override `sandbox_workspace_write.network_access = true`.
-/// That sets `NetworkSandboxPolicy::Enabled`, causing the Seatbelt policy to include
-/// `(allow network-outbound)` — full outbound TCP/TLS at the OS level.
-///
-/// URL validation is preserved as a guard: injection is skipped when the relay URL cannot
-/// be parsed, avoiding accidental sandbox widening for malformed configs.
-///
-/// Handles `ws://`, `wss://`, `http://`, and `https://` schemes.
-pub fn codex_network_env(agent_command: &str, relay_url: &str) -> Option<(String, String)> {
+/// equivalent to the TOML override `sandbox_workspace_write.network_access = false`.
+pub fn codex_network_env(agent_command: &str, _relay_url: &str) -> Option<(String, String)> {
     match normalize_agent_command_identity(agent_command).as_str() {
         "codex" | "codex-acp" => {}
         _ => return None,
     }
 
-    // Validate the relay URL before injecting broader network access. On parse failure,
-    // skip injection rather than panicking or widening the sandbox unconditionally.
-    let host = match Url::parse(relay_url) {
-        Ok(u) => match u.host_str() {
-            Some(h) => h.to_owned(),
-            None => {
-                tracing::warn!(
-                    relay_url,
-                    "codex network config: no host in relay URL — skipping injection"
-                );
-                return None;
-            }
-        },
-        Err(e) => {
-            tracing::warn!(relay_url, error = %e, "codex network config: failed to parse relay URL — skipping injection");
-            return None;
-        }
-    };
-
-    tracing::debug!(host, "injecting CODEX_CONFIG network_access for relay host");
-
     Some((
         "CODEX_CONFIG".into(),
-        "{\"sandbox_workspace_write\":{\"network_access\":true}}".into(),
+        "{\"sandbox_workspace_write\":{\"network_access\":false}}".into(),
     ))
 }
 
@@ -945,9 +918,9 @@ impl Config {
         let mut persona_env_vars = Vec::new();
         let model = args.model;
 
-        // Inject CODEX_CONFIG so the @agentclientprotocol/codex-acp adapter (1.x)
-        // opens the Seatbelt network sandbox for buzz-cli (an MCP subprocess). No-op
-        // for non-Codex agents or unparseable relay URLs.
+        // Inject CODEX_CONFIG so the @agentclientprotocol/codex-acp adapter keeps
+        // agent tools offline. Relay I/O remains owned by this harness. No-op for
+        // non-Codex agents, whose production containment is an external sandbox gate.
         let has_generated_codex_config =
             if let Some(network_env) = codex_network_env(&agent_command, &args.relay_url) {
                 persona_env_vars.push(network_env);
@@ -1532,7 +1505,7 @@ mod tests {
 
     // --- codex_network_env tests ---
 
-    const CODEX_CONFIG_JSON: &str = "{\"sandbox_workspace_write\":{\"network_access\":true}}";
+    const CODEX_CONFIG_JSON: &str = "{\"sandbox_workspace_write\":{\"network_access\":false}}";
 
     #[test]
     fn codex_network_env_wss_url() {
@@ -1598,9 +1571,8 @@ mod tests {
     }
 
     #[test]
-    fn codex_network_env_includes_sandbox_network_access() {
-        // The JSON value must set sandbox_workspace_write.network_access=true — without
-        // it, the Seatbelt sandbox blocks outbound connections in the 1.x adapter.
+    fn codex_network_env_denies_sandbox_network_access() {
+        // Agent tools stay offline; the harness owns relay I/O.
         let result = codex_network_env("codex-acp", "wss://relay.example.com");
         let (key, val) = result.expect("expected Some for valid codex + valid url");
         assert_eq!(key, "CODEX_CONFIG");
@@ -1609,21 +1581,25 @@ mod tests {
             "JSON must contain sandbox_workspace_write"
         );
         assert!(
-            val.contains("\"network_access\":true"),
-            "JSON must set network_access=true"
+            val.contains("\"network_access\":false"),
+            "JSON must set network_access=false"
         );
     }
 
     #[test]
-    fn codex_network_env_empty_relay_url_returns_none() {
-        // Empty string fails Url::parse — graceful None return.
-        assert!(codex_network_env("codex-acp", "").is_none());
+    fn codex_network_env_empty_relay_url_still_denies_network() {
+        assert_eq!(
+            codex_network_env("codex-acp", ""),
+            Some(("CODEX_CONFIG".to_string(), CODEX_CONFIG_JSON.to_string()))
+        );
     }
 
     #[test]
-    fn codex_network_env_schemeless_string_returns_none() {
-        // A bare string with no scheme fails Url::parse — graceful None return.
-        assert!(codex_network_env("codex-acp", "not-a-url").is_none());
+    fn codex_network_env_schemeless_relay_still_denies_network() {
+        assert_eq!(
+            codex_network_env("codex-acp", "not-a-url"),
+            Some(("CODEX_CONFIG".to_string(), CODEX_CONFIG_JSON.to_string()))
+        );
     }
 
     #[test]

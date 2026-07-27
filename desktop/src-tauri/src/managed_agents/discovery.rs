@@ -13,11 +13,16 @@ mod runtime_metadata;
 
 pub(crate) use runtime_metadata::KnownAcpRuntime;
 
-const GOOSE_AVATAR_URL: &str = "https://goose-docs.ai/img/logo_dark.png";
-const CLAUDE_CODE_AVATAR_URL: &str = "https://anthropic.gallerycdn.vsassets.io/extensions/anthropic/claude-code/2.1.77/1773707456892/Microsoft.VisualStudio.Services.Icons.Default";
-const CODEX_AVATAR_URL: &str = "https://openai.gallerycdn.vsassets.io/extensions/openai/chatgpt/26.5313.41514/1773706730621/Microsoft.VisualStudio.Services.Icons.Default";
-const BUZZ_AGENT_AVATAR_URL: &str =
-    "https://raw.githubusercontent.com/block/buzz/refs/heads/main/crates/buzz-agent/buzz-agent.png";
+/// Bundled same-origin avatar. Runtime/provider names remain visible as text,
+/// but opening agent configuration must never fetch third-party image assets.
+const SNOWMAN_AGENT_AVATAR_URL: &str = "/snowman-agent.svg";
+
+/// Release builds must never discover or launch a vendor CLI that can bypass
+/// the Snowman model gateway. Debug builds retain upstream harnesses for local
+/// compatibility testing; shipped clients expose only the bundled agent.
+fn runtime_allowed_by_product_boundary(runtime: &KnownAcpRuntime) -> bool {
+    cfg!(debug_assertions) || runtime.id == "buzz-agent"
+}
 
 fn common_binary_paths() -> &'static [PathBuf] {
     static PATHS: OnceLock<Vec<PathBuf>> = OnceLock::new();
@@ -68,18 +73,16 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         label: "Goose",
         commands: &["goose"],
         aliases: &[],
-        avatar_url: GOOSE_AVATAR_URL,
+        avatar_url: SNOWMAN_AGENT_AVATAR_URL,
         mcp_command: None,
         mcp_hooks: false,
         underlying_cli: Some("goose"),
-        cli_install_commands: &["curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash"],
-        // Goose's stable release currently publishes only the Unix installer;
-        // its official Windows instructions intentionally point at this main-branch script.
-        cli_install_commands_windows: &["powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$env:CONFIGURE='false'; irm https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 | iex\""],
+        cli_install_commands: &[],
+        cli_install_commands_windows: &[],
         adapter_install_commands: &[],
-        cli_install_instructions_url: "https://goose-docs.ai/docs/getting-started/installation/",
+        cli_install_instructions_url: "",
         adapter_install_instructions_url: "",
-        cli_install_hint: "Buzz requires the Goose CLI; the desktop app alone is not enough.",
+        cli_install_hint: "Provision this runtime through the Snowman-approved runtime image or operator-managed installation.",
         adapter_install_hint: "",
         skill_dir: Some(".goose/skills"),
         supports_acp_model_switching: false,
@@ -102,17 +105,17 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         label: "Claude Code",
         commands: &["claude-agent-acp", "claude-code-acp"],
         aliases: &["claude-code", "claudecode"],
-        avatar_url: CLAUDE_CODE_AVATAR_URL,
+        avatar_url: SNOWMAN_AGENT_AVATAR_URL,
         mcp_command: None,
         mcp_hooks: false,
         underlying_cli: Some("claude"),
-        cli_install_commands: &["curl -fsSL https://claude.ai/install.sh | bash"],
-        cli_install_commands_windows: &["powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://claude.ai/install.ps1 | iex\""],
-        adapter_install_commands: &["npm install -g @agentclientprotocol/claude-agent-acp"],
-        cli_install_instructions_url: "https://code.claude.com/docs/en/getting-started",
-        adapter_install_instructions_url: "https://github.com/agentclientprotocol/claude-agent-acp",
-        cli_install_hint: "Buzz requires the Claude Code CLI; the desktop app alone is not enough.",
-        adapter_install_hint: "Install the Claude Code ACP adapter via npm.",
+        cli_install_commands: &[],
+        cli_install_commands_windows: &[],
+        adapter_install_commands: &[],
+        cli_install_instructions_url: "",
+        adapter_install_instructions_url: "",
+        cli_install_hint: "Provision this runtime through the Snowman-approved runtime image or operator-managed installation.",
+        adapter_install_hint: "Provision the approved ACP adapter through Snowman's mirrored artifact pipeline.",
         skill_dir: Some(".claude/skills"),
         supports_acp_model_switching: false,
         model_env_var: None,
@@ -134,17 +137,17 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
         label: "Codex",
         commands: &["codex-acp"],
         aliases: &[],
-        avatar_url: CODEX_AVATAR_URL,
+        avatar_url: SNOWMAN_AGENT_AVATAR_URL,
         mcp_command: Some("buzz-dev-mcp"),
         mcp_hooks: false,
         underlying_cli: Some("codex"),
-        cli_install_commands: &["curl -fsSL https://chatgpt.com/codex/install.sh | sh"],
-        cli_install_commands_windows: &["powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"irm https://chatgpt.com/codex/install.ps1 | iex\""],
-        adapter_install_commands: &["npm install -g @agentclientprotocol/codex-acp"],
-        cli_install_instructions_url: "https://developers.openai.com/codex/cli/",
-        adapter_install_instructions_url: "https://github.com/agentclientprotocol/codex-acp",
-        cli_install_hint: "Buzz requires the Codex CLI; the desktop app alone is not enough.",
-        adapter_install_hint: "Install the Codex ACP adapter via npm.",
+        cli_install_commands: &[],
+        cli_install_commands_windows: &[],
+        adapter_install_commands: &[],
+        cli_install_instructions_url: "",
+        adapter_install_instructions_url: "",
+        cli_install_hint: "Provision this runtime through the Snowman-approved runtime image or operator-managed installation.",
+        adapter_install_hint: "Provision the approved ACP adapter through Snowman's mirrored artifact pipeline.",
         skill_dir: Some(".codex/skills"),
         supports_acp_model_switching: false,
         model_env_var: None,
@@ -164,19 +167,19 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
     },
     KnownAcpRuntime {
         id: "buzz-agent",
-        label: "Buzz Agent",
+        label: "Snowman Agent",
         commands: &["buzz-agent"],
         aliases: &[],
-        avatar_url: BUZZ_AGENT_AVATAR_URL,
+        avatar_url: SNOWMAN_AGENT_AVATAR_URL,
         mcp_command: Some("buzz-dev-mcp"),
         mcp_hooks: true,
         underlying_cli: None,
         cli_install_commands: &[],
         cli_install_commands_windows: &[],
         adapter_install_commands: &[],
-        cli_install_instructions_url: "https://github.com/block/buzz",
-        adapter_install_instructions_url: "https://github.com/block/buzz",
-        cli_install_hint: "Ships with the Buzz desktop app.",
+        cli_install_instructions_url: "",
+        adapter_install_instructions_url: "",
+        cli_install_hint: "Ships with Snowman Command Center.",
         adapter_install_hint: "",
         skill_dir: None,
         supports_acp_model_switching: true,
@@ -198,7 +201,10 @@ const KNOWN_ACP_RUNTIMES: &[KnownAcpRuntime] = &[
 
 /// Skill discovery directories declared by known runtimes.
 pub(crate) fn known_skill_dirs() -> impl Iterator<Item = &'static str> {
-    KNOWN_ACP_RUNTIMES.iter().filter_map(|p| p.skill_dir)
+    KNOWN_ACP_RUNTIMES
+        .iter()
+        .filter(|runtime| runtime_allowed_by_product_boundary(runtime))
+        .filter_map(|runtime| runtime.skill_dir)
 }
 
 fn workspace_root_dir() -> PathBuf {
@@ -251,18 +257,23 @@ fn normalize_command_identity(command: &str) -> String {
 pub(crate) fn known_acp_runtime(command: &str) -> Option<&'static KnownAcpRuntime> {
     let normalized = normalize_command_identity(command);
 
-    KNOWN_ACP_RUNTIMES.iter().find(|runtime| {
-        normalized == runtime.id
-            || runtime
-                .commands
-                .iter()
-                .any(|command| normalized == normalize_command_identity(command))
-            || runtime.aliases.iter().any(|alias| normalized == *alias)
-    })
+    KNOWN_ACP_RUNTIMES
+        .iter()
+        .filter(|runtime| runtime_allowed_by_product_boundary(runtime))
+        .find(|runtime| {
+            normalized == runtime.id
+                || runtime
+                    .commands
+                    .iter()
+                    .any(|command| normalized == normalize_command_identity(command))
+                || runtime.aliases.iter().any(|alias| normalized == *alias)
+        })
 }
 
 pub(crate) fn known_acp_runtime_exact(id: &str) -> Option<&'static KnownAcpRuntime> {
-    KNOWN_ACP_RUNTIMES.iter().find(|p| p.id == id)
+    KNOWN_ACP_RUNTIMES
+        .iter()
+        .find(|runtime| runtime.id == id && runtime_allowed_by_product_boundary(runtime))
 }
 
 /// The agent command a freshly-created agent defaults to when the create
@@ -298,6 +309,7 @@ pub fn record_agent_command(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .filter(|value| cfg!(debug_assertions) || known_acp_runtime(value).is_some())
     {
         return pin.to_string();
     }
@@ -330,6 +342,7 @@ pub fn effective_agent_command(
     if let Some(pin) = agent_command_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        .filter(|value| cfg!(debug_assertions) || known_acp_runtime(value).is_some())
     {
         return pin.to_string();
     }
@@ -1304,6 +1317,7 @@ pub fn discover_acp_runtimes() -> Vec<AcpRuntimeCatalogEntry> {
     // Phase 1: build all entries (fast — no probes yet).
     let mut partials: Vec<PartialEntry> = KNOWN_ACP_RUNTIMES
         .iter()
+        .filter(|runtime| runtime_allowed_by_product_boundary(runtime))
         .map(discover_acp_runtime_phase1)
         .collect();
 

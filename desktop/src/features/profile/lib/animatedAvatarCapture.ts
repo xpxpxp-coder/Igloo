@@ -8,9 +8,10 @@
  * result is encoded as a ping-pong looping animated PNG (APNG) — full 24-bit
  * color and 8-bit alpha, unlike GIF — plus a static poster frame.
  *
- * Segmentation assets (wasm + model) are fetched lazily from public CDNs the
- * first time the feature is used. If they can't be loaded (e.g. offline),
- * recording still works — the background just isn't removed.
+ * Segmentation assets (wasm + model) are resolved from the packaged app's
+ * same-origin runtime directory. If a release does not contain the governed,
+ * checksum-verified model, recording still works — the background just isn't
+ * removed. The client never falls back to a public CDN.
  */
 
 import type { ImageSegmenter } from "@mediapipe/tasks-vision";
@@ -105,12 +106,12 @@ const PERSON_OUTLINE_OFFSETS = [
   [-PERSON_OUTLINE_RADIUS * 0.72, -PERSON_OUTLINE_RADIUS * 0.72],
 ] as const;
 
-// Pinned to the installed @mediapipe/tasks-vision version so the wasm loader
-// always matches the JS API.
-const MEDIAPIPE_WASM_BASE =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
+// Releases may populate these paths only from Snowman's pinned artifact
+// pipeline. Keeping them same-origin makes a missing asset fail locally rather
+// than creating an undeclared third-party connection.
+const MEDIAPIPE_WASM_BASE = "/runtime/mediapipe/wasm";
 const SELFIE_SEGMENTER_MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite";
+  "/runtime/mediapipe/models/selfie_segmenter.tflite";
 
 export type AnimatedAvatarRecording = {
   /** Square RGBA cut-out frames, mirrored like a selfie preview. */
@@ -174,8 +175,8 @@ type SegmenterHandle = {
 let segmenterPromise: Promise<SegmenterHandle | null> | null = null;
 
 /**
- * Lazily create the selfie segmenter. Resolves to null when the CDN assets
- * are unreachable; a failed load is retried on the next call.
+ * Lazily create the selfie segmenter. Resolves to null when packaged assets
+ * are unavailable; a failed load is retried on the next call.
  */
 function loadSegmenter(): Promise<SegmenterHandle | null> {
   if (!segmenterPromise) {

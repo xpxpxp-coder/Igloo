@@ -1,9 +1,13 @@
 {
-  "name": "buzz-workspace",
+  "name": "snowman-command-center-workspace",
   "private": true,
   "packageManager": "pnpm@11.4.0",
   "scripts": {
-    "check": "pnpm -r check"
+    "brand:generate": "node scripts/generate-snowman-product.mjs",
+    "brand:check": "node scripts/generate-snowman-product.mjs --check",
+    "brand:surfaces": "node scripts/check-snowman-brand.mjs",
+    "ui:accessibility": "node scripts/check-snowman-ui-accessibility.mjs",
+    "check": "pnpm brand:check && pnpm brand:surfaces && pnpm ui:accessibility && pnpm -r check"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.6"

@@ -16,10 +16,10 @@ void main() {
       );
 
       expect(
-        find.image(const AssetImage('assets/images/buzz-icon.png')),
+        find.bySemanticsLabel('Snowman Command Center'),
         findsOneWidget,
       );
-      expect(find.text('Welcome to Buzz'), findsOneWidget);
+      expect(find.text('Welcome to Snowman Command Center'), findsOneWidget);
       expect(find.text('Scan QR Code'), findsOneWidget);
       expect(find.text('or paste pairing code'), findsOneWidget);
       expect(find.text('Connect'), findsOneWidget);

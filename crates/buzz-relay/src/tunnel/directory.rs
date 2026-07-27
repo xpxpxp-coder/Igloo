@@ -85,7 +85,7 @@ return {current, known_generation}
 /// Redis-backed owner directory for mesh tunnel sessions.
 #[derive(Clone)]
 pub struct SessionDirectory {
-    pool: deadpool_redis::Pool,
+    pool: buzz_pubsub::RedisPool,
     lease_ttl: Duration,
 }
 
@@ -146,7 +146,7 @@ pub enum ReleaseResult {
 pub enum DirectoryError {
     /// Redis pool checkout failed.
     #[error("redis pool: {0}")]
-    Pool(#[from] deadpool_redis::PoolError),
+    Pool(#[from] buzz_pubsub::RedisPoolError),
     /// Redis command/script failed.
     #[error("redis: {0}")]
     Redis(#[from] redis::RedisError),
@@ -183,12 +183,12 @@ pub enum DirectoryError {
 
 impl SessionDirectory {
     /// Create a directory backed by `pool` with the default lease TTL.
-    pub fn new(pool: deadpool_redis::Pool) -> Self {
+    pub fn new(pool: buzz_pubsub::RedisPool) -> Self {
         Self::with_lease_ttl(pool, DEFAULT_LEASE_TTL)
     }
 
     /// Create a directory backed by `pool` with an explicit lease TTL.
-    pub fn with_lease_ttl(pool: deadpool_redis::Pool, lease_ttl: Duration) -> Self {
+    pub fn with_lease_ttl(pool: buzz_pubsub::RedisPool, lease_ttl: Duration) -> Self {
         Self { pool, lease_ttl }
     }
 
@@ -214,7 +214,7 @@ impl SessionDirectory {
                 .arg(owner_runtime_id.to_hex())
                 .arg(profile.as_wire_str())
                 .arg(ttl_ms)
-                .invoke_async(&mut *conn)
+                .invoke_async(&mut conn)
                 .await?;
         let lease = parse_lease(community_id, session_id, &value)?;
         match status.as_str() {
@@ -253,7 +253,7 @@ impl SessionDirectory {
             .arg(lease.owner_runtime_id.to_hex())
             .arg(lease.generation)
             .arg(ttl_ms)
-            .invoke_async(&mut *conn)
+            .invoke_async(&mut conn)
             .await?;
         let current = parse_optional_lease(lease.community_id, lease.session_id, &value)?;
         match status.as_str() {
@@ -283,7 +283,7 @@ impl SessionDirectory {
                 .key(&keys.generation)
                 .arg(lease.owner_runtime_id.to_hex())
                 .arg(lease.generation)
-                .invoke_async(&mut *conn)
+                .invoke_async(&mut conn)
                 .await?;
         let current = parse_optional_lease(lease.community_id, lease.session_id, &value)?;
         match status.as_str() {
@@ -312,7 +312,7 @@ impl SessionDirectory {
         let mut conn = self.pool.get().await?;
         let value: Option<String> = redis::cmd("GET")
             .arg(&keys.lease)
-            .query_async(&mut *conn)
+            .query_async(&mut conn)
             .await?;
         value
             .as_deref()
@@ -330,7 +330,7 @@ impl SessionDirectory {
         let mut conn = self.pool.get().await?;
         let value: Option<String> = redis::cmd("GET")
             .arg(&keys.generation)
-            .query_async(&mut *conn)
+            .query_async(&mut conn)
             .await?;
         match value.as_deref() {
             Some(value) => parse_optional_generation(community_id, session_id, value),
@@ -359,7 +359,7 @@ impl SessionDirectory {
         let (lease_value, known_generation): (String, String) = Script::new(VALIDATE_SCRIPT)
             .key(&keys.lease)
             .key(&keys.generation)
-            .invoke_async(&mut *conn)
+            .invoke_async(&mut conn)
             .await?;
         let known_from_counter =
             parse_optional_generation(community_id, fenced.session_id, &known_generation)
@@ -590,18 +590,19 @@ mod tests {
         RuntimeId([byte; 32])
     }
 
-    fn pool() -> deadpool_redis::Pool {
+    fn pool() -> buzz_pubsub::RedisPool {
         let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
-        deadpool_redis::Config::from_url(url)
+        let pool = deadpool_redis::Config::from_url(&url)
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .expect("create redis pool")
+            .expect("create redis pool");
+        buzz_pubsub::RedisPool::from_deadpool(&url, pool).expect("wrap redis pool")
     }
 
     async fn redis_directory_if_available() -> Option<SessionDirectory> {
         let pool = pool();
         let mut conn = pool.get().await.ok()?;
         redis::cmd("PING")
-            .query_async::<String>(&mut *conn)
+            .query_async::<String>(&mut conn)
             .await
             .ok()?;
         Some(SessionDirectory::with_lease_ttl(

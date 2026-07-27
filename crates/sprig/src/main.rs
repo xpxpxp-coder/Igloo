@@ -24,7 +24,7 @@ fn dispatch() -> Result<(), String> {
             Some("-h") | Some("--help") | None => {
                 print_usage();
                 if std::env::args().len() <= 1 {
-                    Err("error: invoke Sprig via a personality symlink".into())
+                    Err("error: invoke the Snowman Agent Runtime via a supported personality symlink".into())
                 } else {
                     Ok(())
                 }
@@ -32,7 +32,7 @@ fn dispatch() -> Result<(), String> {
             Some(other) => {
                 print_usage();
                 Err(format!(
-                    "error: unknown Sprig option or personality: {other}"
+                    "error: unknown Snowman Agent Runtime option or personality: {other}"
                 ))
             }
         },
@@ -44,10 +44,10 @@ fn dispatch() -> Result<(), String> {
 
 fn print_usage() {
     println!(
-        "Sprig — all-in-one Buzz ACP harness, agent, and developer MCP\n\n\
-Sprig is a multicall binary. Invoke it through one of the personality names:\n\n\
+        "Snowman Agent Runtime — governed ACP harness, specialist agent, and developer MCP\n\n\
+The runtime uses the compatibility binary name 'sprig'. Invoke it through one of the personality names:\n\n\
   buzz-acp       ACP harness\n  buzz-agent     ACP-compliant agent\n  buzz-dev-mcp   Developer MCP server\n\n\
-Developer MCP helper names are also supported: rg, tree, buzz, git-credential-nostr, git-sign-nostr.\n\n\
+Developer MCP helper names are also supported: rg, tree, snowman, buzz (legacy), git-credential-nostr, git-sign-nostr.\n\n\
 Installers can create links with:\n  ln -s sprig buzz-acp\n  ln -s sprig buzz-agent\n  ln -s sprig buzz-dev-mcp"
     );
 }

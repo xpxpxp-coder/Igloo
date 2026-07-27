@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "@playwright/test";
 
-test("home page loads with Buzz branding", async ({ page }) => {
+test("home page loads with Snowman branding", async ({ page }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("main").getByRole("img", { name: "Buzz" }),
+    page.getByRole("main").getByRole("img", { name: "Snowman Command Center" }),
   ).toBeVisible();
 });
 
@@ -13,7 +13,7 @@ test("home page shows repositories section", async ({ page }) => {
   await expect(page.getByText("Repositories")).toBeVisible();
 });
 
-test("invite requires age and legal consent before opening Buzz", async ({
+test("invite requires age and legal consent before opening Snowman", async ({
   page,
 }) => {
   await page.route("**/api/join-policy", async (route) => {
@@ -30,7 +30,7 @@ test("invite requires age and legal consent before opening Buzz", async ({
       }),
     });
   });
-  await page.route("https://api.github.com/**", async (route) => {
+  await page.route("**/api/releases?**", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -42,24 +42,20 @@ test("invite requires age and legal consent before opening Buzz", async ({
           prerelease: false,
           assets: [
             {
-              name: "Buzz_0.4.9_aarch64.dmg",
-              browser_download_url:
-                "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_aarch64.dmg",
+              name: "Snowman_Command_Center_0.4.9_aarch64.dmg",
+              browser_download_url: "/downloads/v0.4.9/snowman-aarch64.dmg",
             },
             {
-              name: "Buzz_0.4.9_x64.dmg",
-              browser_download_url:
-                "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_x64.dmg",
+              name: "Snowman_Command_Center_0.4.9_x64.dmg",
+              browser_download_url: "/downloads/v0.4.9/snowman-x64.dmg",
             },
             {
-              name: "Buzz_0.4.9_amd64.AppImage",
-              browser_download_url:
-                "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_amd64.AppImage",
+              name: "Snowman_Command_Center_0.4.9_amd64.AppImage",
+              browser_download_url: "/downloads/v0.4.9/snowman-amd64.AppImage",
             },
             {
-              name: "Buzz_0.4.9_x64-setup_alpha-unsigned.exe",
-              browser_download_url:
-                "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_x64-setup_alpha-unsigned.exe",
+              name: "Snowman_Command_Center_0.4.9_x64-setup.exe",
+              browser_download_url: "/downloads/v0.4.9/snowman-x64-setup.exe",
             },
           ],
         },
@@ -70,17 +66,14 @@ test("invite requires age and legal consent before opening Buzz", async ({
 
   await expect(
     page.getByRole("link", { name: "Download it now" }),
-  ).toHaveAttribute(
-    "href",
-    "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_x64-setup_alpha-unsigned.exe",
-  );
+  ).toHaveAttribute("href", "/downloads/v0.4.9/snowman-x64-setup.exe");
 
   const ageConfirmation = page.getByLabel("I am 18 years of age or older.");
   const agreementConfirmation = page.getByLabel(
-    "I agree to the Buzz Terms of Service and Privacy Policy.",
+    "I agree to the Snowman Terms of Service and Privacy Policy.",
   );
   const acceptInvite = page.getByRole("button", {
-    name: "Accept invite in Buzz",
+    name: "Accept invite in Snowman Command Center",
   });
 
   await expect(ageConfirmation).toBeVisible();
@@ -106,7 +99,7 @@ test("invite requires age and legal consent before opening Buzz", async ({
   await page
     .locator("label")
     .filter({
-      hasText: "I agree to the Buzz Terms of Service and Privacy Policy.",
+      hasText: "I agree to the Snowman Terms of Service and Privacy Policy.",
     })
     .click({ position: { x: 8, y: 8 } });
   await expect(agreementConfirmation).toBeChecked();
@@ -223,7 +216,7 @@ test("invite asks Safari users to choose their Mac download", async ({
       body: JSON.stringify({ policy: null }),
     });
   });
-  await page.route("https://api.github.com/**", async (route) => {
+  await page.route("**/api/releases?**", async (route) => {
     await route.fulfill({ status: 500 });
   });
 
@@ -248,7 +241,7 @@ test("invite asks Safari users to choose their Mac download", async ({
   await chooser.getByRole("link", { name: /Newer Mac/ }).click();
   const openedPage = await openedPagePromise;
   await expect(chooser).toBeHidden();
-  await expect(openedPage).toHaveURL("https://github.com/block/buzz/releases");
+  await expect(openedPage).toHaveURL(/\/downloads$/);
   await expect(page).toHaveURL(/\/invite\/demo-code$/);
   await openedPage.close();
 
@@ -313,7 +306,7 @@ test("invite download falls back for mobile and non-desktop devices", async ({
         body: JSON.stringify({ policy: null }),
       });
     });
-    await page.route("https://api.github.com/**", async (route) => {
+    await page.route("**/api/releases?**", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -324,14 +317,13 @@ test("invite download falls back for mobile and non-desktop devices", async ({
             prerelease: false,
             assets: [
               {
-                name: "Buzz_0.4.9_x64.dmg",
-                browser_download_url:
-                  "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_x64.dmg",
+                name: "Snowman_Command_Center_0.4.9_x64.dmg",
+                browser_download_url: "/downloads/v0.4.9/snowman-x64.dmg",
               },
               {
-                name: "Buzz_0.4.9_amd64.AppImage",
+                name: "Snowman_Command_Center_0.4.9_amd64.AppImage",
                 browser_download_url:
-                  "https://github.com/block/buzz/releases/download/v0.4.9/Buzz_0.4.9_amd64.AppImage",
+                  "/downloads/v0.4.9/snowman-amd64.AppImage",
               },
             ],
           },
@@ -343,7 +335,7 @@ test("invite download falls back for mobile and non-desktop devices", async ({
     await expect(
       page.getByRole("link", { name: "Download it now" }),
       device.name,
-    ).toHaveAttribute("href", "https://github.com/block/buzz/releases");
+    ).toHaveAttribute("href", "/downloads");
     await context.close();
   }
 });

@@ -11,9 +11,8 @@ use zeroize::Zeroize;
 ///    builds ephemeral `GIT_CONFIG_*` env vars, then removes the env var
 /// 3. Prepends the shim dir to PATH
 ///
-/// Shell children receive `path_env`, `git_env`, and `BUZZ_PRIVATE_KEY` (for
-/// the buzz CLI). `NOSTR_PRIVATE_KEY` is removed from the process env after
-/// the keyfile is written — git helpers read from the keyfile only.
+/// Shell children receive `path_env` and bounded git configuration.
+/// Long-lived relay keys are removed from the process environment.
 /// Cleaned up on drop (TempDir).
 pub struct Shim {
     _dir: TempDir,
@@ -53,6 +52,8 @@ impl Shim {
         // keyfile creation succeeds.
         let mut nostr_key = std::env::var("NOSTR_PRIVATE_KEY").ok();
         std::env::remove_var("NOSTR_PRIVATE_KEY");
+        let mut relay_key = std::env::var("BUZZ_PRIVATE_KEY").ok();
+        std::env::remove_var("BUZZ_PRIVATE_KEY");
 
         // Ephemeral git config: write key to 0600 keyfile, derive pubkey, build
         // GIT_CONFIG_* env vars for nostr auth + signing.
@@ -64,6 +65,9 @@ impl Shim {
             None => Vec::new(),
         };
         if let Some(ref mut k) = nostr_key {
+            k.zeroize();
+        }
+        if let Some(ref mut k) = relay_key {
             k.zeroize();
         }
 

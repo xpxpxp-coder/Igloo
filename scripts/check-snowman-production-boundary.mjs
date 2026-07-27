@@ -1,0 +1,1409 @@
+#!/usr/bin/env node
+
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const read = (path) => readFileSync(resolve(repoRoot, path), "utf8");
+const identity = JSON.parse(read("product/identity.json"));
+
+const runtimeAuthorityFiles = [
+  "Cargo.toml",
+  "Dockerfile",
+  "product/identity.json",
+  "product/design-tokens.json",
+  "scripts/generate-snowman-product.mjs",
+  "scripts/check-snowman-brand.mjs",
+  "crates/buzz-relay/src/config.rs",
+  "crates/buzz-relay/src/main.rs",
+  "crates/buzz-relay/src/authorization.rs",
+  "crates/buzz-relay/src/api/workforce.rs",
+  "crates/buzz-relay/src/api/analyst_integration.rs",
+  "crates/buzz-relay/src/nip11.rs",
+  "crates/buzz-push-gateway/src/config.rs",
+  "crates/buzz-push-gateway/src/http.rs",
+  "crates/buzz-pairing-cli/src/main.rs",
+  "crates/buzz-dev-mcp/src/paths.rs",
+  "crates/buzz-dev-mcp/src/shell.rs",
+  "crates/buzz-dev-mcp/src/shim.rs",
+  "crates/buzz-dev-mcp/src/view_image.rs",
+  "crates/buzz-agent/src/config.rs",
+  "crates/buzz-acp/src/config.rs",
+  "crates/buzz-acp/src/acp.rs",
+  "crates/buzz-acp/src/oneshot.rs",
+  "crates/buzz-acp/src/lib.rs",
+  "crates/buzz-workflow/src/schema.rs",
+  "crates/buzz-db/src/workforce.rs",
+  "crates/buzz-db/src/workforce_identity.rs",
+  "crates/buzz-db/src/analyst_integration.rs",
+  "crates/snowman-workforce/src/lib.rs",
+  "crates/snowman-orchestration/src/lib.rs",
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "crates/snowman-orchestration-service/src/main.rs",
+  "crates/snowman-orchestration-worker/src/lib.rs",
+  "crates/snowman-orchestration-worker/src/main.rs",
+  "crates/snowman-aws-auth/src/lib.rs",
+  "crates/snowman-analyst-client/src/lib.rs",
+  "crates/snowman-workforce-worker/src/lib.rs",
+  "crates/snowman-workforce-worker/src/main.rs",
+  "crates/snowman-agent-contract/src/lib.rs",
+  "crates/snowman-agent-broker/src/lib.rs",
+  "crates/snowman-agent-broker/src/main.rs",
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "crates/snowman-agent-coordinator/src/main.rs",
+  "crates/snowman-agent-executor/src/main.rs",
+  "crates/snowman-meeting-control/src/lib.rs",
+  "crates/snowman-meeting-media-gateway/src/lib.rs",
+  "crates/snowman-meeting-media-gateway/src/adapters.rs",
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "crates/snowman-provider-egress-proxy/src/server.rs",
+  "crates/snowman-provider-egress-proxy/src/main.rs",
+  "crates/snowman-meeting-media-gateway/src/server.rs",
+  "crates/snowman-meeting-media-gateway/src/main.rs",
+  "crates/snowman-audit-checkpoint/src/lib.rs",
+  "crates/snowman-audit-checkpoint/src/model.rs",
+  "crates/snowman-audit-checkpoint/src/service.rs",
+  "crates/snowman-audit-checkpoint/src/aws.rs",
+  "crates/snowman-audit-checkpoint/src/main.rs",
+  "crates/snowman-tool-broker/src/lib.rs",
+  "crates/snowman-bootstrap/src/main.rs",
+  "crates/buzz-db/src/runtime_security.rs",
+  "crates/buzz-pubsub/src/connection.rs",
+  "migrations/0025_snowman_workforce.sql",
+  "migrations/0026_snowman_workforce_identity.sql",
+  "migrations/0027_snowman_workforce_request_contract.sql",
+  "migrations/0028_snowman_workforce_claim_idempotency.sql",
+  "migrations/0029_snowman_analyst_event_boundary.sql",
+  "migrations/0030_snowman_governed_team_plans.sql",
+  "migrations/0031_snowman_context_packet_manifests.sql",
+  "migrations/0032_snowman_proactive_actions.sql",
+  "migrations/0043_snowman_agent_jobs.sql",
+  "migrations/0044_snowman_agent_launches.sql",
+  "migrations/0048_snowman_governed_meetings.sql",
+  "migrations/0049_snowman_agent_tool_authority.sql",
+  "migrations/0050_snowman_meeting_media_gateway.sql",
+  "migrations/0052_snowman_orchestration_foundation.sql",
+  "migrations/0053_snowman_orchestration_service.sql",
+  "migrations/0054_snowman_audit_checkpoints.sql",
+  "migrations/0055_snowman_orchestration_execution_lifecycle.sql",
+  "migrations/0056_snowman_meeting_media_service.sql",
+  "migrations/0057_snowman_orchestration_control_delivery.sql",
+  "migrations/0058_snowman_provider_egress_runtime.sql",
+  "migrations/0059_snowman_orchestration_destinations.sql",
+  "desktop/src-tauri/src/commands/agent_models.rs",
+  "desktop/src-tauri/src/builderlab.rs",
+  "desktop/src-tauri/src/relay.rs",
+  "desktop/src-tauri/src/commands/workspace.rs",
+  "desktop/src-tauri/src/managed_agents/discovery.rs",
+  "desktop/src-tauri/src/managed_agents/personas.rs",
+  "desktop/src-tauri/src/managed_agents/teams.rs",
+  "desktop/src-tauri/src/managed_agents/nest_agents.md",
+  "desktop/src-tauri/src/mesh_llm/transport_policy.rs",
+  "desktop/src-tauri/tauri.conf.json",
+  "desktop/src-tauri/tauri.dev.conf.json",
+  "desktop/src/features/profile/lib/animatedAvatarCapture.ts",
+  "desktop/src/features/agents/team-operations/teamOperationsAdapter.ts",
+  "desktop/src/features/agents/team-operations/teamOperationsApiContract.ts",
+  "desktop/src/features/communities/hostedCommunityApi.ts",
+  "desktop/src/features/communities/relayProbe.ts",
+  "desktop/src/features/onboarding/welcomeCanvas.ts",
+  "desktop/src/features/settings/hooks/use-updater.ts",
+  "desktop/src/shared/product/identity.generated.ts",
+  "web/src/shared/lib/buzz-download.ts",
+  "web/src/shared/lib/relay-url.ts",
+  "web/src/shared/product/identity.generated.ts",
+  "web/src/features/invite/ui/InvitePage.tsx",
+  "admin-web/src/product/identity.generated.ts",
+  "mobile/lib/shared/product/identity.g.dart",
+  "mobile/lib/features/pairing/pairing_provider.dart",
+  "mobile/lib/shared/deeplink/deep_link.dart",
+  ".github/workflows/release.yml",
+  ".github/workflows/docker.yml",
+  ".github/workflows/helm-chart.yml",
+  ".github/workflows/push-gateway-helm-chart.yml",
+  ".github/workflows/signed-macos-canary.yml",
+  ".github/workflows/linux-canary.yml",
+  ".github/workflows/windows-canary.yml",
+  ".github/workflows/mobile-release-candidate.yml",
+  "Dockerfile.push-gateway",
+  "deploy/compose/.env.example",
+  "deploy/compose/compose.yml",
+  "deploy/charts/buzz/values.yaml",
+  "deploy/charts/buzz/templates/deployment.yaml",
+  "deploy/charts/buzz-push-gateway/values.yaml",
+  "deploy/charts/buzz-push-gateway/values-production.yaml",
+  "deploy/charts/buzz-push-gateway/values.schema.json",
+  "infra/aws/versions.tf",
+  "infra/aws/variables.tf",
+  "infra/aws/preflight.tf",
+  "infra/aws/network.tf",
+  "infra/aws/edge.tf",
+  "infra/aws/data_plane.tf",
+  "infra/aws/compute.tf",
+  "infra/aws/agent_executor.tf",
+  "infra/aws/agent_broker.tf",
+  "infra/aws/agent_coordinator.tf",
+  "infra/aws/operations.tf",
+  "infra/aws/reliability.tf",
+  "infra/aws/launch_evidence.tf",
+  "infra/aws/supply_chain.tf",
+  "infra/aws/outputs.tf",
+  "infra/aws/provider_egress_proxy.tf",
+  ".github/workflows/snowman-production-evidence.yml",
+];
+
+const forbidden = [
+  ["Block GitHub", /github\.com\/block\//i],
+  ["Block contributor GitHub", /github\.com\/tlongwell-block\//i],
+  ["Block GitHub API", /api\.github\.com\/repos\/block\//i],
+  ["Block GHCR", /ghcr\.io\/block\//i],
+  ["Builderlab runtime", /(?:^|[^a-z0-9-])(?:[a-z0-9-]+\.)*builderlab\.xyz\b/i],
+  ["Buzz production domain", /(?:^|[^a-z0-9-])(?:[a-z0-9-]+\.)*buzz\.xyz\b/i],
+  ["public Nostr relay", /relay\.damus\.io|nos\.lol|nostr\.wine/i],
+  ["public mesh relay", /mesh-llm\.iroh\.link|default_relay_map\(\)/i],
+  ["mutable main image", /image:\s*[^\n]*(?::main|:latest)\b/i],
+  ["remote runtime avatar", /const\s+\w*AVATAR\w*:\s*&str\s*=\s*"https?:\/\//i],
+  [
+    "remote installer command",
+    /install_commands(?:_windows)?:\s*&\[[^\]]*https?:\/\//is,
+  ],
+];
+
+const failures = [];
+for (const path of runtimeAuthorityFiles) {
+  const source = read(path);
+  for (const [label, pattern] of forbidden) {
+    if (pattern.test(source)) failures.push(`${path}: ${label}`);
+  }
+}
+
+function requireFragment(path, fragment, reason) {
+  if (!read(path).includes(fragment)) failures.push(`${path}: ${reason}`);
+}
+
+const releaseSource = read("web/src/shared/lib/buzz-download.ts");
+if (/fetch\(\s*["'`]https?:\/\//i.test(releaseSource)) {
+  failures.push(
+    "web/src/shared/lib/buzz-download.ts: cross-origin release fetch",
+  );
+}
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  'Self::Twilio => "api.twilio.com"',
+  "provider egress must map Twilio to its exact operations-sealed host",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "mark_dispatched(&dispatched_receipt).await?",
+  "provider egress must commit a sticky receipt before provider bytes can be sent",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/server.rs",
+  ".resolve_to_addrs(&request.tls_server_name, &pinned)",
+  "provider HTTPS must use only the freshly validated DNS address set",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/server.rs",
+  ".no_proxy()",
+  "provider egress must reject ambient proxy discovery",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/server.rs",
+  ".redirect(Policy::none())",
+  "provider egress must not follow provider redirects",
+);
+requireFragment(
+  "migrations/0058_snowman_provider_egress_runtime.sql",
+  "FORCE ROW LEVEL SECURITY",
+  "provider replay and cancellation state must repeat tenant isolation in PostgreSQL",
+);
+requireFragment(
+  "migrations/0059_snowman_orchestration_destinations.sql",
+  "FOREIGN KEY (community_id, workspace_id, dispatch_id)",
+  "orchestration dispatch receipts must remain bound to their exact tenant and workspace authority",
+);
+requireFragment(
+  "migrations/0059_snowman_orchestration_destinations.sql",
+  "FOREIGN KEY (community_id, workspace_id, outbox_id)",
+  "orchestration cancellation receipts must remain bound to their exact tenant and workspace authority",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "var.provider_egress_desired_count == 0",
+  "provider egress must remain dormant until staged launch evidence passes",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "provider_egress_inspected_egress_evidence_sha256",
+  "provider activation must depend on exact-domain inspected-egress evidence",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "assign_public_ip = false",
+  "the dormant provider task must not silently receive a public egress path",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'default     = "single_az_cost_optimized"',
+  "provider inspection must expose an explicit staging-cost versus production-HA topology",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'resource "aws_networkfirewall_rule_group" "provider_egress_domains"',
+  "provider internet traffic must traverse a dedicated stateful Network Firewall",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "tls.sni; content:",
+  "provider firewall policy must enforce exact TLS SNI values",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "http.host; content:",
+  "provider firewall policy must enforce exact HTTP Host values",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'var.provider_egress_elevenlabs_enabled ? ["api.elevenlabs.io"] : []',
+  "ElevenLabs egress must remain independently optional",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "drop ip $HOME_NET any -> $EXTERNAL_NET any",
+  "provider firewall policy must default-deny every non-approved destination",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'resource "aws_route" "provider_egress_nat_return_to_firewall"',
+  "provider NAT return traffic must be symmetrically inspected",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  'cidr_ipv4         = "${cidrhost(var.vpc_cidr, 2)}/32"',
+  "provider DNS must be limited to the exact VPC resolver",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  'role != "snowman_provider_egress"',
+  "provider egress must use the exact dedicated database login",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "SET snowman.tenant_id = ''",
+  "provider database sessions must start tenant-unbound",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "c.relrowsecurity AND c.relforcerowsecurity",
+  "provider bootstrap must validate FORCE RLS on every provider ledger",
+);
+requireFragment(
+  "crates/snowman-bootstrap/src/main.rs",
+  "provision_provider_egress_role",
+  "the governed bootstrap must reconcile the exact provider database identity",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  'SNOWMAN_PROVIDER_EGRESS_DB_ROLE", value = "snowman_provider_egress"',
+  "the one-shot bootstrap task must seal the exact provider role name",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  'Self::OpenAi => "api.openai.com"',
+  "provider egress must map OpenAI to its exact operations-sealed host",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  'Self::ElevenLabs => "api.elevenlabs.io"',
+  "provider egress must map optional ElevenLabs to its exact operations-sealed host",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "resolved_ips: Vec<IpAddr>",
+  "provider transport must receive only a freshly validated pinned address set",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "tls_server_name: String",
+  "provider transport must bind certificate validation, SNI, and authority",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "ReceiptStatus::Indeterminate",
+  "provider cancellation and timeout races must remain sticky and non-retriable",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "Secret reference resolved only inside the transport",
+  "provider credentials must be injected only within the direct transport",
+);
+requireFragment(
+  "desktop/src-tauri/src/commands/workspace.rs",
+  "validate_snowman_relay_url(&relay_url)?;",
+  "workspace relay changes must enforce the Snowman transport boundary",
+);
+requireFragment(
+  "desktop/src-tauri/tauri.conf.json",
+  "default-src 'self'; connect-src 'self'",
+  "desktop webview must enforce a production egress CSP",
+);
+requireFragment(
+  "desktop/src-tauri/tauri.conf.json",
+  "frame-src 'none'; object-src 'none'",
+  "desktop webview must prohibit embedded remote browsing surfaces",
+);
+requireFragment(
+  "desktop/src/features/profile/lib/animatedAvatarCapture.ts",
+  'const MEDIAPIPE_WASM_BASE = "/runtime/mediapipe/wasm";',
+  "avatar processing must use same-origin governed runtime assets",
+);
+requireFragment(
+  "web/src/shared/lib/relay-url.ts",
+  "Relay URL is outside the Snowman-controlled boundary.",
+  "browser relay connections must enforce the Snowman transport boundary",
+);
+requireFragment(
+  "web/src/shared/lib/relay-url.ts",
+  'import.meta.env.MODE === "e2e"',
+  "browser loopback relay access must be limited to an explicit acceptance-test build",
+);
+requireFragment(
+  "mobile/lib/features/pairing/pairing_provider.dart",
+  "Relay URL is outside the Snowman-controlled boundary",
+  "mobile pairing must enforce the Snowman transport boundary",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  ".no_proxy()",
+  "workforce workers must not inherit ambient proxy routes",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  "sign_nip98",
+  "workforce workers must authenticate every relay operation",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  "lease.task.model_id.clone()",
+  "the selected per-agent model must cross the governed Analyst contract",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  '"snowman.workforce.context.publish.v1"',
+  "successful specialists must publish a bounded successor context manifest",
+);
+requireFragment(
+  "crates/snowman-workforce-worker/src/lib.rs",
+  "quality_risk_reviewer",
+  "client-ready work must include an independently identified reviewer",
+);
+requireFragment(
+  "crates/snowman-analyst-client/src/lib.rs",
+  ".no_proxy()",
+  "Analyst commands must not inherit ambient proxy routes",
+);
+requireFragment(
+  "crates/snowman-analyst-client/src/lib.rs",
+  ".redirect(Policy::none())",
+  "Analyst commands must reject redirects",
+);
+requireFragment(
+  "crates/snowman-analyst-client/src/lib.rs",
+  "SigningAlgorithmSpec::RsassaPssSha256",
+  "Analyst commands must use the approved asymmetric KMS assertion algorithm",
+);
+requireFragment(
+  "crates/snowman-analyst-client/src/lib.rs",
+  'reference.authority == "analyst360"',
+  "Analyst artifact references must preserve Analyst authority",
+);
+requireFragment(
+  "crates/snowman-workforce/src/lib.rs",
+  "DisallowedModelOverride",
+  "per-agent model overrides must remain governed by the approved catalog",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  'sws_obj.insert("network_access".to_string(), serde_json::Value::Bool(false));',
+  "Codex agent tools must retain the final deny-network overlay",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  "PermissionPolicy::RejectOnce",
+  "governed ACP execution must reject adapter-local permission escalation",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  '"SNOWMAN_AGENT_JOB_TOKEN"',
+  "ACP adapters must not inherit the purpose-bound job credential",
+);
+requireFragment(
+  "crates/buzz-acp/src/oneshot.rs",
+  "AcpClient::spawn_governed(",
+  "the one-shot executor must suppress adapter-controlled diagnostic output",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  "Stdio::null()",
+  "governed ACP children must not copy prompt or tool content to container stderr",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  ".no_proxy()",
+  "the one-shot executor must not inherit an ambient proxy route",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "ConstantTimeEq",
+  "job credentials must be compared in constant time",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  '"/v1/tenants/{tenant_id}/jobs/{job_id}/snapshot"',
+  "broker job lookups must carry the tenant in the private route",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  'required("SNOWMAN_AGENT_TENANT_ID")',
+  "one-shot executors must bind broker calls to the coordinator-supplied tenant",
+);
+requireFragment(
+  "migrations/0043_snowman_agent_jobs.sql",
+  "PRIMARY KEY (community_id, job_id)",
+  "agent job uniqueness must lead with the tenant boundary",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "ON CONFLICT DO NOTHING",
+  "job issuance must be idempotent for one fenced task generation",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "RequestBodyLimitLayer",
+  "agent receipts must have a transport-level body ceiling",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  '.ends_with(".rds.amazonaws.com")',
+  "the broker database route must remain on the approved Snowman AWS substrate",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "issue.job_token.zeroize();",
+  "the trusted coordinator must erase the raw job token before database I/O",
+);
+requireFragment(
+  "crates/snowman-agent-contract/src/lib.rs",
+  "pii_prohibited",
+  "every agent snapshot must carry the global PII prohibition",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/lib.rs",
+  "!snapshot.data_policy.pii_prohibited",
+  "job issuance must reject any snapshot not covered by the PII prohibition",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  ".assign_public_ip(AssignPublicIp::Disabled)",
+  "the coordinator must explicitly disable public IPs on every one-shot task",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  ".enable_execute_command(false)",
+  "the coordinator must explicitly disable ECS Exec on every one-shot task",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "issue_job_in_transaction",
+  "job and launch evidence must commit atomically",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "MacAlgorithmSpec::HmacSha256",
+  "recoverable one-job credentials must derive from the exact KMS HMAC key",
+);
+requireFragment(
+  "crates/snowman-agent-contract/src/lib.rs",
+  "snowman.agent.model-grant.v1",
+  "agent model authority must use a versioned contract distinct from the broker token",
+);
+requireFragment(
+  "migrations/0045_snowman_agent_model_grants.sql",
+  "model_token_sha256",
+  "only the digest of an agent model credential may be durable",
+);
+requireFragment(
+  "migrations/0046_snowman_agent_source_attested_bootstrap.sql",
+  "bootstrap_source_ip INET",
+  "agent credential redemption must preserve bounded task-source evidence",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "observation.private_ipv4 != Some(source_ipv4)",
+  "agent bootstrap must bind credentials to the exact ECS task attachment address",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/service.rs",
+  "ConnectInfo(peer): ConnectInfo<SocketAddr>",
+  "agent bootstrap must use the network peer address rather than a forwarded header",
+);
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  "preserve_client_ip   = true",
+  "the private coordinator NLB must preserve the executor source address",
+);
+requireFragment(
+  "infra/aws/agent_executor.tf",
+  "SNOWMAN_AGENT_REQUIRE_SOURCE_ATTESTED_BOOTSTRAP",
+  "one-shot executors must fail closed without the source-attested bootstrap contract",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "MODEL_TOKEN_DOMAIN",
+  "model credentials must be domain-separated from broker credentials",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  '"SNOWMAN_AGENT_MODEL_TOKEN"',
+  "the untrusted ACP child must not inherit the model bearer grant directly",
+);
+requireFragment(
+  "crates/snowman-model-gateway/src/lib.rs",
+  ".verify_mac()",
+  "the model gateway must authenticate coordinator grants through KMS",
+);
+requireFragment(
+  "infra/aws/model_gateway.tf",
+  '["kms:VerifyMac"]',
+  "the model gateway role must receive only exact model-grant verification authority",
+);
+requireFragment(
+  "crates/snowman-model-gateway/src/lib.rs",
+  "lock_live_authority",
+  "agent model dispatch must recheck the exact live job and lease authority",
+);
+requireFragment(
+  "crates/snowman-model-gateway/src/lib.rs",
+  'status = if live { "indeterminate" } else { "aborted" }',
+  "provider dispatch must linearize to a durable worst-case reservation",
+);
+requireFragment(
+  "migrations/0047_snowman_agent_model_authority.sql",
+  "snowman_agent_model_generations",
+  "agent model invocations must have tenant-scoped durable accounting",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "verify_model_gateway_role",
+  "the model gateway must fail closed on its dedicated PostgreSQL identity",
+);
+requireFragment(
+  "infra/aws/network.tf",
+  'resource "aws_vpc_security_group_egress_rule" "model_gateway_to_database"',
+  "model authority checks must use only the private database security-group path",
+);
+requireFragment(
+  "migrations/0044_snowman_agent_launches.sql",
+  "PRIMARY KEY (community_id, launch_id)",
+  "agent launch evidence must lead with the tenant boundary",
+);
+requireFragment(
+  "crates/snowman-meeting-control/src/lib.rs",
+  "pub enum MeetingToolIntent",
+  "meeting models must be restricted to a versioned narrow tool-intent allowlist",
+);
+requireFragment(
+  "crates/snowman-meeting-control/src/lib.rs",
+  "calendar.attendance != AttendanceStatus::Accepted",
+  "calendar acceptance must be independently checked before meeting admission",
+);
+requireFragment(
+  "crates/snowman-meeting-control/src/lib.rs",
+  "self.status == ScheduleStatus::Active && !self.all_participants_consented()",
+  "a late participant must pause active media until consent is complete",
+);
+requireFragment(
+  "crates/snowman-meeting-control/src/lib.rs",
+  "VoiceRoute::Disabled",
+  "meeting media must retain an explicit default-off route",
+);
+requireFragment(
+  "crates/snowman-meeting-media-gateway/src/lib.rs",
+  "MediaExecutionGrant::from_active_meeting",
+  "meeting media authority must derive from active consent-complete meeting control",
+);
+requireFragment(
+  "crates/snowman-meeting-media-gateway/src/lib.rs",
+  "pub trait WebhookAuthenticator",
+  "provider callbacks must cross an explicit authenticity boundary",
+);
+requireFragment(
+  "crates/snowman-meeting-media-gateway/src/lib.rs",
+  "pub struct TransientAudioFrame<'a>",
+  "raw meeting audio must remain borrowed and non-persistable",
+);
+requireFragment(
+  "migrations/0050_snowman_meeting_media_gateway.sql",
+  "raw_audio_retention = 'none'",
+  "meeting media persistence must prohibit raw-audio retention",
+);
+requireFragment(
+  "migrations/0050_snowman_meeting_media_gateway.sql",
+  "PRIMARY KEY (community_id, provider, delivery_id_sha256)",
+  "provider callback replay fences must lead with the tenant boundary",
+);
+requireFragment(
+  "migrations/0048_snowman_governed_meetings.sql",
+  "content_trust = 'untrusted'",
+  "mail and calendar source content must remain structurally untrusted",
+);
+requireFragment(
+  "migrations/0048_snowman_governed_meetings.sql",
+  "sealed_coordinate_ref !~* '^sip:'",
+  "meeting persistence must reject raw SIP coordinates in the control plane",
+);
+requireFragment(
+  "migrations/0048_snowman_governed_meetings.sql",
+  "PRIMARY KEY (community_id, intent_id)",
+  "meeting tool-intent uniqueness must lead with the tenant boundary",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "REVOKE ALL ON TABLE snowman_meetings",
+  "the general relay database role must not access governed meeting authority",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "pub async fn verify_meeting_control_role",
+  "meeting control must fail closed on its dedicated database identity",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "GRANT SELECT,INSERT ON TABLE snowman_meeting_commands",
+  "meeting scheduling commands must remain append-only for the controller",
+);
+requireFragment(
+  "crates/snowman-agent-broker/src/main.rs",
+  'with_env_filter("snowman_agent_broker=info")',
+  "the private broker must ignore ambient content-bearing log directives",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "REVOKE ALL ON TABLE snowman_agent_jobs",
+  "the general relay database role must not access agent job authority",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "GRANT SELECT, UPDATE ON TABLE snowman_agent_jobs",
+  "the broker database identity must be read/update-only on its job ledger",
+);
+requireFragment(
+  "crates/snowman-bootstrap/src/main.rs",
+  "provision_agent_broker_role",
+  "the governed bootstrap must provision the separate broker database identity",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  'resource "aws_secretsmanager_secret" "agent_broker_runtime"',
+  "the broker database URL must use a separate KMS-encrypted runtime secret",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  ".redirect(Policy::none())",
+  "the one-shot executor must reject broker redirects",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  'const MANIFEST_PATH: &str = "/opt/snowman/runtime/manifest.json";',
+  "the one-shot executor must load only the immutable image manifest",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  'with_env_filter("snowman_agent_executor=info,buzz_acp=info,acp::wire=off")',
+  "the one-shot executor must not accept ambient content-bearing log directives",
+);
+requireFragment(
+  "crates/snowman-agent-executor/src/main.rs",
+  'Some(Path::new("/opt/snowman/runtime/bin"))',
+  "runtime manifests must use an adapter directly inside the immutable runtime directory",
+);
+requireFragment(
+  "crates/buzz-acp/src/acp.rs",
+  "const SENSITIVE_AGENT_ENV_KEYS",
+  "ACP agent children must remove relay, cloud, and provider credentials",
+);
+const acpSource = read("crates/buzz-acp/src/lib.rs");
+const mcpStart = acpSource.indexOf("fn build_mcp_servers");
+const mcpEnd = acpSource.indexOf("\n}\n\n", mcpStart);
+const mcpBuilder =
+  mcpStart >= 0 && mcpEnd > mcpStart
+    ? acpSource.slice(mcpStart, mcpEnd)
+    : "";
+if (
+  !mcpBuilder.includes("MCP tools receive only the relay address") ||
+  mcpBuilder.includes('name: "BUZZ_PRIVATE_KEY"') ||
+  mcpBuilder.includes('name: "BUZZ_AUTH_TAG"')
+) {
+  failures.push(
+    "crates/buzz-acp/src/lib.rs: MCP configuration must not receive relay signing authority",
+  );
+}
+requireFragment(
+  "crates/snowman-workforce/src/lib.rs",
+  "ExecuteAutomatically",
+  "proactive action policy must distinguish automatic work from human-gated work",
+);
+requireFragment(
+  "crates/snowman-meeting-media-gateway/src/server.rs",
+  "DisabledProviderRuntime",
+  "meeting media must fail closed until its injected policy-proxy runtime is packaged",
+);
+requireFragment(
+  "crates/snowman-meeting-media-gateway/src/server.rs",
+  "status='indeterminate'",
+  "meeting media must durably fence a provider send before network execution",
+);
+requireFragment(
+  "migrations/0056_snowman_meeting_media_service.sql",
+  "status TEXT NOT NULL DEFAULT 'disabled'",
+  "meeting media callers and callbacks must default disabled",
+);
+requireFragment(
+  "crates/snowman-orchestration/src/lib.rs",
+  "valid_analyst_ref",
+  "orchestration memory and work-product context must remain immutable Analyst 360 references",
+);
+requireFragment(
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "authorize_human_read",
+  "the command-center orchestration projection must revalidate a live human workspace authority",
+);
+requireFragment(
+  "desktop/src/features/agents/team-operations/teamOperationsAdapter.ts",
+  "exactSnowmanOrigin",
+  "team operations must reject direct non-Snowman network origins",
+);
+requireFragment(
+  "desktop/src/features/agents/team-operations/teamOperationsAdapter.ts",
+  "receipt.plan_generation !== projection.plan.generation",
+  "lifecycle UI updates must remain fenced to the exact plan generation receipt",
+);
+requireFragment(
+  "crates/snowman-orchestration/src/lib.rs",
+  "live_plan_generation",
+  "orchestration dispatch must reject cancelled or superseded plan generations",
+);
+requireFragment(
+  "crates/snowman-orchestration/src/lib.rs",
+  "minimum_value_basis_points",
+  "automatic orchestration must require evidence-grounded confidence, value, and risk policy",
+);
+requireFragment(
+  "migrations/0052_snowman_orchestration_foundation.sql",
+  "automatic_execution_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+  "new orchestration plans must default automatic execution off",
+);
+requireFragment(
+  "migrations/0052_snowman_orchestration_foundation.sql",
+  "handoff_manifest_reference ~ '^analyst360:sha256:",
+  "replacement-agent handoffs must remain Analyst-owned immutable references",
+);
+requireFragment(
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "chrono-tz/0.10.4",
+  "the orchestration scheduler must record its exact compiled timezone implementation",
+);
+requireFragment(
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "Insert dependency edges only after every task row exists",
+  "orchestration persistence must not depend on caller task ordering",
+);
+requireFragment(
+  "migrations/0053_snowman_orchestration_service.sql",
+  "enabled BOOLEAN NOT NULL DEFAULT FALSE",
+  "persisted recurrence schedules must remain disabled by default",
+);
+requireFragment(
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "verify_orchestration_role(&pool",
+  "the orchestration service must verify its dedicated database identity at startup",
+);
+requireFragment(
+  "migrations/0057_snowman_orchestration_control_delivery.sql",
+  "PRIMARY KEY (community_id, outbox_id, lease_generation)",
+  "control delivery receipts must preserve the tenant and lease fence",
+);
+requireFragment(
+  "crates/snowman-orchestration-worker/src/lib.rs",
+  ".redirect(Policy::none())",
+  "the orchestration worker must reject destination redirects",
+);
+requireFragment(
+  "crates/snowman-orchestration-worker/src/lib.rs",
+  ".no_proxy()",
+  "the orchestration worker must not inherit ambient proxy egress",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "workforce.proactive.propose",
+  "proactive proposals must require an exact tenant-local service capability",
+);
+requireFragment(
+  "crates/buzz-relay/src/config.rs",
+  "SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES",
+  "proactive automatic authority must come from server-owned configuration",
+);
+requireFragment(
+  "crates/buzz-relay/src/router.rs",
+  "/internal/snowman/v1/workforce/requests/{request_id}/proactive-actions",
+  "proactive proposals must remain behind the private workforce plane",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "proactive action would exceed a request cost or token ceiling",
+  "proactive work must reserve against the originating request cost and token budgets",
+);
+requireFragment(
+  "crates/snowman-workforce/src/lib.rs",
+  "producer_identities",
+  "client-ready work must use an independently identified quality/risk reviewer",
+);
+requireFragment(
+  "crates/snowman-workforce/src/lib.rs",
+  "validate_context_packet",
+  "replacement agents must receive only a bounded evidence-linked context manifest",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "workforce.context.write",
+  "context handoffs must require an exact tenant-local publisher capability",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "context publication requires the publisher's live fenced task lease",
+  "stale or unleased agents must not publish workforce memory",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "workforce.context.read",
+  "context retrieval must require an exact tenant-local reader capability",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "t.service_identity_id=$3",
+  "context access must require an active assignment on the exact request",
+);
+requireFragment(
+  "crates/buzz-relay/src/router.rs",
+  "/internal/snowman/v1/workforce/requests/{request_id}/context-packets",
+  "context handoffs must remain behind the private workforce plane",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  '"workforce.requests.cancel"',
+  "human request cancellation must require an exact workforce capability",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  '"workforce.tasks.approve"',
+  "human task decisions must require an exact workforce capability",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "DELETE FROM snowman_task_leases l USING snowman_work_tasks t",
+  "request cancellation must invalidate every outstanding task lease",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  '"task.approval_decided"',
+  "task approvals must append evidence bound to the exact execution snapshot",
+);
+requireFragment(
+  "infra/aws/preflight.tf",
+  "var.expected_workload_account_id != var.analyst360_workload_account_id",
+  "production Command Center and Analyst 360 AWS authority must remain separate",
+);
+requireFragment(
+  "infra/aws/preflight.tf",
+  "var.relay_desired_count == 0",
+  "AWS runtime counts must remain hard-zero until activation gates pass",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  "readonlyRootFilesystem = true",
+  "the dormant relay task must use a read-only root filesystem",
+);
+requireFragment(
+  "infra/aws/agent_executor.tf",
+  'entryPoint             = ["/usr/local/bin/snowman-agent-executor"]',
+  "one-shot agent tasks must use the governed Snowman executor entry point",
+);
+requireFragment(
+  "infra/aws/agent_executor.tf",
+  "SNOWMAN_AGENT_REQUIRE_BROKERED_JOB_TOKEN",
+  "agent tasks must require a purpose-bound broker credential",
+);
+requireFragment(
+  "infra/aws/agent_executor.tf",
+  'capabilities       = { drop = ["ALL"] }',
+  "agent tasks must drop every Linux capability",
+);
+const agentExecutorTerraform = read("infra/aws/agent_executor.tf");
+if (/^\s*task_role_arn\s*=/m.test(agentExecutorTerraform)) {
+  failures.push(
+    "infra/aws/agent_executor.tf: untrusted agent tasks must not receive an ECS task role",
+  );
+}
+const agentBrokerTerraform = read("infra/aws/agent_broker.tf");
+if (/^\s*task_role_arn\s*=/m.test(agentBrokerTerraform)) {
+  failures.push(
+    "infra/aws/agent_broker.tf: the serving broker must not receive an AWS task role",
+  );
+}
+const agentCoordinatorTerraform = read("infra/aws/agent_coordinator.tf");
+if (/cidr_ipv4\s*=\s*"0\.0\.0\.0\/0"|assign_public_ip\s*=\s*true/m.test(agentCoordinatorTerraform)) {
+  failures.push(
+    "infra/aws/agent_coordinator.tf: the coordinator must not receive a public network path",
+  );
+}
+const agentCoordinatorSource = read("crates/snowman-agent-coordinator/src/lib.rs");
+if (agentCoordinatorSource.includes('"SNOWMAN_AGENT_JOB_TOKEN"')) {
+  failures.push(
+    "crates/snowman-agent-coordinator/src/lib.rs: bearer credentials must not be included in ECS RunTask overrides",
+  );
+}
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  'actions   = ["kms:GenerateMac"]',
+  "the coordinator must derive tokens using only the exact HMAC KMS key",
+);
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  'variable = "iam:PassedToService"',
+  "the coordinator may pass agent execution roles only to ECS tasks",
+);
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  'condition     = var.agent_coordinator_desired_count == 0',
+  "the coordinator must remain hard dormant pending staging evidence",
+);
+if (/cidr_ipv4\s*=\s*"0\.0\.0\.0\/0"|assign_public_ip\s*=\s*true/m.test(agentBrokerTerraform)) {
+  failures.push(
+    "infra/aws/agent_broker.tf: the broker must not receive a public network path",
+  );
+}
+requireFragment(
+  "infra/aws/agent_broker.tf",
+  'condition     = var.agent_broker_desired_count == 0',
+  "the agent broker must remain hard dormant pending staging evidence",
+);
+requireFragment(
+  "infra/aws/agent_broker.tf",
+  'entryPoint             = ["/usr/local/bin/snowman-agent-broker"]',
+  "the broker task must use the governed Snowman entry point",
+);
+requireFragment(
+  "infra/aws/agent_broker.tf",
+  'valueFrom = "${aws_secretsmanager_secret.agent_broker_runtime.arn}:DATABASE_URL::"',
+  "the broker must receive only its exact database secret field",
+);
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  'valueFrom = "${aws_secretsmanager_secret.agent_coordinator_runtime.arn}:DATABASE_URL::"',
+  "the coordinator must receive the exact serialized database secret field",
+);
+requireFragment(
+  "infra/aws/model_gateway.tf",
+  'valueFrom = "${aws_secretsmanager_secret.model_gateway_runtime.arn}:DATABASE_URL::"',
+  "the model gateway must receive the exact serialized database secret field",
+);
+if (/resource\s+"aws_ecs_service"/m.test(agentExecutorTerraform)) {
+  failures.push(
+    "infra/aws/agent_executor.tf: agent execution must remain one-shot instead of an ambient service",
+  );
+}
+if (/BUZZ_PRIVATE_KEY|SNOWMAN_ANALYST_|api\.openai\.com|anthropic\.com/i.test(agentExecutorTerraform)) {
+  failures.push(
+    "infra/aws/agent_executor.tf: agent tasks contain a relay, Analyst, or direct provider authority",
+  );
+}
+requireFragment(
+  "infra/aws/edge.tf",
+  'mode            = "verify"',
+  "the public AWS listener must verify the Snowman Cloudflare client certificate",
+);
+requireFragment(
+  "infra/aws/edge.tf",
+  'name     = "exact-snowman-host"',
+  "the edge WAF must reject alternate host authority",
+);
+requireFragment(
+  "infra/aws/variables.tf",
+  'variable "edge_enabled"',
+  "the cost-bearing edge must have an explicit activation switch",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  'entryPoint             = ["/usr/local/bin/snowman-bootstrap"]',
+  "database/key bootstrap must use the governed one-shot entry point",
+);
+requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "NOT has_schema_privilege(current_user, 'public', 'CREATE')",
+  "the serving database identity must fail closed on schema DDL",
+);
+requireFragment(
+  "crates/snowman-bootstrap/src/main.rs",
+  "no secret values were logged",
+  "bootstrap logs must not contain runtime secret values",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  'user                   = "10001"',
+  "the dormant relay task must run as non-root",
+);
+requireFragment(
+  "infra/aws/preflight.tf",
+  "!var.external_model_processors_enabled",
+  "AWS baseline must fail closed on external model processors",
+);
+requireFragment(
+  "infra/aws/preflight.tf",
+  "var.relay_desired_count == 0 && var.worker_desired_count == 0",
+  "baseline staging must remain dormant",
+);
+requireFragment(
+  "infra/aws/launch_evidence.tf",
+  "local.runtime_activation_requested || local.launch_evidence_valid",
+  "any future runtime activation must require current immutable launch evidence",
+);
+requireFragment(
+  "infra/aws/launch_evidence.tf",
+  "try(var.launch_evidence.container_image, \"\") == var.container_image",
+  "launch evidence must bind the exact deployed image digest",
+);
+requireFragment(
+  "infra/aws/launch_evidence.tf",
+  "try(var.launch_evidence.alert_subscription_confirmed, false)",
+  "launch evidence must prove the monitored alert path is confirmed",
+);
+requireFragment(
+  "infra/aws/launch_evidence.tf",
+  "try(var.launch_evidence.unresolved_high_findings, -1) == 0",
+  "launch evidence must fail on unresolved high-severity image findings",
+);
+requireFragment(
+  "infra/aws/supply_chain.tf",
+  'image_tag_mutability = "IMMUTABLE"',
+  "the Snowman production ECR repository must reject mutable tags",
+);
+requireFragment(
+  "infra/aws/supply_chain.tf",
+  'customer_master_key_spec = "ECC_NIST_P256"',
+  "release signatures must use a dedicated asymmetric Snowman KMS key",
+);
+requireFragment(
+  "scripts/verify-snowman-launch-evidence.mjs",
+  '"postgres-pitr-restore"',
+  "the immutable launch bundle must include PostgreSQL PITR restore proof",
+);
+requireFragment(
+  "scripts/verify-snowman-launch-evidence.mjs",
+  '"audit-checkpoint-recovery"',
+  "the immutable launch bundle must include audit-checkpoint recovery proof",
+);
+requireFragment(
+  "scripts/verify-snowman-launch-evidence.mjs",
+  "outside the Snowman boundary",
+  "launch telemetry exporters must remain inside Snowman-owned surfaces",
+);
+requireFragment(
+  "crates/buzz-workflow/src/schema.rs",
+  "send_dm is not enabled",
+  "unimplemented workflow actions must fail definition validation",
+);
+requireFragment(
+  "crates/buzz-workflow/src/schema.rs",
+  "outside the Snowman-controlled boundary",
+  "workflow webhooks must enforce the Snowman destination boundary",
+);
+requireFragment(
+  "crates/buzz-workflow/src/schema.rs",
+  "literal credential headers are forbidden",
+  "workflow webhook credentials must be brokered",
+);
+requireFragment(
+  "crates/buzz-agent/src/config.rs",
+  "validate_snowman_model_base_url(&self.base_url)?;",
+  "agent inference must enforce the Snowman model boundary",
+);
+requireFragment(
+  "crates/buzz-agent/src/config.rs",
+  "https://models.snowmanai.org/openai/v1",
+  "agent inference must default through the Snowman model gateway",
+);
+requireFragment(
+  "desktop/src-tauri/src/commands/agent_models.rs",
+  "validate_snowman_model_base_url",
+  "model discovery must enforce the Snowman model boundary",
+);
+requireFragment(
+  "desktop/src-tauri/src/managed_agents/discovery.rs",
+  'cfg!(debug_assertions) || runtime.id == "buzz-agent"',
+  "release clients must expose only the Snowman-gateway agent runtime",
+);
+requireFragment(
+  "web/src/shared/lib/buzz-download.ts",
+  'export const SNOWMAN_RELEASES_URL = "/downloads";',
+  "release page must remain same-origin",
+);
+requireFragment(
+  ".github/workflows/docker.yml",
+  "ghcr.io/snowman-ai-org/snowman-command-center",
+  "container publication must default to the Snowman-owned registry namespace",
+);
+requireFragment(
+  ".github/workflows/docker.yml",
+  "--owner snowman-ai-org",
+  "container attestations must verify against the Snowman GitHub owner",
+);
+requireFragment(
+  "Dockerfile.push-gateway",
+  "https://github.com/snowman-ai-org/snowman-command-center",
+  "container provenance must identify the Snowman-owned source repository",
+);
+requireFragment(
+  ".github/workflows/release.yml",
+  "Snowman-owned macOS signing and notarization is not provisioned",
+  "macOS release must fail closed until Snowman owns the signing path",
+);
+requireFragment(
+  "crates/buzz-dev-mcp/src/shell.rs",
+  'SNOWMAN_AGENT_SHELL_CAPABILITY").as_deref()',
+  "agent shell must be capability-gated and default off",
+);
+requireFragment(
+  "crates/buzz-dev-mcp/src/shell.rs",
+  "if !state.shell_capability_granted",
+  "agent shell must enforce its startup capability snapshot",
+);
+requireFragment(
+  "crates/buzz-dev-mcp/src/paths.rs",
+  "path escapes the Snowman agent workspace",
+  "agent file tools must reject workspace escape",
+);
+requireFragment(
+  "crates/snowman-tool-broker/src/lib.rs",
+  "shell_prohibited: true",
+  "production agent actions must never translate a capability into shell authority",
+);
+requireFragment(
+  "crates/snowman-tool-broker/src/lib.rs",
+  "child_credentials_prohibited: true",
+  "tool execution plans must prohibit child credential inheritance",
+);
+requireFragment(
+  "crates/snowman-tool-broker/src/lib.rs",
+  "descriptor_relative_no_symlink",
+  "filesystem routes must require descriptor-relative no-symlink enforcement",
+);
+requireFragment(
+  "crates/snowman-tool-broker/src/lib.rs",
+  "broker_task_role_only",
+  "AWS actions must stay inside the trusted broker task role",
+);
+requireFragment(
+  "migrations/0049_snowman_agent_tool_authority.sql",
+  "external_checkpoint_sha256",
+  "tool evidence must bind to an immutable external checkpoint",
+);
+requireFragment(
+  "crates/buzz-dev-mcp/src/shim.rs",
+  'remove_var("BUZZ_PRIVATE_KEY")',
+  "agent tool server must remove the ambient relay private key",
+);
+requireFragment(
+  "crates/buzz-dev-mcp/src/view_image.rs",
+  'SNOWMAN_AGENT_NETWORK_CAPABILITY").as_deref()',
+  "agent network image reads must be capability-gated",
+);
+requireFragment(
+  "web/src/shared/lib/buzz-download.ts",
+  '!asset.browser_download_url.startsWith("//")',
+  "release assets must reject protocol-relative destinations",
+);
+requireFragment(
+  "crates/buzz-relay/src/config.rs",
+  "Err(_) => None,",
+  "push delivery must default off",
+);
+requireFragment(
+  "crates/buzz-relay/src/config.rs",
+  "SNOWMAN_VALKEY_IAM_ENABLED",
+  "Snowman AWS Valkey must require explicit streaming IAM mode",
+);
+requireFragment(
+  "crates/buzz-relay/src/main.rs",
+  "ElastiCacheIamCredentials::load(iam)",
+  "relay startup must bind Valkey to the AWS workload identity provider",
+);
+requireFragment(
+  "crates/snowman-aws-auth/src/lib.rs",
+  "SignatureLocation::QueryParams",
+  "Valkey credentials must be short-lived SigV4 query tokens",
+);
+requireFragment(
+  "crates/buzz-pubsub/src/connection.rs",
+  "set_credentials_provider(provider)",
+  "Redis connections must consume refreshed credentials without URL secrets",
+);
+requireFragment(
+  "crates/buzz-pubsub/src/connection.rs",
+  "set_automatic_resubscription()",
+  "Redis pub/sub must restore governed subscriptions after IAM reconnects",
+);
+requireFragment(
+  "crates/buzz-relay/src/authorization.rs",
+  "resolve_workforce_principal",
+  "governed relay authorization must resolve a live workforce identity",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "FOR UPDATE SKIP LOCKED",
+  "workforce workers must use durable concurrent claims",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  '"workforce.requests.create"',
+  "workforce request intake must require an exact human capability",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/analyst_integration.rs",
+  "verify_kms_signature(&assertion)",
+  "Analyst event ingress must verify an asymmetric KMS request assertion",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/analyst_integration.rs",
+  "tenant.community()",
+  "Analyst event ingress must derive its community server-side",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/analyst_integration.rs",
+  "sign_receipt(&binding.receipt_kms_key_arn",
+  "Analyst event ingress must sign delivery evidence with the bound receipt key",
+);
+requireFragment(
+  "migrations/0029_snowman_analyst_event_boundary.sql",
+  "CHECK (request_kms_key_arn <> receipt_kms_key_arn)",
+  "Analyst request and Command Center receipt keys must be separate",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  "snowman_workforce_worker_api_enabled",
+  "private worker routes must remain independently disabled on public relay tasks",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  '"workforce.tasks.execute"',
+  "private worker routes must require an exact service capability",
+);
+requireFragment(
+  "migrations/0028_snowman_workforce_claim_idempotency.sql",
+  "idx_snowman_task_leases_worker_claim",
+  "worker lease claims must be idempotent across lost responses",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  "tenant.community()",
+  "workforce requests must use the server-derived tenant",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  'required_capabilities: vec!["workforce.plan".to_string()]',
+  "public intake must enqueue only a bounded planning capability",
+);
+requireFragment(
+  "crates/buzz-relay/src/api/workforce.rs",
+  'strip_prefix("analyst360:sha256:")',
+  "workforce context must use immutable Analyst 360 evidence coordinates",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "execution_snapshot_sha256",
+  "human approvals must bind to an exact execution snapshot",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "pg_advisory_xact_lock",
+  "workforce event and spend writers must serialize conflicting mutations",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce.rs",
+  "snowman.work.event.v1",
+  "workforce lifecycle events must use a domain-separated hash chain",
+);
+requireFragment(
+  "crates/buzz-db/src/workforce_identity.rs",
+  "s.revoked_at IS NULL AND s.expires_at > NOW()",
+  "human workforce keys must require live non-revoked sessions",
+);
+requireFragment(
+  "migrations/0026_snowman_workforce_identity.sql",
+  "snowman_workforce_capability_grants",
+  "service identities must have tenant-scoped capability grants",
+);
+requireFragment(
+  "migrations/0027_snowman_workforce_request_contract.sql",
+  "request_contract_sha256",
+  "workforce idempotency must bind the complete canonical request contract",
+);
+requireFragment(
+  "desktop/src-tauri/src/mesh_llm/transport_policy.rs",
+  'None | Some("") | Some("0") => Ok(IrohRelayMode::Disabled)',
+  "public mesh relays must default off",
+);
+requireFragment(
+  "desktop/src-tauri/src/mesh_llm/transport_policy.rs",
+  "public mesh relays are disabled",
+  "public mesh relay shorthand must fail closed",
+);
+
+const releaseTauri = JSON.parse(read("desktop/src-tauri/tauri.conf.json"));
+const devTauri = JSON.parse(read("desktop/src-tauri/tauri.dev.conf.json"));
+if (releaseTauri.productName !== identity.command_center_name) {
+  failures.push(
+    "desktop release product name differs from product/identity.json",
+  );
+}
+if (releaseTauri.identifier !== identity.desktop_bundle_id) {
+  failures.push("desktop release bundle id differs from product/identity.json");
+}
+if (devTauri.identifier !== identity.desktop_dev_bundle_id) {
+  failures.push("desktop dev bundle id differs from product/identity.json");
+}
+requireFragment(
+  "deploy/charts/buzz/values.yaml",
+  `repository: ${identity.container_image}`,
+  "relay image differs from product/identity.json",
+);
+requireFragment(
+  "deploy/charts/buzz-push-gateway/values.yaml",
+  `repository: ${identity.push_gateway_image}`,
+  "push image differs from product/identity.json",
+);
+requireFragment(
+  "deploy/compose/compose.yml",
+  "SNOWMAN_COMMAND_CENTER_IMAGE:?set a Snowman-owned digest-pinned image",
+  "Compose must not have an upstream or mutable image fallback",
+);
+
+if (failures.length > 0) {
+  console.error("Snowman production-boundary check failed:\n");
+  for (const failure of failures) console.error(`- ${failure}`);
+  process.exit(1);
+}
+
+console.log(
+  `Snowman production-boundary check passed for ${runtimeAuthorityFiles.length} authority files.`,
+);

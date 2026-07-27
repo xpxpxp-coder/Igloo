@@ -7,6 +7,15 @@
 /// half-formed target.
 library;
 
+import 'package:flutter/foundation.dart';
+
+bool _isAllowedSnowmanRelay(Uri uri) {
+  if (kDebugMode) return true;
+  final host = uri.host.toLowerCase();
+  return uri.scheme == 'wss' &&
+      (host == 'snowmanai.org' || host.endsWith('.snowmanai.org'));
+}
+
 /// A parsed deep link supported by the app.
 sealed class BuzzDeepLink {
   const BuzzDeepLink();
@@ -87,7 +96,10 @@ class MessageDeepLink extends BuzzDeepLink {
 /// `buzz://connect` which is desktop-only), or links missing a non-empty
 /// `channel` or `id` param.
 MessageDeepLink? parseMessageDeepLink(Uri uri) {
-  if (uri.scheme != 'buzz' || uri.host != 'message') return null;
+  if ((uri.scheme != 'snowman' && uri.scheme != 'buzz') ||
+      uri.host != 'message') {
+    return null;
+  }
 
   final channel = uri.queryParameters['channel'];
   final id = uri.queryParameters['id'];
@@ -116,7 +128,7 @@ MessageDeepLink? parseMessageDeepLink(Uri uri) {
 InviteDeepLink? parseInviteDeepLink(Uri uri) {
   if (uri.hasFragment || uri.userInfo.isNotEmpty) return null;
 
-  if (uri.scheme == 'buzz') {
+  if (uri.scheme == 'snowman' || uri.scheme == 'buzz') {
     if (uri.host != 'join') return null;
     final relay = uri.queryParameters['relay'];
     final code = uri.queryParameters['code'];
@@ -128,7 +140,8 @@ InviteDeepLink? parseInviteDeepLink(Uri uri) {
         (relayUri.scheme != 'ws' && relayUri.scheme != 'wss') ||
         relayUri.host.isEmpty ||
         relayUri.userInfo.isNotEmpty ||
-        relayUri.hasFragment) {
+        relayUri.hasFragment ||
+        !_isAllowedSnowmanRelay(relayUri)) {
       return null;
     }
     final normalizedRelay = Uri(
@@ -160,6 +173,7 @@ InviteDeepLink? parseInviteDeepLink(Uri uri) {
       host: uri.host,
       port: uri.hasPort ? uri.port : null,
     ).toString();
+    if (!_isAllowedSnowmanRelay(Uri.parse(relay))) return null;
     return InviteDeepLink(relayUrl: relay, code: segments[1]);
   }
 

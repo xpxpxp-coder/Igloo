@@ -53,6 +53,40 @@ surface at template time regardless of which manifest helm renders first.
   {{- end -}}
 {{- end -}}
 
+{{/* Governed workforce identity is meaningful only with role scopes and closed membership. */}}
+{{- if .Values.relay.snowmanWorkforceIdentityRequired -}}
+  {{- if not .Values.relay.snowmanRoleScopes -}}
+    {{- fail "relay.snowmanWorkforceIdentityRequired=true requires relay.snowmanRoleScopes=true" -}}
+  {{- end -}}
+{{- end -}}
+{{- if .Values.relay.snowmanRoleScopes -}}
+  {{- if not .Values.relay.requireRelayMembership -}}
+    {{- fail "relay.snowmanRoleScopes=true requires relay.requireRelayMembership=true" -}}
+  {{- end -}}
+{{- end -}}
+
+{{/* Governed workforce intake is fail-closed and Snowman-only. */}}
+{{- if .Values.relay.snowmanWorkforce.enabled -}}
+  {{- if not .Values.relay.snowmanWorkforceIdentityRequired -}}
+    {{- fail "relay.snowmanWorkforce.enabled=true requires relay.snowmanWorkforceIdentityRequired=true" -}}
+  {{- end -}}
+  {{- if not (regexMatch "^[0-9a-fA-F-]{36}$" .Values.relay.snowmanWorkforce.leadServiceIdentityId) -}}
+    {{- fail "relay.snowmanWorkforce.leadServiceIdentityId must be a UUID for a tenant-local Snowman agent identity" -}}
+  {{- end -}}
+  {{- if not (regexMatch "^https://([a-z0-9-]+\\.)*snowmanai\\.org(:443)?(/|$)" .Values.relay.snowmanWorkforce.modelGatewayUrl) -}}
+    {{- fail "relay.snowmanWorkforce.modelGatewayUrl must use a Snowman-controlled HTTPS endpoint" -}}
+  {{- end -}}
+  {{- if not .Values.relay.snowmanWorkforce.planningModelId -}}
+    {{- fail "relay.snowmanWorkforce.planningModelId is required when workforce intake is enabled" -}}
+  {{- end -}}
+{{- end -}}
+{{- if and .Values.relay.snowmanWorkforce.workerApiEnabled (not .Values.relay.snowmanWorkforce.enabled) -}}
+  {{- fail "relay.snowmanWorkforce.workerApiEnabled=true requires relay.snowmanWorkforce.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.relay.snowmanAnalystEventApiEnabled (not .Values.relay.snowmanWorkforceIdentityRequired) -}}
+  {{- fail "relay.snowmanAnalystEventApiEnabled=true requires relay.snowmanWorkforceIdentityRequired=true" -}}
+{{- end -}}
+
 {{/* ownerPubkey format check */}}
 {{- if .Values.ownerPubkey -}}
   {{- if not (regexMatch "^[0-9a-f]{64}$" .Values.ownerPubkey) -}}

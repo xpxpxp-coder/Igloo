@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# Public Buzz relay image — published as ghcr.io/block/buzz:<tag>.
+# Snowman Command Center image — published only to the Snowman-owned ECR repo.
 #
 # Builds the `buzz-relay` binary (Rust 1.95) and the `buzz-web` static bundle
 # (pnpm + vite), then assembles them into a small debian-slim runtime with
@@ -67,9 +67,34 @@ COPY . .
 RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
                                    -p buzz-admin --bin buzz-admin \
                                    -p buzz-pair-relay --bin buzz-pair-relay \
+                                   -p snowman-bootstrap --bin snowman-bootstrap \
+                                   -p snowman-agent-broker --bin snowman-agent-broker \
+                                   -p snowman-agent-coordinator --bin snowman-agent-coordinator \
+                                   -p snowman-model-gateway --bin snowman-model-gateway \
+                                   -p snowman-audit-checkpoint --bin snowman-audit-checkpoint \
+                                   -p snowman-meeting-command-service --bin snowman-meeting-command-service \
+                                   -p snowman-meeting-media-gateway --bin snowman-meeting-media-gateway \
+                                   -p snowman-provider-egress-proxy --bin snowman-provider-egress-proxy \
+                                   -p snowman-orchestration-service --bin snowman-orchestration-service \
+                                   -p snowman-orchestration-worker --bin snowman-orchestration-worker \
+                                   -p snowman-workforce-worker --bins \
     && strip target/release/buzz-relay \
     && strip target/release/buzz-admin \
-    && strip target/release/buzz-pair-relay
+    && strip target/release/buzz-pair-relay \
+    && strip target/release/snowman-bootstrap \
+    && strip target/release/snowman-agent-broker \
+    && strip target/release/snowman-agent-coordinator \
+    && strip target/release/snowman-model-gateway \
+    && strip target/release/snowman-audit-checkpoint \
+    && strip target/release/snowman-meeting-command-service \
+    && strip target/release/snowman-meeting-media-gateway \
+    && strip target/release/snowman-provider-egress-proxy \
+    && strip target/release/snowman-orchestration-service \
+    && strip target/release/snowman-orchestration-worker \
+    && strip target/release/snowman-workforce-worker \
+    && strip target/release/snowman-workforce-scheduler \
+    && strip target/release/snowman-workforce-trigger \
+    && strip target/release/snowman-workforce-reminder
 
 # ─── Stage 4: web bundle (pnpm + vite) ──────────────────────────────────────
 # Independent of the Rust layers so a CSS change doesn't bust Rust cache and
@@ -114,14 +139,13 @@ RUN pnpm -C web build && pnpm -C admin-web build
 # ─── Stage 5: runtime ───────────────────────────────────────────────────────
 FROM debian:${DEBIAN_VERSION}-slim AS runtime
 
-# OCI annotations: required for GHCR to auto-link the image to this repo and
-# inherit its visibility. org.opencontainers.image.source is the load-bearing
-# one — without it GHCR keeps the image private even when the repo is public.
-LABEL org.opencontainers.image.title="Buzz" \
-      org.opencontainers.image.description="WebSocket relay server for the Buzz communications platform" \
-      org.opencontainers.image.source="https://github.com/block/buzz" \
-      org.opencontainers.image.url="https://github.com/block/buzz" \
-      org.opencontainers.image.documentation="https://github.com/block/buzz#readme" \
+# OCI annotations identify the Snowman fork and product. Upstream provenance is
+# retained in the shipped notices rather than advertising an upstream runtime.
+LABEL org.opencontainers.image.title="Snowman Command Center" \
+      org.opencontainers.image.description="Governed intelligence and agent-operations control plane for Snowman 360" \
+      org.opencontainers.image.source="https://github.com/snowman-ai-org/snowman-command-center" \
+      org.opencontainers.image.url="https://snowmanai.org" \
+      org.opencontainers.image.documentation="https://snowmanai.org/docs" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 RUN apt-get update \
@@ -138,6 +162,20 @@ RUN apt-get update \
 COPY --from=builder    /build/target/release/buzz-relay /usr/local/bin/buzz-relay
 COPY --from=builder    /build/target/release/buzz-admin /usr/local/bin/buzz-admin
 COPY --from=builder    /build/target/release/buzz-pair-relay /usr/local/bin/buzz-pair-relay
+COPY --from=builder    /build/target/release/snowman-bootstrap /usr/local/bin/snowman-bootstrap
+COPY --from=builder    /build/target/release/snowman-agent-broker /usr/local/bin/snowman-agent-broker
+COPY --from=builder    /build/target/release/snowman-agent-coordinator /usr/local/bin/snowman-agent-coordinator
+COPY --from=builder    /build/target/release/snowman-model-gateway /usr/local/bin/snowman-model-gateway
+COPY --from=builder    /build/target/release/snowman-audit-checkpoint /usr/local/bin/snowman-audit-checkpoint
+COPY --from=builder    /build/target/release/snowman-meeting-command-service /usr/local/bin/snowman-meeting-command-service
+COPY --from=builder    /build/target/release/snowman-meeting-media-gateway /usr/local/bin/snowman-meeting-media-gateway
+COPY --from=builder    /build/target/release/snowman-provider-egress-proxy /usr/local/bin/snowman-provider-egress-proxy
+COPY --from=builder    /build/target/release/snowman-orchestration-service /usr/local/bin/snowman-orchestration-service
+COPY --from=builder    /build/target/release/snowman-orchestration-worker /usr/local/bin/snowman-orchestration-worker
+COPY --from=builder    /build/target/release/snowman-workforce-worker /usr/local/bin/snowman-workforce-worker
+COPY --from=builder    /build/target/release/snowman-workforce-scheduler /usr/local/bin/snowman-workforce-scheduler
+COPY --from=builder    /build/target/release/snowman-workforce-trigger /usr/local/bin/snowman-workforce-trigger
+COPY --from=builder    /build/target/release/snowman-workforce-reminder /usr/local/bin/snowman-workforce-reminder
 COPY --from=web-builder /build/web/dist                 /srv/buzz/web
 COPY --from=web-builder /build/admin-web/dist           /srv/buzz/admin-web
 

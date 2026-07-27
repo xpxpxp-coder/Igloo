@@ -535,8 +535,9 @@ export function HuddleBar({
   }
 
   return (
-    <div
+    <section
       aria-hidden={isDrawerClosing}
+      aria-label="Huddle controls"
       data-state={isDrawerClosing ? "closing" : "open"}
       className={cn(
         "buzz-huddle-drawer grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-5 py-3 text-foreground",
@@ -567,7 +568,11 @@ export function HuddleBar({
         {modelStatus &&
           ((transcriptionEnabled && modelStatus.stt !== "ready") ||
             modelStatus.tts !== "ready") && (
-            <output className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+            <output
+              aria-atomic="true"
+              aria-live="polite"
+              className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
+            >
               <span className="truncate animate-pulse">
                 {transcriptionEnabled &&
                 modelStatus.stt !== "ready" &&
@@ -817,7 +822,7 @@ export function HuddleBar({
       <div aria-hidden="true" className="min-w-0" />
 
       {/* Screen reader announcements for huddle state changes */}
-      <output aria-live="polite" className="sr-only">
+      <output aria-atomic="true" aria-live="polite" className="sr-only">
         {micConnected
           ? "In huddle, microphone connected"
           : "In huddle, no microphone"}
@@ -830,6 +835,6 @@ export function HuddleBar({
           modelStatus.tts !== "ready" &&
           `, TTS model ${modelStatus.tts}`}
       </output>
-    </div>
+    </section>
   );
 }

@@ -33,7 +33,7 @@ const GOOSE_AVAILABLE = {
 /** buzz-agent is always available and has no auth step. */
 const BUZZ_AGENT_AVAILABLE = {
   id: "buzz-agent",
-  label: "Buzz Agent",
+  label: "Snowman Agent",
   avatar_url: "",
   availability: "available",
   command: "buzz-agent",
@@ -464,7 +464,7 @@ test.describe("Doctor panel state screenshots", () => {
               stderr:
                 "The installer finished, but Buzz still could not use codex (observed: NotInstalled).",
               exit_code: null,
-              hint: "Buzz requires the vendor CLI executable, not only its desktop app. If the CLI was installed while Buzz was open, restart Buzz and check again.",
+              hint: "Snowman Command Center requires the vendor CLI executable, not only its desktop app. If the CLI was installed while Snowman Command Center was open, restart Snowman Command Center and check again.",
             },
           ],
         },

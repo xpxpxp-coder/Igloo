@@ -10,7 +10,7 @@
 //! into the right provider-native shape on our behalf (see Goose's
 //! `providers::utils::convert_image` for a reference implementation).
 
-use crate::paths::resolve_path;
+use crate::paths::{resolve_path, resolve_workspace_root};
 use crate::shell::SharedState;
 use base64::Engine;
 use image::{
@@ -24,7 +24,6 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 use std::io::Cursor;
-use std::path::PathBuf;
 use std::time::Duration;
 
 /// Hard cap on bytes we will read from disk / URL / data: URL.
@@ -130,6 +129,7 @@ async fn load_source(
         }
         Ok((bytes, "data:URL".to_string()))
     } else if src.starts_with("http://") || src.starts_with("https://") {
+        validate_snowman_network_source(src).map_err(invalid_params)?;
         let bytes = fetch_url(src).await?;
         Ok((bytes, src.to_string()))
     } else if src.contains("://") {
@@ -139,10 +139,8 @@ async fn load_source(
             "unsupported URL scheme in `source`: {src}",
         )))
     } else {
-        let workspace_root = match p.workdir.as_deref() {
-            Some(w) => PathBuf::from(w),
-            None => state.cwd.clone(),
-        };
+        let workspace_root =
+            resolve_workspace_root(state, p.workdir.as_deref()).map_err(invalid_params)?;
         let target = resolve_path(&workspace_root, src).map_err(invalid_params)?;
         let meta = std::fs::metadata(&target).map_err(|e| {
             ErrorData::internal_error(format!("cannot stat {}: {e}", target.display()), None)
@@ -183,6 +181,33 @@ async fn load_source(
         }
         Ok((bytes, target.display().to_string()))
     }
+}
+
+fn validate_snowman_network_source(source: &str) -> Result<(), String> {
+    if std::env::var("SNOWMAN_AGENT_NETWORK_CAPABILITY").as_deref() != Ok("network.read.snowman") {
+        return Err(
+            "network image reads are disabled without SNOWMAN_AGENT_NETWORK_CAPABILITY=network.read.snowman"
+                .to_string(),
+        );
+    }
+    let parsed = url::Url::parse(source).map_err(|e| format!("invalid image URL: {e}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "image URL must include a host".to_string())?;
+    let allowed = host.eq_ignore_ascii_case("snowmanai.org")
+        || host.to_ascii_lowercase().ends_with(".snowmanai.org")
+        || host.eq_ignore_ascii_case("localhost")
+        || parsed.host().is_some_and(|value| match value {
+            url::Host::Ipv4(ip) => ip.is_loopback(),
+            url::Host::Ipv6(ip) => ip.is_loopback(),
+            url::Host::Domain(_) => false,
+        });
+    if !allowed {
+        return Err(format!(
+            "image URL host {host:?} is outside the Snowman-controlled boundary"
+        ));
+    }
+    Ok(())
 }
 
 /// Parse `data:image/<subtype>[;base64],<payload>`. Only base64 payloads are
@@ -801,7 +826,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn allows_path_outside_workspace() {
+    async fn rejects_path_outside_workspace() {
         let dir = tempdir().unwrap();
         // A real non-image file in a SECOND tempdir, genuinely outside the
         // workspace root — we expect a format error, not a path-escape error,
@@ -823,7 +848,7 @@ mod tests {
         .unwrap_err();
         let msg = format!("{res:?}");
         assert!(
-            msg.contains("unsupported image format") || msg.contains("empty image"),
+            msg.contains("path escapes the Snowman agent workspace"),
             "{msg}"
         );
     }

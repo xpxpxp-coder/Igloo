@@ -9,7 +9,10 @@ use sha2::{Digest, Sha256};
 
 use crate::app_state::AppState;
 
+#[cfg(any(debug_assertions, test))]
 const DEFAULT_RELAY_WS_URL: &str = "ws://localhost:3000";
+#[cfg(not(any(debug_assertions, test)))]
+const DEFAULT_RELAY_WS_URL: &str = "wss://relay.snowmanai.org";
 
 // A reached-but-malformed 2xx body is NOT a connectivity failure, so this
 // message must never carry the "relay unreachable:" prefix the frontend
@@ -24,9 +27,42 @@ fn configured_env_var(name: &str) -> Option<String> {
 }
 
 pub fn relay_ws_url() -> String {
-    configured_env_var("BUZZ_RELAY_URL")
+    let candidate = configured_env_var("BUZZ_RELAY_URL")
         .or_else(|| option_env!("BUZZ_DESKTOP_BUILD_RELAY_URL").map(str::to_string))
-        .unwrap_or_else(|| DEFAULT_RELAY_WS_URL.to_string())
+        .unwrap_or_else(|| DEFAULT_RELAY_WS_URL.to_string());
+    if validate_snowman_relay_url(&candidate).is_ok() {
+        candidate
+    } else {
+        eprintln!("snowman-command-center: rejected relay outside the Snowman boundary");
+        DEFAULT_RELAY_WS_URL.to_string()
+    }
+}
+
+/// Enforce the production command-center transport boundary. Development and
+/// tests may use loopback or fixture hosts; release builds accept only TLS
+/// endpoints under Snowman-owned DNS and never accept credentials in URLs.
+pub fn validate_snowman_relay_url(raw: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(raw).map_err(|_| "relay URL is invalid".to_owned())?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("relay URL must not contain credentials".to_owned());
+    }
+    let host = parsed
+        .host_str()
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| "relay URL must contain a host".to_owned())?;
+    let is_loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
+    if cfg!(any(debug_assertions, test)) && is_loopback {
+        if matches!(parsed.scheme(), "ws" | "wss" | "http" | "https") {
+            return Ok(());
+        }
+    }
+    if !matches!(parsed.scheme(), "wss" | "https") {
+        return Err("Snowman production relays must use TLS".to_owned());
+    }
+    if host != "snowmanai.org" && !host.ends_with(".snowmanai.org") {
+        return Err("relay URL is outside the Snowman-controlled boundary".to_owned());
+    }
+    Ok(())
 }
 
 /// Read the workspace relay URL override, if set. Returns `None` when no
@@ -643,9 +679,22 @@ mod tests {
     use super::{
         build_profile_event, classify_intercepted_response, effective_agent_relay_url,
         extract_retry_in_hint, parse_command_response, relay_http_base_url,
-        MALFORMED_RESPONSE_MESSAGE,
+        validate_snowman_relay_url, MALFORMED_RESPONSE_MESSAGE,
     };
     use serde::Deserialize;
+
+    #[test]
+    fn snowman_transport_accepts_owned_tls_hosts() {
+        assert!(validate_snowman_relay_url("wss://aptive.communities.snowmanai.org").is_ok());
+        assert!(validate_snowman_relay_url("https://relay.snowmanai.org").is_ok());
+    }
+
+    #[test]
+    fn snowman_transport_rejects_lookalikes_credentials_and_cleartext() {
+        assert!(validate_snowman_relay_url("wss://snowmanai.org.evil.example").is_err());
+        assert!(validate_snowman_relay_url("wss://snowmanai.org@evil.example").is_err());
+        assert!(validate_snowman_relay_url("ws://relay.snowmanai.org").is_err());
+    }
 
     // ── extract_retry_in_hint ────────────────────────────────────────────────
 

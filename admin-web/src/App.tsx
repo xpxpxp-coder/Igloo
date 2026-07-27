@@ -9,6 +9,7 @@ import {
 import { ApiFailure, request } from "./api";
 import type { FeedbackDetail, FeedbackSummary, Report } from "./types";
 import { useResource } from "./useResource";
+import { ADMIN_NAME, COMMAND_CENTER_NAME } from "./product/identity.generated";
 
 function usePath() {
   const [path, setPath] = useState(location.pathname);
@@ -63,7 +64,11 @@ function StateView<T>({
   children: (data: T) => ReactNode;
 }) {
   if (resource.loading && !resource.data)
-    return <div className="state">Loading…</div>;
+    return (
+      <div aria-busy="true" aria-live="polite" className="state" role="status">
+        Loading…
+      </div>
+    );
   if (resource.error && !resource.data) {
     const forbidden =
       resource.error instanceof ApiFailure && resource.error.status === 403;
@@ -89,7 +94,7 @@ function Reports() {
     <Page
       eyebrow="Moderation"
       title="Open reports"
-      description="Review reports across every Buzz community."
+      description={`Review reports across every ${COMMAND_CENTER_NAME} workspace.`}
     >
       <StateView resource={resource}>
         {(reports) =>
@@ -203,7 +208,7 @@ function FeedbackList() {
     <Page
       eyebrow="Product"
       title="Feedback"
-      description="Recent product feedback from across Buzz."
+      description={`Recent product feedback from across ${COMMAND_CENTER_NAME}.`}
     >
       <StateView resource={resource}>
         {(items) => {
@@ -658,14 +663,31 @@ function date(value: string) {
     : parsed.toLocaleString();
 }
 
-function BuzzMark() {
+function SnowmanMark() {
   return (
-    <svg viewBox="0 0 466 309" aria-hidden="true">
-      <path d="M91.7 62.8a91.7 91.7 0 0 0 0 183.4H128V62.8H91.7Zm282.6 0H338v183.4h36.3a91.7 91.7 0 1 0 0-183.4Z" />
+    <svg viewBox="0 0 128 128" role="img" aria-label={COMMAND_CENTER_NAME}>
+      <circle cx="64" cy="64" r="62" fill="#10233f" />
+      <circle cx="64" cy="80" r="30" fill="#f7fbff" />
+      <circle cx="64" cy="43" r="22" fill="#fff" />
+      <circle cx="56" cy="39" r="3" fill="#10233f" />
+      <circle cx="72" cy="39" r="3" fill="#10233f" />
+      <path d="M64 44l15 5-15 4z" fill="#ff9f43" />
       <path
-        fillRule="evenodd"
-        d="M162 0h142a34 34 0 0 1 34 34v241a34 34 0 0 1-34 34H162a34 34 0 0 1-34-34V34a34 34 0 0 1 34-34Zm31.3 57.4a27 27 0 1 0 0 54 27 27 0 0 0 0-54Zm82.7 0a27 27 0 1 0 0 54 27 27 0 0 0 0-54Zm-109.7 99.8h136.9v38.3H166.3v-38.3Zm.6 77.9h136.2v37.6H166.9v-37.6Z"
-        clipRule="evenodd"
+        d="M51 54c8 6 18 6 26 0"
+        fill="none"
+        stroke="#10233f"
+        strokeWidth="3"
+        strokeLinecap="round"
+      />
+      <circle cx="64" cy="70" r="3" fill="#10233f" />
+      <circle cx="64" cy="82" r="3" fill="#10233f" />
+      <circle cx="64" cy="94" r="3" fill="#10233f" />
+      <path d="M42 29h44l-6-12H48z" fill="#55c2ff" />
+      <path
+        d="M38 29h52"
+        stroke="#55c2ff"
+        strokeWidth="6"
+        strokeLinecap="round"
       />
     </svg>
   );
@@ -778,14 +800,15 @@ export function App() {
   );
   return (
     <div className="app">
+      <a className="skip-link" href="#snowman-operations-main">
+        Skip to main content
+      </a>
       <header className="app-header">
         <Link href="/reports" className="brand">
           <span className="brand-mark">
-            <BuzzMark />
+            <SnowmanMark />
           </span>
-          <span>
-            Buzz <b>Admin</b>
-          </span>
+          <span>{ADMIN_NAME}</span>
         </Link>
         <nav>
           <Link href="/reports" className="nav-link" activeWhenNested>
@@ -796,7 +819,9 @@ export function App() {
           </Link>
         </nav>
       </header>
-      <main>{content}</main>
+      <main id="snowman-operations-main" tabIndex={-1}>
+        {content}
+      </main>
     </div>
   );
 }

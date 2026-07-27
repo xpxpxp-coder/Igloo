@@ -274,7 +274,43 @@ pub async fn handle_auth(event: nostr::Event, conn: Arc<ConnectionState>, state:
                 }
             }
 
-            info!(conn_id = %conn_id, pubkey = %pubkey.to_hex(), "NIP-42 auth successful");
+            let governed_role = match crate::authorization::apply_role_scopes(
+                &state,
+                conn.tenant.community(),
+                &mut auth_ctx,
+                nip_oa_owner.as_ref(),
+            )
+            .await
+            {
+                Ok(role) => role,
+                Err(error) => {
+                    warn!(
+                        conn_id = %conn_id,
+                        pubkey = %pubkey.to_hex(),
+                        %error,
+                        "Snowman governed authorization denied authentication"
+                    );
+                    metrics::counter!(
+                        "buzz_auth_failures_total",
+                        "reason" => "governed_authorization_denied"
+                    )
+                    .increment(1);
+                    *conn.auth_state.write().await = AuthState::Failed;
+                    conn.send(RelayMessage::ok(
+                        &event_id_hex,
+                        false,
+                        "restricted: identity is not authorized for this community",
+                    ));
+                    return;
+                }
+            };
+
+            info!(
+                conn_id = %conn_id,
+                pubkey = %pubkey.to_hex(),
+                governed_role = governed_role.unwrap_or("compatibility"),
+                "NIP-42 auth successful"
+            );
             *conn.auth_state.write().await = AuthState::Authenticated(auth_ctx);
             state
                 .conn_manager

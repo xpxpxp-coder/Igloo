@@ -90,7 +90,7 @@ export function AddCommunityDialog({
 
   const description =
     mode === "create"
-      ? "Opens Builderlab in your browser."
+      ? "Opens the Snowman account service in your browser."
       : mode === "join"
         ? "Use the community URL or invite link you received."
         : "Create a new community or join one you already have.";
@@ -149,7 +149,7 @@ export function AddCommunityDialog({
                     Create a new community
                   </span>
                   <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
-                    Claim a Buzz address for your team.
+                    Claim a Snowman community address for your team.
                   </span>
                 </span>
                 <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60" />

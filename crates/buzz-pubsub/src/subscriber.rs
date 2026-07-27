@@ -4,7 +4,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures_util::StreamExt;
 use nostr::JsonUtil;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
@@ -35,7 +34,7 @@ pub(crate) enum SubscriptionCommand {
 /// task snapshots topics with count > 0 and subscribes to those exact Redis
 /// channels before processing messages.
 pub(crate) async fn run_subscriber(
-    redis_url: String,
+    pool: crate::RedisPool,
     broadcast_tx: broadcast::Sender<ChannelEvent>,
     desired_topics: DesiredTopics,
     mut subscription_rx: mpsc::Receiver<SubscriptionCommand>,
@@ -44,7 +43,7 @@ pub(crate) async fn run_subscriber(
 
     loop {
         match connect_and_subscribe(
-            &redis_url,
+            &pool,
             &broadcast_tx,
             desired_topics.clone(),
             &mut subscription_rx,
@@ -73,14 +72,12 @@ pub(crate) async fn run_subscriber(
 /// Establish a Redis pub/sub connection, subscribe to the current desired-topic
 /// snapshot, and run the fan-out / command loop until the connection ends.
 async fn connect_and_subscribe(
-    redis_url: &str,
+    pool: &crate::RedisPool,
     broadcast_tx: &broadcast::Sender<ChannelEvent>,
     desired_topics: DesiredTopics,
     subscription_rx: &mut mpsc::Receiver<SubscriptionCommand>,
 ) -> Result<(), redis::RedisError> {
-    let client = redis::Client::open(redis_url)?;
-    let conn = client.get_async_pubsub().await?;
-    let (mut sink, mut stream) = conn.split();
+    let (mut connection, mut pushes) = pool.subscriber().await?;
     let mut active_topics = HashSet::new();
 
     let initial_topics: Vec<EventTopicKey> = {
@@ -93,7 +90,10 @@ async fn connect_and_subscribe(
 
     for topic in initial_topics {
         let channel = topic.redis_channel();
-        sink.subscribe(&channel).await?;
+        redis::cmd("SUBSCRIBE")
+            .arg(&channel)
+            .query_async::<redis::Value>(&mut connection)
+            .await?;
         active_topics.insert(channel);
     }
 
@@ -109,23 +109,35 @@ async fn connect_and_subscribe(
                     SubscriptionCommand::Subscribe(topic) => {
                         let channel = topic.redis_channel();
                         if active_topics.insert(channel.clone()) {
-                            sink.subscribe(&channel).await?;
+                            redis::cmd("SUBSCRIBE")
+                                .arg(&channel)
+                                .query_async::<redis::Value>(&mut connection)
+                                .await?;
                         }
                     }
                     SubscriptionCommand::UnsubscribeIfIdle(topic) => {
                         if desired_refcount(&desired_topics, topic).await == 0 {
                             let channel = topic.redis_channel();
                             if active_topics.remove(&channel) {
-                                sink.unsubscribe(&channel).await?;
+                                redis::cmd("UNSUBSCRIBE")
+                                    .arg(&channel)
+                                    .query_async::<redis::Value>(&mut connection)
+                                    .await?;
                             }
                         }
                     }
                 }
             }
-            msg = stream.next() => {
-                let Some(msg) = msg else {
+            push = pushes.recv() => {
+                let Some(push) = push else {
                     // Stream returned None — Redis connection closed.
                     return Ok(());
+                };
+                if push.kind == redis::PushKind::Disconnection {
+                    return Ok(());
+                }
+                let Some(msg) = redis::Msg::from_push_info(push) else {
+                    continue;
                 };
 
                 let payload: String = match msg.get_payload() {

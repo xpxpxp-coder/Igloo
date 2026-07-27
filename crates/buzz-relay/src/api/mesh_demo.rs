@@ -159,18 +159,19 @@ mod tests {
     use super::*;
     use crate::tunnel::directory::SessionDirectory;
 
-    fn pool() -> deadpool_redis::Pool {
+    fn pool() -> buzz_pubsub::RedisPool {
         let url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".into());
-        deadpool_redis::Config::from_url(url)
+        let pool = deadpool_redis::Config::from_url(&url)
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
-            .expect("create redis pool")
+            .expect("create redis pool");
+        buzz_pubsub::RedisPool::from_deadpool(&url, pool).expect("wrap redis pool")
     }
 
     async fn redis_directory_if_available() -> Option<SessionDirectory> {
         let pool = pool();
         let mut conn = pool.get().await.ok()?;
         redis::cmd("PING")
-            .query_async::<String>(&mut *conn)
+            .query_async::<String>(&mut conn)
             .await
             .ok()?;
         Some(SessionDirectory::with_lease_ttl(

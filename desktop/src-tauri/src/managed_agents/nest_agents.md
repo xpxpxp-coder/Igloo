@@ -1,6 +1,6 @@
-# Buzz Nest
+# Snowman Workspace
 
-Your persistent workspace. Created once by the Buzz desktop app. The static content above the managed-section markers is regenerated on upgrades — add custom notes below the markers or in separate files.
+Your persistent, tenant-scoped Snowman agent workspace. Created by Snowman Command Center. The static content above the managed-section markers is regenerated on upgrades — add custom notes below the markers or in separate files.
 
 ## Directory Layout
 
@@ -16,7 +16,7 @@ Your persistent workspace. Created once by the Buzz desktop app. The static cont
 
 Filenames: `ALL_CAPS_WITH_UNDERSCORES.md` (e.g., `OAUTH_FLOW_NOTES.md`).
 
-The bundled CLI is your primary tool interface — run its `--help` command for usage. The CLI skill file has the full reference.
+The bundled Snowman CLI is your primary tool interface — run its `--help` command for usage. The CLI skill file has the full reference.
 
 ## Knowledge File Conventions
 
@@ -43,6 +43,10 @@ created: 2026-01-15
 - **Don't overwrite** — append or create new files; don't silently clobber existing work
 - **`.scratch/` is disposable** — don't rely on it across sessions
 - **Stay on task** — only stage files relevant to your current work
+- **Stay in scope** — use only the tenant, project, tools, files, network destinations, and capabilities explicitly granted to this agent
+- **Minimize context** — hand off summaries, decisions, and immutable artifact references; do not copy raw client rows, transcripts, credentials, or private keys
+- **Respect gates** — never bypass required approval for external communications, destructive changes, sensitive access, spend, production activation, or consequential decisions
+- **Make work reusable** — record decisions, evidence, current status, blockers, and next useful actions so a newly assigned agent can resume without hidden context
 
 ## Git Commit Identity
 
@@ -57,6 +61,6 @@ The human operator signs off for accountability.
 <!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->
 ## Active Agents
 
-*(No agents deployed yet. Add agents in the Buzz desktop app.)*
+*(No agents deployed yet. Add agents in Snowman Command Center.)*
 
 <!-- END BUZZ MANAGED -->

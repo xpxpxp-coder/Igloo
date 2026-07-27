@@ -12,7 +12,6 @@
 //! sufficient: the next read re-fetches authoritative state from the DB.
 
 use buzz_core::{CommunityId, TenantContext};
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -98,13 +97,13 @@ const BACKOFF_MAX_SECS: u64 = 30;
 /// backoff (1s → 2s → 4s → … → 30s max). Never returns — runs for the lifetime
 /// of the relay.
 pub async fn run_cache_invalidation_subscriber(
-    redis_url: String,
+    pool: crate::RedisPool,
     broadcast_tx: broadcast::Sender<ScopedCacheInvalidation>,
 ) {
     let mut backoff_secs = BACKOFF_INITIAL_SECS;
 
     loop {
-        match connect_and_subscribe(&redis_url, &broadcast_tx).await {
+        match connect_and_subscribe(&pool, &broadcast_tx).await {
             Ok(()) => {
                 backoff_secs = BACKOFF_INITIAL_SECS;
                 tracing::warn!(
@@ -126,20 +125,26 @@ pub async fn run_cache_invalidation_subscriber(
 }
 
 async fn connect_and_subscribe(
-    redis_url: &str,
+    pool: &crate::RedisPool,
     broadcast_tx: &broadcast::Sender<ScopedCacheInvalidation>,
 ) -> Result<(), redis::RedisError> {
-    let client = redis::Client::open(redis_url)?;
-    let mut conn = client.get_async_pubsub().await?;
-
-    conn.psubscribe(CACHE_INVALIDATION_PATTERN).await?;
+    let (mut conn, mut pushes) = pool.subscriber().await?;
+    redis::cmd("PSUBSCRIBE")
+        .arg(CACHE_INVALIDATION_PATTERN)
+        .query_async::<redis::Value>(&mut conn)
+        .await?;
 
     tracing::info!(
         "Redis cache-invalidation subscriber connected — listening on {CACHE_INVALIDATION_PATTERN}"
     );
 
-    let mut stream = conn.on_message();
-    while let Some(msg) = stream.next().await {
+    while let Some(push) = pushes.recv().await {
+        if push.kind == redis::PushKind::Disconnection {
+            return Ok(());
+        }
+        let Some(msg) = redis::Msg::from_push_info(push) else {
+            continue;
+        };
         let channel = msg.get_channel_name();
         let Some(community_id) = parse_cache_invalidation_channel(channel) else {
             tracing::warn!("Received cache-invalidation message on unexpected channel: {channel}");

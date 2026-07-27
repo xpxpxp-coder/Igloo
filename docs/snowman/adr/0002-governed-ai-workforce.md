@@ -1,0 +1,182 @@
+# ADR 0002: Build a governed, durable Snowman AI Workforce
+
+- Status: Accepted
+- Date: 2026-07-25
+- Decision owner: Snowman AI sole-founder operator
+
+## Context
+
+Snowman 360 must feel like an always-available expert team, not a collection of
+independent chat sessions. A user request may require research, governed
+analytics, planning, production, and independent review. Different roles may
+perform best with different models and tools. Work must continue safely when a
+desktop is offline, preserve enough context for a replacement agent, anticipate
+useful next steps, and produce client-ready artifacts without expanding the
+Aptive or tenant data boundary.
+
+Igloo already provides valuable primitives: teams and personas, per-agent model
+and runtime configuration, signed collaboration events, team snapshots, nests,
+workflows, schedules, reminders, agent observation, and persistent coordination.
+Those primitives materially accelerate the product, but local agent processes
+and free-form prompts are not a durable governed workforce.
+
+## Decision
+
+Build the Snowman AI Workforce as three cooperating planes:
+
+1. The Snowman Command Center accepts objectives, shows the team, plan, work,
+   approvals, artifacts, deadlines, evidence, cost, status, and next-best steps.
+2. A durable AWS orchestration plane decomposes work, selects specialist roles,
+   leases tasks to tenant-bound workers, schedules proactive work, enforces
+   budgets/capabilities/approvals, handles retries and cancellation, and records
+   correlated receipts.
+3. Analyst 360 remains the governed intelligence, evidence, memory, decision,
+   and Aptive data authority. It returns bounded context packets, evidence
+   manifests, lifecycle events, and immutable artifact references through the
+   versioned integration gateway.
+
+Every agent instance has one role, one tenant/workspace service identity, an
+explicit capability set, a model route allowed for the data class, bounded input
+context, expected artifact contract, cost/deadline budget, and revocation state.
+The orchestrator can delegate and parallelize work, but capabilities never
+increase through delegation.
+
+Model selection is policy-constrained optimization. Agents and clients call only
+`models.snowmanai.org`; they never receive model-vendor credentials or direct
+vendor endpoints. Strict mode uses models hosted in Snowman AWS. Any future
+external model processor requires an explicit provider/data-class decision and
+still remains behind the Snowman gateway.
+
+Memory is not a transcript dump. Handoffs use versioned, content-addressed
+context packets containing objective, constraints, decisions, open questions,
+work graph, artifact/evidence references, provenance, freshness, classification,
+and next useful actions. Raw Aptive rows, unrestricted query results, secrets,
+and unbounded transcripts do not enter Command Center memory.
+
+Proactivity requires authority. An automatic action must trace to an approved
+objective, schedule, signal, or policy and be reversible and low risk, or stop
+for an expiring human approval. The system may automatically monitor deadlines,
+refresh approved analytics, prepare drafts, run checks, organize context, and
+recommend or execute safe next steps. Destructive, privileged, externally
+binding, client-data-exporting, identity, billing, deployment, and other
+high-impact actions retain human gates.
+
+## Quality and evidence
+
+A lead agent is responsible for orchestration and synthesis. Specialist outputs
+must satisfy artifact-specific contracts. A separate quality/risk reviewer checks
+factual support, citations, completeness, contradictions, data classification,
+accessibility, presentation, and client readiness before publication. Human
+review is used for policy gates and judgment that cannot be safely automated,
+not as a substitute for technical verification.
+
+## Consequences
+
+- Igloo remains the acceleration substrate, while AWS durability and governance
+  are explicit additions rather than overstated existing capabilities.
+- Users can configure role-specific models without granting agents arbitrary
+  provider egress or credentials.
+- New agents can resume useful work from bounded context and evidence rather
+  than replaying entire conversations.
+- 24/7 work requires an AWS service, operational SLOs, recovery, and spend
+  controls; a running desktop is not part of the production availability model.
+- “Next best action” remains useful and proactive without becoming unbounded
+  autonomous authority.
+
+## Implemented foundation
+
+The `snowman-workforce` policy kernel now validates bounded, acyclic specialist
+plans; requires explicit tenant service identities, capabilities, context
+digests, artifact contracts, budgets, risk, reversibility, and approval posture;
+selects the strongest policy-approved per-role model (or validates a configured
+override) behind Snowman DNS; and requires a separately identified downstream
+quality/risk reviewer for client-ready delivery. Its proactive policy executes
+only useful, confident, low-risk, reversible, allowlisted work below a hard cost
+threshold and turns other useful work into an approval request.
+
+The durable proactive-action store records the exact action and policy digests,
+authorized trigger provenance, tenant-local proposer, decision, schedule,
+expiry, cost reservation, and hash-chain receipt. It requires the exact
+`workforce.proactive.propose` service capability, refuses inactive objectives,
+reserves against the request's hard cost ceiling before queueing, and stores a
+usefulness evidence digest rather than a free-form rationale. “Queued” is not an
+execution bypass: the scheduler/worker must still claim a fenced lease, hold the
+action capability, and stop at the recorded approval gate.
+
+The v2 proposal closes the prior payload gap. Every non-rejected action now
+includes an immutable instruction reference, bounded context, executor identity,
+supported specialist role/capability, artifact contract, schedule/expiry,
+budgets, retry cap, and optional model proposal. The relay selects an evaluated
+model and atomically inserts the action as an ordinary work task. This reuses
+the existing approval, lease fencing, spend, cancellation, context, completion,
+recovery, and hash-chain controls; rejected actions have no task authority.
+
+Recurring work is authorized separately from execution. A Snowman human binds
+a schedule to one live objective, dedicated trigger identity, executor,
+supported capability, immutable instruction/context, per-run budgets, cadence,
+end time, and occurrence ceiling. Authorization and cancellation are hash-chain
+events. A maintenance identity cannot claim schedules, and no occurrence may
+bypass the proactive decision and ordinary task controls.
+
+Snowman-local reminder delivery follows that same path through the exact
+`deadline_operations` / `deadline.remind` pair. Its separate runtime has no
+Analyst, model-provider, AWS signing, arbitrary-recipient, or arbitrary-message
+authority. The relay derives active device recipients from the request owner,
+uses fixed metadata-only copy, snapshots an idempotent delivery receipt, and
+signs the needs-action event with the Snowman relay identity. This does not
+authorize Google Calendar/email access and does not impersonate the human-owned
+encrypted reminder protocol.
+
+The private proposal endpoint does not accept a policy from an agent. It uses
+the server-owned allowlist, automatic cost ceiling, and confidence threshold;
+all default to no automatic action until explicitly configured on the private
+worker deployment.
+
+The kernel also validates a metadata-only `ContextPacketManifest` for
+replacement agents. It binds tenant, request, objective, authority, content and
+provenance digests; caps the handoff artifact at 1 MiB; permits only
+content-addressed Snowman/Analyst references; bounds decisions, open questions,
+evidence, artifacts, and next actions; and rejects ambient capabilities,
+prohibited actions, or missing approval gates. Raw client exports and transcript
+URLs are not valid handoffs.
+
+`buzz-db` persists the validated manifest under the request's exact tenant,
+objective, and classification only when an active tenant-local service identity
+holds `workforce.context.write`. Exact packet replays are idempotent, conflicting
+reuse fails closed, and each publication appends a minimized hash-chain receipt.
+The stored record contains immutable coordinates and digests, never the raw
+handoff artifact.
+
+The private worker plane exposes only authenticated publish/list operations at
+`/internal/snowman/v1/workforce/requests/{request_id}/context-packets`. A live
+tenant-local service identity needs the exact `workforce.context.write` or
+`workforce.context.read` grant and an active task assignment on that request.
+Publication additionally requires the writer's current task ID, lease
+generation, bearer-token digest, and unexpired lease; stale or replaced workers
+cannot publish. Listing revalidates its conditions in the database statement,
+omits expired packets, and returns metadata/digests rather than artifact bodies.
+
+The `buzz-db` workforce store now adds durable request/task state reconciliation,
+fenced leases and recovery, exact-snapshot approvals, hard spend/token ledgers,
+an evaluated tenant model catalog, atomic lead-to-specialist DAG expansion,
+dependency readiness, task-level ceilings, immutable context coordinates, and a
+tenant-serialized, domain-separated lifecycle-event hash chain that rejects
+credential-like payload fields. The private plan endpoint rehydrates request
+authority server-side and never accepts a caller-supplied gateway. The
+maintenance scheduler now closes deadline, expired-lease, and dead-letter state
+transitions with idempotent receipts and hash-chain evidence. Its AWS identity,
+empty task role, service, private TLS origin, and DNS are separate from
+executors and remain hard-dormant. These are source foundations, not a claim
+that workers, proactive executors, sandbox, model gateway, or external KMS
+checkpoints have passed staging.
+
+The human control path can now cancel a request idempotently under exact
+tenant/capability authority. Cancellation atomically marks every non-terminal
+task, destroys all live leases, and appends bounded human-attributed evidence,
+so an already-running worker loses heartbeat, spend, and completion authority as
+soon as the transaction commits.
+
+Human task decisions are also an enforceable control path rather than a UI-only
+record. Approve, deny, and revoke operations bind to the immutable task snapshot
+and a maximum 24-hour expiry, use exact replay protection, append hash-chain
+evidence, and invalidate any live lease immediately on denial or revocation.

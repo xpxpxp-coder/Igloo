@@ -1,5 +1,6 @@
 //! Relay configuration from environment variables.
 
+use std::collections::BTreeSet;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -46,6 +47,19 @@ pub struct JoinPolicyConfig {
     pub version: String,
 }
 
+/// Fail-closed intake configuration for the governed Snowman AI Workforce.
+#[derive(Debug, Clone)]
+pub struct SnowmanWorkforceConfig {
+    /// Tenant-local service identity assigned to the initial planning task.
+    pub lead_service_identity_id: uuid::Uuid,
+    /// Snowman-controlled model gateway used by the planning worker.
+    pub model_gateway_url: String,
+    /// Evaluated model route selected for the initial planning task.
+    pub planning_model_id: String,
+    /// Server-owned allowlist, confidence, and spend policy for proactive work.
+    pub proactive_policy: snowman_workforce::ProactivePolicy,
+}
+
 /// Relay runtime configuration, loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -64,6 +78,10 @@ pub struct Config {
     /// pod is only 4 — small enough that rate-limit checks, presence, and
     /// pub/sub publishes queue behind each other under load.
     pub redis_pool_size: usize,
+    /// IAM authentication configuration. `None` retains the local/test URL
+    /// path; Snowman AWS environments enable this explicitly and may not place
+    /// a password in `REDIS_URL`.
+    pub snowman_valkey_iam: Option<snowman_aws_auth::ElastiCacheIamConfig>,
     /// Public WebSocket URL of this relay, advertised in NIP-11.
     pub relay_url: String,
     /// Public WebSocket URL of the dedicated device-pairing relay, when configured.
@@ -110,6 +128,36 @@ pub struct Config {
     /// When false (default), the check is a no-op and all authenticated callers
     /// are permitted regardless of auth method (API token, NIP-42).
     pub require_relay_membership: bool,
+
+    /// Derive authenticated connection scopes from the tenant's relay-member
+    /// role instead of granting every known scope for NIP-42 key possession.
+    ///
+    /// This is the first Snowman governed-identity enforcement seam. It requires
+    /// closed relay membership and fails authentication for missing or unknown
+    /// roles. Workforce OIDC binding will be evaluated before this seam in the
+    /// completed production identity flow.
+    pub snowman_role_scopes: bool,
+
+    /// Require every relay key to resolve to a live Snowman workforce human
+    /// session or capability-bounded service identity before authentication.
+    pub snowman_workforce_identity_required: bool,
+    /// Enables the private KMS-authenticated human device enrollment boundary.
+    pub snowman_workforce_identity_api_enabled: bool,
+
+    /// Governed workforce request intake. `None` disables every workforce API
+    /// route; enabling it requires closed membership, live workforce identity,
+    /// a tenant-bound lead service identity, and a Snowman-only model gateway.
+    pub snowman_workforce: Option<SnowmanWorkforceConfig>,
+
+    /// Enable private worker claim/heartbeat/spend/finish routes. Public relay
+    /// deployments keep this false; a separately addressed private service may
+    /// enable it after network and service-identity controls are active.
+    pub snowman_workforce_worker_api_enabled: bool,
+
+    /// Enable the private Analyst 360 lifecycle-event ingress. This surface is
+    /// independently disabled on public relay deployments and authenticates
+    /// tenant-bound asymmetric KMS assertions rather than browser sessions.
+    pub snowman_analyst_event_api_enabled: bool,
 
     /// Whether this deployment can serve huddle (voice) audio.
     ///
@@ -336,7 +384,29 @@ fn parse_operator_api_origin(raw: &str) -> Result<String, ConfigError> {
     Ok(raw.trim_end_matches('/').to_string())
 }
 
-const DEFAULT_PUSH_GATEWAY_DELIVERY_URL: &str = "https://push.buzz.xyz/v1/deliveries/apns";
+fn validate_snowman_gateway_url(raw: &str) -> Result<(), ConfigError> {
+    let url = url::Url::parse(raw.trim()).map_err(|error| {
+        ConfigError::InvalidValue(format!(
+            "SNOWMAN_MODEL_GATEWAY_URL is not a valid URL: {error}"
+        ))
+    })?;
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+    let snowman_host = host == "snowmanai.org" || host.ends_with(".snowmanai.org");
+    if url.scheme() != "https"
+        || !snowman_host
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ConfigError::InvalidValue(
+            "SNOWMAN_MODEL_GATEWAY_URL must be a credential-free Snowman-controlled HTTPS URL on port 443"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
 
 fn parse_push_gateway_delivery_url(raw: &str) -> Result<url::Url, ConfigError> {
     let url = url::Url::parse(raw.trim()).map_err(|e| {
@@ -374,6 +444,26 @@ fn parse_bool(name: &str, default: bool) -> Result<bool, ConfigError> {
             ))),
         },
     }
+}
+
+fn valid_proactive_capability(capability: &str) -> bool {
+    let segments = capability.split('.').collect::<Vec<_>>();
+    capability.len() <= 128
+        && segments.len() >= 2
+        && segments[0]
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+        && !matches!(
+            capability,
+            "admin.all" | "aws.all" | "filesystem.all" | "network.all" | "tool.all"
+        )
 }
 
 fn parse_optional_bool(name: &str) -> Result<bool, ConfigError> {
@@ -423,6 +513,80 @@ impl Config {
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|&v| v > 0)
             .unwrap_or(16);
+
+        let snowman_valkey_iam = match std::env::var("SNOWMAN_VALKEY_IAM_ENABLED").ok().as_deref() {
+            Some("true") => {
+                let parsed = url::Url::parse(&redis_url).map_err(|error| {
+                    ConfigError::InvalidValue(format!("REDIS_URL must be valid: {error}"))
+                })?;
+                let host = parsed.host_str().unwrap_or_default();
+                if parsed.scheme() != "rediss"
+                    || !parsed.username().is_empty()
+                    || parsed.password().is_some()
+                    || parsed.path() != "/"
+                    || parsed.query().is_some()
+                    || parsed.fragment().is_some()
+                    || !(host.ends_with(".cache.amazonaws.com")
+                        || host.ends_with(".cache.amazonaws.com.cn"))
+                {
+                    return Err(ConfigError::InvalidValue(
+                        "IAM Valkey REDIS_URL must be a credential-free rediss:// ElastiCache endpoint with no path, query, or fragment"
+                            .to_string(),
+                    ));
+                }
+                let required = |name: &str| {
+                    std::env::var(name)
+                        .ok()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| {
+                            ConfigError::InvalidValue(format!(
+                                "{name} is required when SNOWMAN_VALKEY_IAM_ENABLED=true"
+                            ))
+                        })
+                };
+                let user_id = required("SNOWMAN_VALKEY_IAM_USER_ID")?;
+                let cache_name = required("SNOWMAN_VALKEY_CACHE_NAME")?;
+                let region = std::env::var("AWS_REGION")
+                    .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+                    .ok()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        ConfigError::InvalidValue(
+                            "AWS_REGION is required when SNOWMAN_VALKEY_IAM_ENABLED=true"
+                                .to_string(),
+                        )
+                    })?;
+                if !user_id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                }) || !cache_name
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+                    || !region.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || character == '-'
+                    })
+                {
+                    return Err(ConfigError::InvalidValue(
+                        "Valkey IAM user, cache name, or AWS region contains unsupported characters"
+                            .to_string(),
+                    ));
+                }
+                Some(snowman_aws_auth::ElastiCacheIamConfig {
+                    user_id,
+                    cache_name,
+                    region,
+                })
+            }
+            Some("false") | None => None,
+            Some(_) => {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_VALKEY_IAM_ENABLED must be exactly true or false".to_string(),
+                ))
+            }
+        };
 
         let relay_url =
             std::env::var("RELAY_URL").unwrap_or_else(|_| "ws://localhost:3000".to_string());
@@ -483,6 +647,144 @@ impl Config {
         let require_relay_membership = std::env::var("BUZZ_REQUIRE_RELAY_MEMBERSHIP")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
+
+        let snowman_role_scopes = parse_bool("SNOWMAN_ROLE_SCOPES", false)?;
+        if snowman_role_scopes && !require_relay_membership {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_ROLE_SCOPES=true requires BUZZ_REQUIRE_RELAY_MEMBERSHIP=true".to_string(),
+            ));
+        }
+        let snowman_workforce_identity_required =
+            parse_bool("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", false)?;
+        let snowman_workforce_identity_api_enabled =
+            parse_bool("SNOWMAN_WORKFORCE_IDENTITY_API_ENABLED", false)?;
+        if snowman_workforce_identity_api_enabled && !snowman_workforce_identity_required {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_WORKFORCE_IDENTITY_API_ENABLED=true requires SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true"
+                    .to_string(),
+            ));
+        }
+        if snowman_workforce_identity_required && !snowman_role_scopes {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true requires SNOWMAN_ROLE_SCOPES=true"
+                    .to_string(),
+            ));
+        }
+        let snowman_workforce_enabled = parse_bool("SNOWMAN_WORKFORCE_API_ENABLED", false)?;
+        let snowman_workforce = if snowman_workforce_enabled {
+            if !snowman_workforce_identity_required {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_WORKFORCE_API_ENABLED=true requires SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true"
+                        .to_string(),
+                ));
+            }
+            let lead_service_identity_id = std::env::var("SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID")
+                .map_err(|_| {
+                    ConfigError::InvalidValue(
+                        "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID is required when the workforce API is enabled"
+                            .to_string(),
+                    )
+                })?
+                .parse::<uuid::Uuid>()
+                .map_err(|_| {
+                    ConfigError::InvalidValue(
+                        "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID must be a non-nil UUID".to_string(),
+                    )
+                })?;
+            if lead_service_identity_id.is_nil() {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID must be a non-nil UUID".to_string(),
+                ));
+            }
+            let model_gateway_url = std::env::var("SNOWMAN_MODEL_GATEWAY_URL").map_err(|_| {
+                ConfigError::InvalidValue(
+                    "SNOWMAN_MODEL_GATEWAY_URL is required when the workforce API is enabled"
+                        .to_string(),
+                )
+            })?;
+            validate_snowman_gateway_url(&model_gateway_url)?;
+            let planning_model_id = std::env::var("SNOWMAN_PLANNING_MODEL_ID")
+                .map_err(|_| {
+                    ConfigError::InvalidValue(
+                        "SNOWMAN_PLANNING_MODEL_ID is required when the workforce API is enabled"
+                            .to_string(),
+                    )
+                })?
+                .trim()
+                .to_string();
+            if planning_model_id.is_empty() || planning_model_id.len() > 256 {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_PLANNING_MODEL_ID must contain 1-256 characters".to_string(),
+                ));
+            }
+            let proactive_automatic_capabilities =
+                std::env::var("SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES")
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect::<BTreeSet<_>>();
+            if proactive_automatic_capabilities
+                .iter()
+                .any(|capability| !valid_proactive_capability(capability))
+            {
+                return Err(ConfigError::InvalidValue(
+                    "SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES must contain only bounded namespaced capabilities"
+                        .to_string(),
+                ));
+            }
+            let proactive_max_automatic_cost_microusd =
+                std::env::var("SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD")
+                    .unwrap_or_else(|_| "0".to_string())
+                    .parse::<u64>()
+                    .map_err(|_| {
+                        ConfigError::InvalidValue(
+                    "SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD must be a non-negative integer"
+                        .to_string(),
+                )
+                    })?;
+            let proactive_minimum_confidence_basis_points =
+                std::env::var("SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS")
+                    .unwrap_or_else(|_| "10000".to_string())
+                    .parse::<u16>()
+                    .ok()
+                    .filter(|value| *value <= 10_000)
+                    .ok_or_else(|| {
+                        ConfigError::InvalidValue(
+                            "SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS must be 0-10000"
+                                .to_string(),
+                        )
+                    })?;
+            Some(SnowmanWorkforceConfig {
+                lead_service_identity_id,
+                model_gateway_url,
+                planning_model_id,
+                proactive_policy: snowman_workforce::ProactivePolicy {
+                    automatic_capabilities: proactive_automatic_capabilities,
+                    max_automatic_cost_microusd: proactive_max_automatic_cost_microusd,
+                    minimum_confidence_basis_points: proactive_minimum_confidence_basis_points,
+                },
+            })
+        } else {
+            None
+        };
+        let snowman_workforce_worker_api_enabled =
+            parse_bool("SNOWMAN_WORKFORCE_WORKER_API_ENABLED", false)?;
+        if snowman_workforce_worker_api_enabled && snowman_workforce.is_none() {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_WORKFORCE_WORKER_API_ENABLED=true requires SNOWMAN_WORKFORCE_API_ENABLED=true"
+                    .to_string(),
+            ));
+        }
+        let snowman_analyst_event_api_enabled =
+            parse_bool("SNOWMAN_ANALYST_EVENT_API_ENABLED", false)?;
+        if snowman_analyst_event_api_enabled && !snowman_workforce_identity_required {
+            return Err(ConfigError::InvalidValue(
+                "SNOWMAN_ANALYST_EVENT_API_ENABLED=true requires SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true"
+                    .to_string(),
+            ));
+        }
 
         // Defaults true → single-pod (N=1) keeps today's huddle behavior. A
         // horizontally-scaled deployment sets this false; see the field doc.
@@ -752,9 +1054,7 @@ impl Config {
         let push_gateway_delivery_url = match std::env::var("BUZZ_PUSH_GATEWAY_DELIVERY_URL") {
             Ok(raw) if raw.trim().is_empty() => None,
             Ok(raw) => Some(parse_push_gateway_delivery_url(&raw)?),
-            Err(_) => Some(parse_push_gateway_delivery_url(
-                DEFAULT_PUSH_GATEWAY_DELIVERY_URL,
-            )?),
+            Err(_) => None,
         };
         let push_gateway_timeout_millis = match std::env::var("BUZZ_PUSH_GATEWAY_TIMEOUT_MS") {
             Ok(raw) => raw
@@ -875,6 +1175,7 @@ impl Config {
             read_database_url,
             redis_url,
             redis_pool_size,
+            snowman_valkey_iam,
             relay_url,
             pairing_relay_url,
             max_connections,
@@ -891,6 +1192,12 @@ impl Config {
             metrics_port,
             pubkey_allowlist_enabled,
             require_relay_membership,
+            snowman_role_scopes,
+            snowman_workforce_identity_required,
+            snowman_workforce_identity_api_enabled,
+            snowman_workforce,
+            snowman_workforce_worker_api_enabled,
+            snowman_analyst_event_api_enabled,
             huddle_audio_available,
             mesh,
             mesh_demo_echo,
@@ -953,6 +1260,14 @@ mod tests {
         assert!(
             !config.require_relay_membership,
             "require_relay_membership should default to false"
+        );
+        assert!(
+            !config.snowman_workforce_worker_api_enabled,
+            "private Snowman worker API should default to false"
+        );
+        assert!(
+            !config.snowman_analyst_event_api_enabled,
+            "private Analyst 360 event API should default to false"
         );
         assert!(
             config.relay_owner_pubkey.is_none(),
@@ -1106,6 +1421,196 @@ mod tests {
     }
 
     #[test]
+    fn snowman_role_scopes_require_closed_membership() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let previous_role_scopes = std::env::var_os("SNOWMAN_ROLE_SCOPES");
+        let previous_membership = std::env::var_os("BUZZ_REQUIRE_RELAY_MEMBERSHIP");
+
+        std::env::set_var("SNOWMAN_ROLE_SCOPES", "true");
+        std::env::remove_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP");
+        let open_result = Config::from_env();
+
+        std::env::set_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP", "true");
+        let closed_result = Config::from_env();
+
+        for (key, previous) in [
+            ("SNOWMAN_ROLE_SCOPES", previous_role_scopes),
+            ("BUZZ_REQUIRE_RELAY_MEMBERSHIP", previous_membership),
+        ] {
+            if let Some(value) = previous {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        assert!(matches!(
+            open_result,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("requires BUZZ_REQUIRE_RELAY_MEMBERSHIP=true")
+        ));
+        assert!(
+            closed_result
+                .expect("closed membership config")
+                .snowman_role_scopes
+        );
+    }
+
+    #[test]
+    fn workforce_identity_requires_governed_role_scopes() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let previous_identity = std::env::var_os("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED");
+        let previous_role_scopes = std::env::var_os("SNOWMAN_ROLE_SCOPES");
+        let previous_membership = std::env::var_os("BUZZ_REQUIRE_RELAY_MEMBERSHIP");
+
+        std::env::set_var("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", "true");
+        std::env::remove_var("SNOWMAN_ROLE_SCOPES");
+        std::env::set_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP", "true");
+        let ungoverned = Config::from_env();
+
+        std::env::set_var("SNOWMAN_ROLE_SCOPES", "true");
+        let governed = Config::from_env();
+
+        for (key, previous) in [
+            ("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", previous_identity),
+            ("SNOWMAN_ROLE_SCOPES", previous_role_scopes),
+            ("BUZZ_REQUIRE_RELAY_MEMBERSHIP", previous_membership),
+        ] {
+            if let Some(value) = previous {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        assert!(matches!(
+            ungoverned,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("requires SNOWMAN_ROLE_SCOPES=true")
+        ));
+        assert!(
+            governed
+                .expect("governed workforce identity config")
+                .snowman_workforce_identity_required
+        );
+    }
+
+    #[test]
+    fn analyst_event_api_requires_governed_workforce_identity() {
+        let _guard = ENV_MUTEX.lock().expect("environment mutex");
+        let keys = [
+            "BUZZ_REQUIRE_RELAY_MEMBERSHIP",
+            "SNOWMAN_ROLE_SCOPES",
+            "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED",
+            "SNOWMAN_ANALYST_EVENT_API_ENABLED",
+        ];
+        let previous: Vec<_> = keys
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect();
+
+        std::env::set_var("SNOWMAN_ANALYST_EVENT_API_ENABLED", "true");
+        std::env::remove_var("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED");
+        let ungoverned = Config::from_env();
+
+        std::env::set_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP", "true");
+        std::env::set_var("SNOWMAN_ROLE_SCOPES", "true");
+        std::env::set_var("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", "true");
+        let governed = Config::from_env();
+
+        for (key, value) in previous {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        assert!(matches!(
+            ungoverned,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("requires SNOWMAN_WORKFORCE_IDENTITY_REQUIRED=true")
+        ));
+        assert!(
+            governed
+                .expect("governed Analyst event config")
+                .snowman_analyst_event_api_enabled
+        );
+    }
+
+    #[test]
+    fn workforce_api_requires_snowman_only_model_gateway() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let keys = [
+            "BUZZ_REQUIRE_RELAY_MEMBERSHIP",
+            "SNOWMAN_ROLE_SCOPES",
+            "SNOWMAN_WORKFORCE_IDENTITY_REQUIRED",
+            "SNOWMAN_WORKFORCE_API_ENABLED",
+            "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID",
+            "SNOWMAN_MODEL_GATEWAY_URL",
+            "SNOWMAN_PLANNING_MODEL_ID",
+            "SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES",
+            "SNOWMAN_PROACTIVE_MAX_AUTOMATIC_COST_MICROUSD",
+            "SNOWMAN_PROACTIVE_MINIMUM_CONFIDENCE_BASIS_POINTS",
+        ];
+        let previous: Vec<_> = keys
+            .iter()
+            .map(|key| (*key, std::env::var_os(key)))
+            .collect();
+        std::env::set_var("BUZZ_REQUIRE_RELAY_MEMBERSHIP", "true");
+        std::env::set_var("SNOWMAN_ROLE_SCOPES", "true");
+        std::env::set_var("SNOWMAN_WORKFORCE_IDENTITY_REQUIRED", "true");
+        std::env::set_var("SNOWMAN_WORKFORCE_API_ENABLED", "true");
+        std::env::set_var(
+            "SNOWMAN_WORKFORCE_LEAD_IDENTITY_ID",
+            "8d7d246a-58b9-4d44-825d-bc9b4307c16a",
+        );
+        std::env::set_var("SNOWMAN_PLANNING_MODEL_ID", "snowman-planner-v1");
+
+        std::env::set_var("SNOWMAN_MODEL_GATEWAY_URL", "https://api.block.xyz/v1");
+        let external = Config::from_env();
+        std::env::set_var(
+            "SNOWMAN_MODEL_GATEWAY_URL",
+            "https://models.snowmanai.org/v1",
+        );
+        std::env::set_var("SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES", "aws.all");
+        let ambient = Config::from_env();
+        std::env::set_var("SNOWMAN_PROACTIVE_AUTOMATIC_CAPABILITIES", "");
+        let snowman = Config::from_env();
+
+        for (key, value) in previous {
+            if let Some(value) = value {
+                std::env::set_var(key, value);
+            } else {
+                std::env::remove_var(key);
+            }
+        }
+
+        assert!(matches!(
+            external,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("Snowman-controlled HTTPS URL")
+        ));
+        assert!(matches!(
+            ambient,
+            Err(ConfigError::InvalidValue(ref message))
+                if message.contains("bounded namespaced capabilities")
+        ));
+        let config = snowman.expect("Snowman workforce config");
+        let workforce = config.snowman_workforce.expect("workforce enabled");
+        assert_eq!(
+            workforce.model_gateway_url,
+            "https://models.snowmanai.org/v1"
+        );
+        assert!(workforce.proactive_policy.automatic_capabilities.is_empty());
+        assert_eq!(workforce.proactive_policy.max_automatic_cost_microusd, 0);
+        assert_eq!(
+            workforce.proactive_policy.minimum_confidence_basis_points,
+            10_000
+        );
+    }
+
+    #[test]
     fn rate_limit_overrides_reject_zero() {
         let _guard = ENV_MUTEX.lock().unwrap();
         std::env::set_var("BUZZ_RATE_LIMIT_HUMAN_WS_EVENTS_PER_SEC", "0");
@@ -1187,22 +1692,25 @@ mod tests {
     }
 
     #[test]
-    fn push_gateway_defaults_to_buzz_and_can_be_disabled() {
+    fn push_gateway_defaults_off_and_requires_an_explicit_endpoint() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let previous = std::env::var_os("BUZZ_PUSH_GATEWAY_DELIVERY_URL");
         std::env::remove_var("BUZZ_PUSH_GATEWAY_DELIVERY_URL");
         let config = Config::from_env().expect("default config");
+        assert!(config.push_gateway_delivery_url.is_none());
+
+        std::env::set_var(
+            "BUZZ_PUSH_GATEWAY_DELIVERY_URL",
+            "https://push.snowmanai.org/v1/deliveries/apns",
+        );
+        let config = Config::from_env().expect("explicit Snowman push config");
         assert_eq!(
             config
                 .push_gateway_delivery_url
                 .as_ref()
                 .map(url::Url::as_str),
-            Some(DEFAULT_PUSH_GATEWAY_DELIVERY_URL)
+            Some("https://push.snowmanai.org/v1/deliveries/apns")
         );
-
-        std::env::set_var("BUZZ_PUSH_GATEWAY_DELIVERY_URL", "");
-        let config = Config::from_env().expect("disabled push config");
-        assert!(config.push_gateway_delivery_url.is_none());
 
         if let Some(value) = previous {
             std::env::set_var("BUZZ_PUSH_GATEWAY_DELIVERY_URL", value);
@@ -1276,14 +1784,14 @@ mod tests {
     #[test]
     fn pairing_relay_url_accepts_websocket_urls_and_rejects_http() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var("BUZZ_PAIRING_RELAY_URL", "wss://pairing.buzz.xyz");
+        std::env::set_var("BUZZ_PAIRING_RELAY_URL", "wss://pairing.snowmanai.org");
         let config = Config::from_env().expect("config");
         assert_eq!(
             config.pairing_relay_url.as_deref(),
-            Some("wss://pairing.buzz.xyz")
+            Some("wss://pairing.snowmanai.org")
         );
 
-        std::env::set_var("BUZZ_PAIRING_RELAY_URL", "https://pairing.buzz.xyz");
+        std::env::set_var("BUZZ_PAIRING_RELAY_URL", "https://pairing.snowmanai.org");
         let result = Config::from_env();
         std::env::remove_var("BUZZ_PAIRING_RELAY_URL");
         assert!(matches!(

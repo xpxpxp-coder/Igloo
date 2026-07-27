@@ -10,8 +10,8 @@ export function normalizeRelayUrl(input: string): string | null {
   // Already ws(s)://
   if (trimmed.startsWith("wss://") || trimmed.startsWith("ws://")) {
     try {
-      new URL(trimmed);
-      return trimmed;
+      const parsed = new URL(trimmed);
+      return isAllowedSnowmanRelay(parsed) ? trimmed : null;
     } catch {
       return null;
     }
@@ -21,8 +21,8 @@ export function normalizeRelayUrl(input: string): string | null {
   if (trimmed.startsWith("https://")) {
     const wsUrl = `wss://${trimmed.slice(8)}`;
     try {
-      new URL(wsUrl);
-      return wsUrl;
+      const parsed = new URL(wsUrl);
+      return isAllowedSnowmanRelay(parsed) ? wsUrl : null;
     } catch {
       return null;
     }
@@ -30,8 +30,8 @@ export function normalizeRelayUrl(input: string): string | null {
   if (trimmed.startsWith("http://")) {
     const wsUrl = `ws://${trimmed.slice(7)}`;
     try {
-      new URL(wsUrl);
-      return wsUrl;
+      const parsed = new URL(wsUrl);
+      return isAllowedSnowmanRelay(parsed) ? wsUrl : null;
     } catch {
       return null;
     }
@@ -43,14 +43,26 @@ export function normalizeRelayUrl(input: string): string | null {
   if (!trimmed.includes("://")) {
     const wsUrl = `wss://${trimmed}`;
     try {
-      new URL(wsUrl);
-      return wsUrl;
+      const parsed = new URL(wsUrl);
+      return isAllowedSnowmanRelay(parsed) ? wsUrl : null;
     } catch {
       return null;
     }
   }
 
   return null;
+}
+
+function isAllowedSnowmanRelay(url: URL): boolean {
+  if (url.username || url.password) return false;
+  // Node tests and Vite development retain fixture/loopback flexibility. The
+  // release bundle is fail-closed to Snowman-owned DNS.
+  if (import.meta.env?.PROD !== true) return true;
+  const host = url.hostname.toLowerCase();
+  return (
+    url.protocol === "wss:" &&
+    (host === "snowmanai.org" || host.endsWith(".snowmanai.org"))
+  );
 }
 
 /**

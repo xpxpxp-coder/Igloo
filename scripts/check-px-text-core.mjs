@@ -75,13 +75,16 @@ export async function runPxTextCheck({
   const violations = [];
 
   for (const filePath of candidateFiles) {
-    const relativePath = path.relative(projectRoot, filePath);
+    const nativeRelativePath = path.relative(projectRoot, filePath);
     const rule = rules.find((r) =>
-      relativePath.startsWith(`${r.root}${path.sep}`),
+      nativeRelativePath.startsWith(`${r.root}${path.sep}`),
     );
     if (!rule) {
       continue;
     }
+    // Configuration and diagnostics always use repository-style paths so
+    // allowlists behave identically under Windows and POSIX runtimes.
+    const relativePath = nativeRelativePath.split(path.sep).join("/");
     if (!rule.extensions.has(path.extname(relativePath))) {
       continue;
     }

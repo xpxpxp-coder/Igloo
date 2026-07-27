@@ -1,7 +1,7 @@
 apiVersion: v2
 name: buzz
 description: |
-  Buzz — a Nostr-based messaging platform for human–agent collaboration.
+  Snowman Command Center — a governed human and agent operations platform.
 
   A single relay binary serving WebSocket + REST + web UI, backed by
   PostgreSQL and Redis. Configurable for single-node evaluation
@@ -9,9 +9,9 @@ description: |
 type: application
 version: 0.1.6
 appVersion: "0.1.0"
-home: https://github.com/block/buzz
+home: https://github.com/snowman-ai-org/snowman-command-center
 sources:
-  - https://github.com/block/buzz
+  - https://github.com/snowman-ai-org/snowman-command-center
 keywords:
   - nostr
   - relay
@@ -19,8 +19,8 @@ keywords:
   - websocket
   - chat
 maintainers:
-  - name: Block
-    url: https://github.com/block
+  - name: Snowman AI
+    url: https://snowmanai.org
 annotations:
   artifacthub.io/changes: |
     - kind: added

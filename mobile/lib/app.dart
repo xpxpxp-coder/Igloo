@@ -14,6 +14,7 @@ import 'shared/auth/auth.dart';
 import 'shared/deeplink/pending_deep_link_provider.dart';
 import 'shared/relay/relay.dart';
 import 'shared/theme/theme.dart';
+import 'shared/product/identity.g.dart';
 
 class App extends HookConsumerWidget {
   const App({super.key});
@@ -41,7 +42,7 @@ class App extends HookConsumerWidget {
       ref.watch(userStatusCacheProvider);
     }
 
-    // Start listening for buzz:// links immediately (even pre-auth) so a
+    // Start listening for Snowman links immediately (even pre-auth) so a
     // cold-start link survives until the authenticated UI can dispatch it.
     ref.watch(pendingDeepLinkProvider);
 
@@ -64,7 +65,7 @@ class App extends HookConsumerWidget {
     });
 
     return MaterialApp(
-      title: 'Buzz',
+      title: SnowmanProduct.mobileName,
       theme: AppTheme.light(colorScheme: lightScheme),
       darkTheme: AppTheme.dark(colorScheme: darkScheme),
       themeMode: effectiveMode,

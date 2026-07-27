@@ -14,8 +14,6 @@ const MAX_ENDPOINT_TRANSPORT_ADDRS: usize = 16;
 pub(super) enum IrohRelayMode {
     /// Direct QUIC only; advertised endpoint tokens must not contain relays.
     Disabled,
-    /// Iroh's production relay set, enabled by default for NAT traversal.
-    Default,
     /// An explicit, locally configured relay allowlist.
     Custom(Vec<RelayUrl>),
 }
@@ -26,8 +24,10 @@ pub(super) fn iroh_relay_mode() -> anyhow::Result<IrohRelayMode> {
 
 pub(super) fn iroh_relay_mode_from(raw: Option<&str>) -> anyhow::Result<IrohRelayMode> {
     match raw.map(str::trim) {
-        Some("0") => Ok(IrohRelayMode::Disabled),
-        None | Some("") | Some("1") | Some("default") => Ok(IrohRelayMode::Default),
+        None | Some("") | Some("0") => Ok(IrohRelayMode::Disabled),
+        Some("1") | Some("default") => anyhow::bail!(
+            "public mesh relays are disabled; configure explicit Snowman relay origins in {MESH_IROH_RELAYS_ENV}"
+        ),
         Some(list) => {
             let urls = list
                 .split(',')
@@ -66,6 +66,22 @@ fn parse_configured_relay_url(raw: &str) -> anyhow::Result<RelayUrl> {
     {
         anyhow::bail!(
             "relay URL {raw:?} must be an origin without credentials, path, query, or fragment"
+        );
+    }
+    let snowman_controlled = parsed.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("snowmanai.org")
+            || host
+                .to_ascii_lowercase()
+                .ends_with(".snowmanai.org")
+            || host.eq_ignore_ascii_case("localhost")
+    }) || parsed.host().is_some_and(|host| match host {
+        url::Host::Ipv4(ip) => ip.is_loopback(),
+        url::Host::Ipv6(ip) => ip.is_loopback(),
+        url::Host::Domain(_) => false,
+    });
+    if !snowman_controlled {
+        anyhow::bail!(
+            "relay URL {raw:?} is outside the Snowman-controlled snowmanai.org boundary"
         );
     }
     raw.parse::<RelayUrl>()
@@ -198,41 +214,9 @@ fn validate_transport(transport: &TransportAddr, mode: &IrohRelayMode) -> anyhow
     }
 }
 
-/// mesh-llm's default public relay set (`RelayPolicy::DefaultPublic` in
-/// `mesh-llm-host-runtime`). A stock mesh-llm server with no custom relay
-/// config advertises endpoints on exactly these relays, so buzz's `Default`
-/// mode MUST accept them — otherwise shared compute rejects every out-of-the-box
-/// mesh-llm serving node (they are not in iroh's own prod relay map).
-///
-/// Kept in sync with `effective_relay_urls(RelayPolicy::DefaultPublic, &[])`.
-const MESH_LLM_DEFAULT_RELAYS: &[&str] = &[
-    "https://usw1-2.relay.michaelneale.mesh-llm.iroh.link./",
-    "https://aps1-1.relay.michaelneale.mesh-llm.iroh.link./",
-];
-
-/// Whether `relay` is one of mesh-llm's baked-in default public relays.
-/// Parses each known URL to a `RelayUrl` so comparison is normalization-safe
-/// (matches regardless of trailing-dot / trailing-slash formatting).
-fn is_mesh_llm_default_relay(relay: &RelayUrl) -> bool {
-    MESH_LLM_DEFAULT_RELAYS.iter().any(|candidate| {
-        candidate
-            .parse::<RelayUrl>()
-            .map(|known| &known == relay)
-            .unwrap_or(false)
-    })
-}
-
 fn relay_allowed(relay: &RelayUrl, mode: &IrohRelayMode) -> bool {
     match mode {
         IrohRelayMode::Disabled => false,
-        // `Default` covers both iroh's own production relays AND mesh-llm's
-        // default public relays. Without the latter, a stock mesh-llm serving
-        // node is unreachable by default and shared compute silently fails with
-        // "no live member is serving this model" even though discovery found it.
-        IrohRelayMode::Default => {
-            iroh::defaults::prod::default_relay_map().contains(relay)
-                || is_mesh_llm_default_relay(relay)
-        }
         IrohRelayMode::Custom(urls) => urls.contains(relay),
     }
 }
@@ -302,44 +286,21 @@ mod tests {
     }
 
     #[test]
-    fn default_mode_accepts_meshllm_default_relays() {
-        // Regression: a stock mesh-llm serving node advertises endpoints on
-        // mesh-llm's OWN default public relays (not iroh's prod relay map).
-        // Under `Default` mode these MUST be accepted, or shared compute rejects
-        // every out-of-the-box mesh-llm server with "no live member is serving
-        // this model" even though discovery found it. See mesh-llm
-        // effective_relay_urls(RelayPolicy::DefaultPublic, &[]).
-        for relay_url in MESH_LLM_DEFAULT_RELAYS {
-            let relay: RelayUrl = relay_url
-                .parse()
-                .unwrap_or_else(|e| panic!("mesh-llm default relay {relay_url:?} must parse: {e}"));
-            assert!(
-                relay_allowed(&relay, &IrohRelayMode::Default),
-                "Default mode must accept mesh-llm default relay {relay_url}"
-            );
-
-            // And end-to-end through the advertised-endpoint validator.
-            let token = endpoint_token_for_test([TransportAddr::Relay(relay)]);
-            assert!(
-                validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Default).is_ok(),
-                "Default mode must validate an endpoint on mesh-llm default relay {relay_url}"
-            );
-        }
-    }
-
-    #[test]
     fn endpoint_with_one_good_and_one_junk_candidate_is_sanitized() {
         // A mesh-llm endpoint can advertise a usable relay alongside an
         // unusable direct IP. Keep the endpoint reachable, but never pass the
         // rejected candidate through to iroh's parallel dialer.
-        let good_relay: RelayUrl = MESH_LLM_DEFAULT_RELAYS[0].parse().unwrap();
+        let good_relay: RelayUrl = "https://mesh.snowmanai.org".parse().unwrap();
         let unsafe_socket = "169.254.169.254:80".parse().unwrap();
         let token = endpoint_token_for_test([
             TransportAddr::Relay(good_relay.clone()),
             TransportAddr::Ip(unsafe_socket),
         ]);
-        let validated =
-            validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Default).unwrap();
+        let validated = validate_advertised_endpoint_with_mode(
+            &token,
+            &IrohRelayMode::Custom(vec![good_relay.clone()]),
+        )
+        .unwrap();
         let payload = URL_SAFE_NO_PAD.decode(validated.join_token).unwrap();
         let sanitized: EndpointAddr = serde_json::from_slice(&payload).unwrap();
         assert_eq!(
@@ -356,19 +317,25 @@ mod tests {
             TransportAddr::Ip("127.0.0.1:9337".parse().unwrap()),    // loopback
         ]);
         assert!(
-            validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Default).is_err(),
+            validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Disabled).is_err(),
             "endpoint with no usable candidate must be rejected"
         );
     }
 
     #[test]
-    fn default_mode_still_rejects_unknown_relay() {
-        // Guard the fix doesn't over-open: a relay that is neither iroh-prod nor
-        // a mesh-llm default must still be rejected under Default mode.
+    fn custom_mode_rejects_relay_outside_local_allowlist() {
         let unknown: RelayUrl = "https://not-a-real-relay.example".parse().unwrap();
-        assert!(!relay_allowed(&unknown, &IrohRelayMode::Default));
+        let allowed: RelayUrl = "https://mesh.snowmanai.org".parse().unwrap();
+        assert!(!relay_allowed(
+            &unknown,
+            &IrohRelayMode::Custom(vec![allowed.clone()])
+        ));
         let token = endpoint_token_for_test([TransportAddr::Relay(unknown)]);
-        assert!(validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Default).is_err());
+        assert!(validate_advertised_endpoint_with_mode(
+            &token,
+            &IrohRelayMode::Custom(vec![allowed])
+        )
+        .is_err());
     }
 
     #[test]
@@ -376,16 +343,16 @@ mod tests {
         for socket in ["127.0.0.1:9337", "169.254.169.254:80", "0.0.0.0:1"] {
             let token = endpoint_token_for_test([TransportAddr::Ip(socket.parse().unwrap())]);
             assert!(
-                validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Default).is_err(),
+                validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Disabled).is_err(),
                 "accepted unsafe target {socket}"
             );
         }
         let valid =
             endpoint_token_for_test([TransportAddr::Ip("192.168.1.20:47916".parse().unwrap())]);
-        assert!(validate_advertised_endpoint_with_mode(&valid, &IrohRelayMode::Default).is_ok());
+        assert!(validate_advertised_endpoint_with_mode(&valid, &IrohRelayMode::Disabled).is_ok());
         assert!(validate_advertised_endpoint_with_mode(
             &"a".repeat(MAX_INVITE_TOKEN_LEN + 1),
-            &IrohRelayMode::Default
+            &IrohRelayMode::Disabled
         )
         .is_err());
     }
@@ -421,13 +388,14 @@ mod tests {
         .expect("sign test bootstrap token");
         let token = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&signed).unwrap());
         assert_eq!(
-            validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Default)
+            validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Disabled)
                 .unwrap()
                 .endpoint_id,
             endpoint.id.to_string()
         );
 
-        let good_relay: RelayUrl = MESH_LLM_DEFAULT_RELAYS[0].parse().unwrap();
+        let good_relay: RelayUrl = "https://mesh.snowmanai.org".parse().unwrap();
+        let relay_mode = IrohRelayMode::Custom(vec![good_relay.clone()]);
         let placeholder_endpoint = EndpointAddr {
             id: endpoint.id,
             addrs: [
@@ -447,8 +415,7 @@ mod tests {
         let placeholder_token =
             URL_SAFE_NO_PAD.encode(serde_json::to_vec(&placeholder_signed).unwrap());
         assert!(
-            validate_advertised_endpoint_with_mode(&placeholder_token, &IrohRelayMode::Default)
-                .is_ok(),
+            validate_advertised_endpoint_with_mode(&placeholder_token, &relay_mode).is_ok(),
             "signed stock token with a port-0 placeholder must remain usable"
         );
 
@@ -470,7 +437,7 @@ mod tests {
         .expect("sign mixed test bootstrap token");
         let mixed_token = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&mixed_signed).unwrap());
         assert!(
-            validate_advertised_endpoint_with_mode(&mixed_token, &IrohRelayMode::Default).is_err(),
+            validate_advertised_endpoint_with_mode(&mixed_token, &relay_mode).is_err(),
             "signed mixed-candidate tokens must fail closed because they cannot be rewritten"
         );
 
@@ -483,6 +450,6 @@ mod tests {
         })
         .unwrap();
         let token = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&tampered).unwrap());
-        assert!(validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Default).is_err());
+        assert!(validate_advertised_endpoint_with_mode(&token, &IrohRelayMode::Disabled).is_err());
     }
 }

@@ -66,3 +66,17 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "S3/object-storage source missing"
+
+  - it: rejects a non-Snowman workforce model gateway
+    set:
+      relayUrl: wss://command.snowmanai.org
+      ownerPubkey: "0000000000000000000000000000000000000000000000000000000000000000"
+      externalPostgresql.url: postgres://u:p@h:5432/d
+      s3.endpoint: https://s3.us-west-2.amazonaws.com
+      relay.snowmanWorkforce.enabled: true
+      relay.snowmanWorkforce.leadServiceIdentityId: "8d7d246a-58b9-4d44-825d-bc9b4307c16a"
+      relay.snowmanWorkforce.modelGatewayUrl: https://api.block.xyz/v1
+      relay.snowmanWorkforce.planningModelId: snowman-planner-v1
+    asserts:
+      - failedTemplate:
+          errorPattern: "modelGatewayUrl must use a Snowman-controlled HTTPS endpoint"

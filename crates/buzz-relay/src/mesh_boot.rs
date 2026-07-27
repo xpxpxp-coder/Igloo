@@ -410,7 +410,7 @@ fn advertise_addrs(endpoint: &MeshEndpoint) -> Vec<String> {
 /// default tenant.
 pub async fn boot_mesh(
     config: &Config,
-    redis_pool: deadpool_redis::Pool,
+    redis_pool: buzz_pubsub::RedisPool,
     relay_keypair: &nostr::Keys,
     shutting_down: Arc<AtomicBool>,
 ) -> anyhow::Result<Option<MeshHandle>> {
@@ -534,6 +534,7 @@ mod tests {
         let pool = deadpool_redis::Config::from_url("redis://127.0.0.1:1") // unroutable
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .unwrap();
+        let pool = buzz_pubsub::RedisPool::from_deadpool("redis://127.0.0.1:1", pool).unwrap();
         let keys = nostr::Keys::generate();
         let handle = boot_mesh(&config, pool, &keys, Arc::new(AtomicBool::new(false)))
             .await
@@ -708,6 +709,7 @@ mod tests {
         let pool = deadpool_redis::Config::from_url("redis://127.0.0.1:1") // never dialed
             .create_pool(Some(deadpool_redis::Runtime::Tokio1))
             .unwrap();
+        let pool = buzz_pubsub::RedisPool::from_deadpool("redis://127.0.0.1:1", pool).unwrap();
         wire_mesh_consumers(
             &dispatcher,
             SessionDirectory::new(pool),

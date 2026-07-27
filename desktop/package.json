@@ -1,11 +1,11 @@
 {
-  "name": "buzz",
+  "name": "snowman-command-center",
   "private": true,
   "version": "0.4.26",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node ../scripts/check-snowman-ui-budgets.mjs desktop dist",
     "build:e2e": "tsc && vite build --mode e2e",
     "typecheck": "tsc --noEmit",
     "check:file-sizes": "node ./scripts/check-file-sizes.mjs",
@@ -14,7 +14,7 @@
     "lint": "biome lint .",
     "check": "biome check . && pnpm check:file-sizes && pnpm check:px-text && pnpm check:pubkey-truncation",
     "format": "biome format --write .",
-    "test": "node --import ./test-loader.mjs --experimental-strip-types --test 'src/**/*.test.mjs'",
+    "test": "node --import ./test-loader.mjs --experimental-strip-types --test",
     "preview": "vite preview",
     "tauri": "tauri",
     "test:e2e": "pnpm build:e2e && playwright test",

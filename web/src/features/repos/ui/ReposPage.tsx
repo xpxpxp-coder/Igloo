@@ -2,7 +2,8 @@ import { BookMarked, GitBranch } from "lucide-react";
 import { toast } from "sonner";
 import { useEffect, useMemo, useState } from "react";
 
-import buzzAppIcon from "@/assets/app-icon@3x.png";
+import snowmanAppIcon from "@/assets/snowman-command-center.svg";
+import { COMMAND_CENTER_NAME } from "@/shared/product/identity.generated";
 import { Input } from "@/shared/ui/input";
 import { mockRepos } from "../mock-repos";
 import { useRepos } from "../use-repos";
@@ -14,7 +15,7 @@ type SortOrder = "newest" | "oldest" | "name";
 
 function ListItemSkeleton() {
   return (
-    <div className="py-6">
+    <div aria-hidden="true" className="py-6">
       <div className="flex items-center gap-2">
         <div className="h-4 w-4 shrink-0 animate-pulse rounded bg-black/10 dark:bg-white/10" />
         <div className="h-5 w-48 animate-pulse rounded bg-black/10 dark:bg-white/10" />
@@ -53,14 +54,18 @@ function CommunityEmptyState() {
           className="h-16 w-16 overflow-hidden bg-black"
           style={{ borderRadius: "22.37%" }}
         >
-          <img alt="Buzz" className="h-full w-full" src={buzzAppIcon} />
+          <img
+            alt={COMMAND_CENTER_NAME}
+            className="h-full w-full"
+            src={snowmanAppIcon}
+          />
         </div>
         <h1 className="mt-6 text-2xl font-semibold tracking-tight text-black dark:text-white">
           This community is empty
         </h1>
         <p className="mt-2 max-w-md text-sm leading-relaxed text-black/60 dark:text-white/60">
           Repositories pushed to this community will show up here. Open this
-          community in the Buzz desktop app to start pushing code.
+          workspace in {COMMAND_CENTER_NAME} to start pushing code.
         </p>
         <ConnectButton className="mt-6" />
       </div>
@@ -125,11 +130,17 @@ export function ReposPage() {
 
   if (isLoading) {
     return (
-      <div className="flex w-full flex-1 gap-8 bg-[#F3F3F3] px-4 py-8 dark:bg-[#171717]">
+      <div
+        aria-busy="true"
+        aria-live="polite"
+        className="flex w-full flex-1 gap-8 bg-[#F3F3F3] px-4 py-8 dark:bg-[#171717]"
+        role="status"
+      >
         <div className="min-w-0 flex-1">
           <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-black dark:text-white">
             <BookMarked className="h-4 w-4" /> Repositories
           </h2>
+          <span className="sr-only">Loading repositories</span>
           <div className="divide-y">
             {["a", "b", "c", "d", "e"].map((key) => (
               <ListItemSkeleton key={key} />
