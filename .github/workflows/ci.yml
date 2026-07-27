@@ -1033,7 +1033,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo fetch --locked --manifest-path desktop/src-tauri/Cargo.toml
-          MESH_MANIFEST=$(cargo metadata --locked --manifest-path desktop/src-tauri/Cargo.toml --format-version 1 \
+          MESH_MANIFEST=$(cargo metadata --locked --manifest-path desktop/src-tauri/Cargo.toml --features mesh-llm --format-version 1 \
             | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(p["manifest_path"] for p in d["packages"] if p["name"] == "mesh-llm-sdk"))')
           MESH_PACKAGE_DIR=$(dirname "$MESH_MANIFEST")
           MESH_ROOT=$(git -C "$MESH_PACKAGE_DIR" rev-parse --show-toplevel)

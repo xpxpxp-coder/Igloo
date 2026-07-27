@@ -2755,6 +2755,7 @@ mod tests {
             },
             artifact_id: "artifact-1".into(),
             artifact_version: "v1".into(),
+            artifact_type: "analyst360.context-packet.v1".into(),
             expires_at: None,
             created_by_identity_id: Uuid::new_v4(),
             manifest_sha256: digest,

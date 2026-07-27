@@ -617,7 +617,7 @@ mod tests {
         let _: () = redis::cmd("DEL")
             .arg(keys.lease)
             .arg(keys.generation)
-            .query_async(&mut *conn)
+            .query_async(&mut conn)
             .await
             .expect("clear keys");
     }

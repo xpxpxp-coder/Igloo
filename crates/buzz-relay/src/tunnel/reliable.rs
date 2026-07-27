@@ -709,7 +709,7 @@ mod tests {
         let _: () = redis::cmd("DEL")
             .arg(format!("{base}:lease"))
             .arg(format!("{base}:generation"))
-            .query_async(&mut *conn)
+            .query_async(&mut conn)
             .await
             .expect("clear keys");
     }

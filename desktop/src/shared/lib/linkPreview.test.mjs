@@ -9,7 +9,9 @@ import {
 
 test("parseSupportedLinkPreview parses GitHub pull request URLs", () => {
   assert.deepEqual(
-    parseSupportedLinkPreview("https://github.com/xpxpxp-coder/Igloo/pull/1234"),
+    parseSupportedLinkPreview(
+      "https://github.com/xpxpxp-coder/Igloo/pull/1234",
+    ),
     {
       kind: "github-pull-request",
       href: "https://github.com/xpxpxp-coder/Igloo/pull/1234",
@@ -35,7 +37,9 @@ test("parseSupportedLinkPreview parses GitHub repository URLs", () => {
 
 test("parseSupportedLinkPreview trims markdown punctuation around GitHub URLs", () => {
   assert.deepEqual(
-    parseSupportedLinkPreview("https://github.com/xpxpxp-coder/Igloo/pull/1234)."),
+    parseSupportedLinkPreview(
+      "https://github.com/xpxpxp-coder/Igloo/pull/1234).",
+    ),
     {
       kind: "github-pull-request",
       href: "https://github.com/xpxpxp-coder/Igloo/pull/1234",
@@ -48,7 +52,9 @@ test("parseSupportedLinkPreview trims markdown punctuation around GitHub URLs", 
 
 test("parseSupportedLinkPreview ignores unsupported GitHub URLs", () => {
   assert.equal(
-    parseSupportedLinkPreview("https://github.com/xpxpxp-coder/Igloo/tree/main"),
+    parseSupportedLinkPreview(
+      "https://github.com/xpxpxp-coder/Igloo/tree/main",
+    ),
     null,
   );
 });
@@ -241,7 +247,9 @@ test("extractSupportedLinkPreviews skips links inside block spoilers", () => {
 });
 
 test("isSupportedLinkAutolinkLabel matches normalized bare URL labels", () => {
-  const preview = parseSupportedLinkPreview("github.com/xpxpxp-coder/Igloo/pull/5");
+  const preview = parseSupportedLinkPreview(
+    "github.com/xpxpxp-coder/Igloo/pull/5",
+  );
   assert.ok(preview);
   assert.equal(
     isSupportedLinkAutolinkLabel(

@@ -7026,8 +7026,7 @@ async function handleDiscoverAcpRuntimes(
       default_args: [],
       mcp_command: "buzz-dev-mcp",
       install_hint: "Ships with the Buzz desktop app.",
-      install_instructions_url:
-        "https://github.com/xpxpxp-coder/Igloo",
+      install_instructions_url: "https://github.com/xpxpxp-coder/Igloo",
       can_auto_install: false,
       requires_external_cli: false,
       underlying_cli_path: null,
