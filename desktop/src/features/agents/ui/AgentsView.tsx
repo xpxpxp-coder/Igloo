@@ -29,8 +29,16 @@ import { useBakedBuildEnvQuery } from "@/features/agents/hooks";
 import { isManagedAgentActive } from "@/features/agents/lib/managedAgentControlActions";
 import { useGlobalAgentConfig } from "@/features/agents/useGlobalAgentConfig";
 import { Button } from "@/shared/ui/button";
+import { FeatureGate } from "@/shared/features";
 import { PageHeader } from "@/shared/ui/PageHeader";
 import { getInheritedAgentDefaults } from "./bakedEnvHelpers";
+
+const TeamOperationsPanel = React.lazy(async () => {
+  const module = await import(
+    "@/features/agents/team-operations/TeamOperationsPanel"
+  );
+  return { default: module.TeamOperationsPanel };
+});
 
 export function AgentsView() {
   const { openPersonaProfilePanel, openProfilePanel } = useProfilePanel();
@@ -140,6 +148,12 @@ export function AgentsView() {
             title="Agents"
           />
           <div className="flex flex-col gap-8">
+            <FeatureGate feature="teamOperations">
+              <React.Suspense fallback={null}>
+                <TeamOperationsPanel />
+              </React.Suspense>
+            </FeatureGate>
+
             <UnifiedAgentsSection
               defaultModel={inheritedDefaults.model.value}
               actionErrorMessage={agents.actionErrorMessage}
