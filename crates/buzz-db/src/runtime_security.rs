@@ -320,11 +320,17 @@ pub async fn provision_meeting_control_role(
          GRANT CONNECT ON DATABASE {database_identifier} TO {role_identifier};\n\
          GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
          GRANT SELECT ON TABLE snowman_workforce_identities TO {role_identifier};\n\
+         GRANT SELECT ON TABLE snowman_workforce_key_bindings,\n\
+           snowman_workforce_capability_grants,snowman_meeting_command_callers,\n\
+           snowman_meeting_command_receivers\n\
+           TO {role_identifier};\n\
          GRANT SELECT,INSERT,UPDATE ON TABLE snowman_meeting_mailboxes,\n\
            snowman_meeting_intake_receipts,snowman_meetings,\n\
            snowman_meeting_sessions,snowman_meeting_participant_consents,\n\
            snowman_meeting_tool_intents TO {role_identifier};\n\
-         GRANT SELECT,INSERT ON TABLE snowman_meeting_commands TO {role_identifier};"
+         GRANT SELECT,INSERT ON TABLE snowman_meeting_commands,\n\
+           snowman_meeting_command_auth_events,snowman_meeting_command_receipts\n\
+           TO {role_identifier};"
     );
     sqlx::raw_sql(AssertSqlSafe(grants))
         .execute(&mut *transaction)
@@ -468,6 +474,14 @@ pub async fn verify_meeting_control_role(pool: &PgPool, expected_role: &str) -> 
          AND NOT has_schema_privilege(current_user,'public','CREATE') \
          AND has_table_privilege(current_user,'snowman_workforce_identities','SELECT') \
          AND NOT has_table_privilege(current_user,'snowman_workforce_identities','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_workforce_key_bindings','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_workforce_key_bindings','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_workforce_capability_grants','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_workforce_capability_grants','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_command_callers','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_command_callers','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_command_receivers','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_command_receivers','INSERT,UPDATE,DELETE,TRUNCATE') \
          AND has_table_privilege(current_user,'snowman_meeting_mailboxes','SELECT') \
          AND has_table_privilege(current_user,'snowman_meeting_mailboxes','INSERT') \
          AND has_table_privilege(current_user,'snowman_meeting_mailboxes','UPDATE') \
@@ -483,6 +497,10 @@ pub async fn verify_meeting_control_role(pool: &PgPool, expected_role: &str) -> 
          AND has_table_privilege(current_user,'snowman_meeting_commands','SELECT') \
          AND has_table_privilege(current_user,'snowman_meeting_commands','INSERT') \
          AND NOT has_table_privilege(current_user,'snowman_meeting_commands','UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_command_auth_events','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_command_auth_events','UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_command_receipts','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_command_receipts','UPDATE,DELETE,TRUNCATE') \
          AND has_table_privilege(current_user,'snowman_meeting_sessions','SELECT') \
          AND has_table_privilege(current_user,'snowman_meeting_sessions','INSERT') \
          AND has_table_privilege(current_user,'snowman_meeting_sessions','UPDATE') \
@@ -664,7 +682,13 @@ mod tests {
     fn meeting_control_role_is_isolated_and_commands_are_append_only() {
         let source = include_str!("runtime_security.rs");
         assert!(source.contains("GRANT SELECT,INSERT,UPDATE ON TABLE snowman_meeting_mailboxes"));
-        assert!(source.contains("GRANT SELECT,INSERT ON TABLE snowman_meeting_commands TO"));
+        assert!(source.contains("GRANT SELECT,INSERT ON TABLE snowman_meeting_commands,"));
+        assert!(
+            source.contains("snowman_meeting_command_auth_events,snowman_meeting_command_receipts")
+        );
+        assert!(
+            source.contains("snowman_workforce_capability_grants,snowman_meeting_command_callers,")
+        );
         assert!(source.contains(
             "NOT has_table_privilege(current_user,'snowman_meeting_commands','UPDATE,DELETE,TRUNCATE')"
         ));

@@ -9142,6 +9142,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "snowman-orchestration"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "serde",
+ "sha2 0.11.0",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
 name = "snowman-tool-broker"
 version = "0.1.0"
 dependencies = [

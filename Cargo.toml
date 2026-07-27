@@ -27,6 +27,7 @@ members = [
     "crates/buzz-relay-mesh",
     "crates/buzz-dev-mcp",
     "crates/snowman-workforce",
+    "crates/snowman-orchestration",
     "crates/snowman-aws-auth",
     "crates/snowman-bootstrap",
     "crates/snowman-analyst-client",

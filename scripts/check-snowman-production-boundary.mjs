@@ -38,6 +38,7 @@ const runtimeAuthorityFiles = [
   "crates/buzz-db/src/workforce_identity.rs",
   "crates/buzz-db/src/analyst_integration.rs",
   "crates/snowman-workforce/src/lib.rs",
+  "crates/snowman-orchestration/src/lib.rs",
   "crates/snowman-aws-auth/src/lib.rs",
   "crates/snowman-analyst-client/src/lib.rs",
   "crates/snowman-workforce-worker/src/lib.rs",
@@ -67,6 +68,7 @@ const runtimeAuthorityFiles = [
   "migrations/0048_snowman_governed_meetings.sql",
   "migrations/0049_snowman_agent_tool_authority.sql",
   "migrations/0050_snowman_meeting_media_gateway.sql",
+  "migrations/0052_snowman_orchestration_foundation.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -576,6 +578,31 @@ requireFragment(
   "crates/snowman-workforce/src/lib.rs",
   "ExecuteAutomatically",
   "proactive action policy must distinguish automatic work from human-gated work",
+);
+requireFragment(
+  "crates/snowman-orchestration/src/lib.rs",
+  "valid_analyst_ref",
+  "orchestration memory and work-product context must remain immutable Analyst 360 references",
+);
+requireFragment(
+  "crates/snowman-orchestration/src/lib.rs",
+  "live_plan_generation",
+  "orchestration dispatch must reject cancelled or superseded plan generations",
+);
+requireFragment(
+  "crates/snowman-orchestration/src/lib.rs",
+  "minimum_value_basis_points",
+  "automatic orchestration must require evidence-grounded confidence, value, and risk policy",
+);
+requireFragment(
+  "migrations/0052_snowman_orchestration_foundation.sql",
+  "automatic_execution_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+  "new orchestration plans must default automatic execution off",
+);
+requireFragment(
+  "migrations/0052_snowman_orchestration_foundation.sql",
+  "handoff_manifest_reference ~ '^analyst360:sha256:",
+  "replacement-agent handoffs must remain Analyst-owned immutable references",
 );
 requireFragment(
   "crates/buzz-db/src/workforce.rs",

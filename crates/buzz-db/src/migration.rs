@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 50);
+        assert_eq!(migrations.len(), 52);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -1134,13 +1134,30 @@ mod tests {
             );
         }
         assert!(meeting_media.contains("raw_audio_retention = 'none'"));
-        assert!(meeting_media.contains(
-            "PRIMARY KEY (community_id, provider, delivery_id_sha256)"
-        ));
+        assert!(meeting_media.contains("PRIMARY KEY (community_id, provider, delivery_id_sha256)"));
         assert!(!meeting_media.contains("phone_number"));
         assert!(!meeting_media.contains("conference_url"));
         assert!(!meeting_media.contains("provider_credential"));
         assert!(!meeting_media.contains("transcript_text"));
+
+        assert_eq!(migrations[50].version, 51);
+        let meeting_commands = migrations[50].sql.as_str();
+        for table in [
+            "snowman_meeting_command_callers",
+            "snowman_meeting_command_receivers",
+            "snowman_meeting_command_auth_events",
+            "snowman_meeting_command_receipts",
+        ] {
+            assert!(
+                meeting_commands.contains(&format!("CREATE TABLE {table}")),
+                "missing {table}"
+            );
+        }
+        assert!(meeting_commands.contains("requester_pubkey BYTEA"));
+        assert!(meeting_commands.contains("receiver_signature BYTEA"));
+        assert!(!meeting_commands.contains("conference_url"));
+        assert!(!meeting_commands.contains("provider_credential"));
+        assert!(!meeting_commands.contains("transcript_text"));
     }
 
     #[test]
