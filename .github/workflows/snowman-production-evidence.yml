@@ -10,6 +10,8 @@ on:
       - "scripts/check-snowman-production-boundary.mjs"
       - "scripts/verify-snowman-launch-evidence.mjs"
       - "scripts/test-snowman-launch-evidence.mjs"
+      - "scripts/verify-snowman-release-artifacts.mjs"
+      - "scripts/test-snowman-release-artifacts.mjs"
   push:
     branches: [main]
     paths:
@@ -20,6 +22,8 @@ on:
       - "scripts/check-snowman-production-boundary.mjs"
       - "scripts/verify-snowman-launch-evidence.mjs"
       - "scripts/test-snowman-launch-evidence.mjs"
+      - "scripts/verify-snowman-release-artifacts.mjs"
+      - "scripts/test-snowman-release-artifacts.mjs"
   workflow_dispatch:
 
 permissions:
@@ -40,6 +44,9 @@ jobs:
 
       - name: Test launch-evidence validator
         run: node scripts/test-snowman-launch-evidence.mjs
+
+      - name: Test immutable release-artifact verifier
+        run: node scripts/test-snowman-release-artifacts.mjs
 
       - name: Verify AWS source contracts
         run: python3 -m unittest discover -s infra/aws/tests -p 'test_*_contract.py'

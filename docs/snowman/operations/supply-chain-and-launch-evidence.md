@@ -1,5 +1,41 @@
 # Snowman supply chain and launch evidence
 
+## Immutable release artifact set
+
+The Command Center image build emits maximum BuildKit provenance and an image
+SBOM. Deployment still accepts only the Snowman workload-account ECR repository
+and an `@sha256:` reference. Tags are discovery labels, never deployment
+authority. The ECR repository is KMS encrypted, immutable-tagged,
+Terraform-destroy protected, and its repository policy denies image deletion
+or a tag-mutability downgrade.
+
+Before a staging verification window, normalize and retain these six files:
+
+1. the resolved OCI image-index manifest and platform count;
+2. the CycloneDX or SPDX JSON SBOM;
+3. provenance verification bound to `snowman-ai-org/Igloo`, the exact commit,
+   image digest, and Snowman GitHub builder identity;
+4. KMS signature verification bound to the exact release-signing key and image;
+5. the completed vulnerability report with current scanner database time and
+   zero unresolved high or critical findings; and
+6. a dependency/license inventory in which every retained package notice has a
+   digest and no dependency has a missing license classification.
+
+`scripts/verify-snowman-release-artifacts.mjs <descriptor.json>` reads those
+local files, rejects symlinks, oversized files, digest mismatches, secret/raw
+data keys, mutable image references, incomplete notices, unverifiable
+provenance/signatures, or high/critical findings, and prints only a
+metadata-only digest map. The descriptor schema is
+`snowman.release-artifact-set.v1`; its `artifacts` object has exactly
+`image_manifest`, `sbom`, `provenance`, `signature_verification`,
+`vulnerability_report`, and `license_notices` bindings, each with `path` and
+`sha256`.
+
+The six source files, verifier output, Terraform plan JSON summary, and final
+launch manifest must be copied to the Snowman audit bucket with KMS encryption
+and Object Lock. Record exact `VersionId` values. A GitHub artifact, mutable S3
+URI, build log, ECR scan status, or successful CI badge is not retention proof.
+
 ## Production artifact path
 
 Production images live only in the exact workload account's
@@ -27,7 +63,7 @@ free-form exceptions cannot make the current manifest pass.
 
 `snowman.launch-evidence.v1` is control metadata only. It binds the exact source
 commit, ECR digest, SBOM, provenance, KMS signature bundle, vulnerability scan,
-Terraform plan, telemetry destinations, confirmed alert subscription, and ten
+Terraform plan, telemetry destinations, confirmed alert subscription, and 18
 current version-bound control reports:
 
 - tenant isolation;
@@ -40,6 +76,11 @@ current version-bound control reports:
 - dormant ECS rollback;
 - cost controls; and
 - supply-chain policy.
+
+The added controls are image-signature verification, license-notice retention,
+encrypted backup/PITR posture, clean-target migration/restore rehearsal, and
+separate meeting-media, orchestration, provider-egress, and dormant-plan
+evidence.
 
 Run:
 
@@ -64,3 +105,15 @@ The current ECS services retain their source-level hard-dormant preconditions.
 The new evidence preflight is necessary but not sufficient to activate them;
 those locks are lifted only in the deliberate staged-UAT/production activation
 change after all remaining product gates pass.
+
+## Dormant staging plan bundle
+
+The first reviewed plan keeps all desired counts at zero and keeps meeting,
+orchestration, provider, workforce, and external ingress/egress switches off.
+Its evidence bundle contains the exact Terraform/provider-lock and plan
+digests; source and ECR image digests; the release-artifact verifier digest map;
+outputs proving zero tasks, unexpected-running alarms, encrypted retained
+backups, audit Object Lock, and the monthly budget; and a pending-control
+inventory that never labels an unexecuted live drill as pass. Only a later,
+separately reviewed staging plan may open a bounded verification window, and it
+must return every service and network switch to this dormant baseline.

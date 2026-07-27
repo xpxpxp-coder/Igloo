@@ -60,7 +60,12 @@ resource "terraform_data" "production_boundary_preflight" {
         var.model_gateway_desired_count == 0 &&
         var.meeting_command_desired_count == 0 &&
         var.meeting_media_desired_count == 0 &&
+        var.provider_egress_desired_count == 0 &&
         !var.meeting_external_provider_egress_enabled &&
+        !var.meeting_command_private_ingress_enabled &&
+        !var.orchestration_private_ingress_enabled &&
+        !var.provider_egress_inspected_network_enabled &&
+        !var.provider_egress_private_ingress_enabled &&
         !var.workforce_private_ingress_enabled &&
         !var.workforce_api_enabled &&
         !var.workforce_worker_api_enabled &&

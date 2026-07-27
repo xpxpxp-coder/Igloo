@@ -40,6 +40,15 @@ KMS-encrypted Snowman ECR repository, and a dedicated asymmetric release-signing
 key. A separate fail-closed launch-evidence preflight binds any future runtime
 activation to the exact image and current immutable restore, audit, telemetry,
 alert, rollback, cost, isolation, vulnerability, and final-acceptance evidence.
+Meeting media, orchestration, and provider egress also have explicit
+service-specific launch-report digests and unexpected-running alarms. The
+global activation preflight treats their ingress, inspected-network, and
+desired-count switches as activation requests.
+
+`release_assurance.tf` asserts encrypted RDS PITR, preserved automated/final
+snapshots, encrypted Valkey snapshot retention, and versioned COMPLIANCE-locked
+audit evidence. These source assertions are prerequisites, not restore proof;
+the immutable launch bundle must include clean-target migration/PITR rehearsal.
 The digest-pinned relay task definition runs
 as non-root with a read-only root filesystem, dropped Linux capabilities,
 writable scratch mounts, separate execution/task roles, exact ECR/log/secret,

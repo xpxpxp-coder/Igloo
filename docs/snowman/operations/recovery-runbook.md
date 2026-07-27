@@ -1,5 +1,9 @@
 # Snowman Command Center recovery and rollback runbook
 
+The managed backup configuration and recovery evidence contracts are packaged,
+but the clean-target staging restore is **not yet live-proven**. Source checks
+must not be reported as a successful restore, RPO, or RTO measurement.
+
 ## Safety rules
 
 - Restore into a newly named, isolated recovery target. Never restore over the
@@ -31,6 +35,23 @@
    require denial with zero returned payload bytes.
 5. Record measured RPO/RTO, the selected restore timestamp, restore target ARN,
    schema/migration digest, integrity results, and cleanup plan.
+
+### Migration and service-role rehearsal
+
+The restored target must start at the selected backup coordinate and run the
+exact immutable image's migrations without skipping, editing, or reordering a
+migration. Capture the pre-migration schema digest, migration inventory digest,
+post-migration schema digest, and image digest. Then verify the dedicated
+`snowman_meeting_media`, `snowman_orchestration`, and
+`snowman_provider_egress` login roles and their least-privilege grants before
+running any service smoke test. A rehearsal fails if it needs a production
+credential, grants a service role table-wide authority, mutates the source
+database, or cannot replay from the same backup into a second clean target.
+
+The immutable `migration-restore-rehearsal` report records only the target ARN,
+backup coordinate, migration/schema/image digests, role names, counts, timings,
+and pass/fail assertions. It must contain no SQL result rows, connection URL,
+client content, or secret value.
 
 Production acceptance requires a successful restore within the declared RTO
 and an observed RPO no larger than the accepted business target. RDS retention
@@ -89,3 +110,9 @@ retain its exact version ID. `scripts/verify-snowman-launch-evidence.mjs` will
 reject launch evidence unless current `postgres-pitr-restore`,
 `valkey-snapshot-restore`, `s3-version-restore`, `audit-checkpoint-recovery`, and
 `dormant-rollback` reports all pass.
+
+The launch manifest additionally requires `backup-encryption-pitr` and
+`migration-restore-rehearsal`. Meeting media, orchestration, and provider
+egress each require their own current staged report; a successful relay restore
+does not imply that those execution planes can safely resume leases, calls,
+provider requests, or lost-response reconciliation.

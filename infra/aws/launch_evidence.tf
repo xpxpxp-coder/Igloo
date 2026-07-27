@@ -13,28 +13,35 @@ variable "production_activation_enabled" {
 variable "launch_evidence" {
   description = "Digest-only binding to a current, immutable Snowman launch-evidence manifest. Never place report bodies or secrets in Terraform."
   type = object({
-    manifest_sha256                = string
-    source_commit_sha              = string
-    container_image                = string
-    sbom_sha256                    = string
-    provenance_sha256              = string
-    signature_bundle_sha256        = string
-    vulnerability_report_sha256    = string
-    tenant_isolation_report_sha256 = string
-    restore_report_sha256          = string
-    audit_checkpoint_report_sha256 = string
-    telemetry_report_sha256        = string
-    alert_delivery_report_sha256   = string
-    rollback_report_sha256         = string
-    cost_report_sha256             = string
-    terraform_plan_sha256          = string
-    operator_acceptance_sha256     = optional(string)
-    generated_at                   = string
-    expires_at                     = string
-    immutable_manifest_uri         = string
-    alert_subscription_confirmed   = bool
-    unresolved_critical_findings   = number
-    unresolved_high_findings       = number
+    manifest_sha256                   = string
+    source_commit_sha                 = string
+    container_image                   = string
+    sbom_sha256                       = string
+    provenance_sha256                 = string
+    image_manifest_sha256             = string
+    signature_bundle_sha256           = string
+    vulnerability_report_sha256       = string
+    license_notice_report_sha256      = string
+    migration_rehearsal_report_sha256 = string
+    backup_pitr_report_sha256         = string
+    meeting_media_report_sha256       = string
+    orchestration_report_sha256       = string
+    provider_egress_report_sha256     = string
+    tenant_isolation_report_sha256    = string
+    restore_report_sha256             = string
+    audit_checkpoint_report_sha256    = string
+    telemetry_report_sha256           = string
+    alert_delivery_report_sha256      = string
+    rollback_report_sha256            = string
+    cost_report_sha256                = string
+    terraform_plan_sha256             = string
+    operator_acceptance_sha256        = optional(string)
+    generated_at                      = string
+    expires_at                        = string
+    immutable_manifest_uri            = string
+    alert_subscription_confirmed      = bool
+    unresolved_critical_findings      = number
+    unresolved_high_findings          = number
   })
   default  = null
   nullable = true
@@ -53,6 +60,11 @@ locals {
     var.meeting_command_desired_count > 0 ||
     var.meeting_media_desired_count > 0 ||
     var.meeting_external_provider_egress_enabled ||
+    var.meeting_command_private_ingress_enabled ||
+    var.orchestration_private_ingress_enabled ||
+    var.provider_egress_desired_count > 0 ||
+    var.provider_egress_inspected_network_enabled ||
+    var.provider_egress_private_ingress_enabled ||
     var.workforce_api_enabled ||
     var.workforce_worker_api_enabled ||
     var.workforce_identity_api_enabled ||
@@ -63,8 +75,15 @@ locals {
     var.launch_evidence.manifest_sha256,
     var.launch_evidence.sbom_sha256,
     var.launch_evidence.provenance_sha256,
+    var.launch_evidence.image_manifest_sha256,
     var.launch_evidence.signature_bundle_sha256,
     var.launch_evidence.vulnerability_report_sha256,
+    var.launch_evidence.license_notice_report_sha256,
+    var.launch_evidence.migration_rehearsal_report_sha256,
+    var.launch_evidence.backup_pitr_report_sha256,
+    var.launch_evidence.meeting_media_report_sha256,
+    var.launch_evidence.orchestration_report_sha256,
+    var.launch_evidence.provider_egress_report_sha256,
     var.launch_evidence.tenant_isolation_report_sha256,
     var.launch_evidence.restore_report_sha256,
     var.launch_evidence.audit_checkpoint_report_sha256,

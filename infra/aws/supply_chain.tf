@@ -4,6 +4,10 @@ resource "aws_kms_key" "release_signing" {
   key_usage                = "SIGN_VERIFY"
   customer_master_key_spec = "ECC_NIST_P256"
   multi_region             = false
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_kms_alias" "release_signing" {
@@ -24,6 +28,10 @@ resource "aws_ecr_repository" "command_center" {
   image_scanning_configuration {
     scan_on_push = true
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 data "aws_iam_policy_document" "command_center_repository" {
@@ -41,6 +49,21 @@ data "aws_iam_policy_document" "command_center_repository" {
       variable = "aws:SecureTransport"
       values   = ["false"]
     }
+  }
+
+
+  statement {
+    sid    = "DenyReleaseImageDeletion"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = [
+      "ecr:BatchDeleteImage",
+      "ecr:PutImageTagMutability",
+    ]
+    resources = [aws_ecr_repository.command_center.arn]
   }
 }
 

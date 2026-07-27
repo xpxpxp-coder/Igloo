@@ -22,6 +22,7 @@ function manifest() {
       uri: `111111111111.dkr.ecr.us-west-2.amazonaws.com/snowman-command-center@sha256:${digest("b")}`,
       sbom_sha256: digest("c"),
       provenance_sha256: digest("d"),
+      manifest_sha256: digest("0"),
       signature_bundle_sha256: digest("e"),
       vulnerability_report_sha256: digest("f"),
       kms_signing_key_arn: "arn:aws:kms:us-west-2:111111111111:key/00000000-0000-0000-0000-000000000000",
@@ -65,7 +66,7 @@ const missingRestore = structuredClone(valid);
 missingRestore.evidence = missingRestore.evidence.filter(
   ({ control_id: controlId }) => controlId !== "postgres-pitr-restore",
 );
-assert.throws(() => validate(missingRestore), /exactly 10 required controls/);
+assert.throws(() => validate(missingRestore), /exactly 18 required controls/);
 
 const mutableEvidence = structuredClone(valid);
 mutableEvidence.evidence[0].immutable_uri = "s3://snowman-cc-staging-audit-proof/launch/report.json";

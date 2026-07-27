@@ -15,9 +15,17 @@ const SNOWMAN_IMAGE =
 
 export const REQUIRED_EVIDENCE = Object.freeze([
   "audit-checkpoint-recovery",
+  "backup-encryption-pitr",
   "cost-control",
   "dormant-rollback",
+  "dormant-staging-plan",
+  "image-signature-verification",
+  "license-notice-retention",
+  "meeting-media-runtime",
+  "migration-restore-rehearsal",
+  "orchestration-runtime",
   "postgres-pitr-restore",
+  "provider-egress-runtime",
   "s3-version-restore",
   "slo-alert-delivery",
   "supply-chain-policy",
@@ -172,6 +180,7 @@ export function validateManifest(manifest, rawBytes, options = {}) {
       "critical_findings",
       "high_findings",
       "kms_signing_key_arn",
+      "manifest_sha256",
       "provenance_sha256",
       "sbom_sha256",
       "signature_bundle_sha256",
@@ -186,6 +195,7 @@ export function validateManifest(manifest, rawBytes, options = {}) {
   if (!imageMatch) fail("manifest.image.uri is invalid");
   for (const field of [
     "provenance_sha256",
+    "manifest_sha256",
     "sbom_sha256",
     "signature_bundle_sha256",
     "vulnerability_report_sha256",

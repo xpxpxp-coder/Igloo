@@ -473,6 +473,9 @@ resource "aws_ecs_service" "meeting_command" {
   desired_count   = var.meeting_command_desired_count
   launch_type     = "FARGATE"
 
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
+
   enable_execute_command = false
 
   deployment_circuit_breaker {
@@ -702,6 +705,9 @@ resource "aws_ecs_service" "meeting_media" {
   task_definition = aws_ecs_task_definition.meeting_media[0].arn
   desired_count   = var.meeting_media_desired_count
   launch_type     = "FARGATE"
+
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
 
   enable_execute_command = false
 

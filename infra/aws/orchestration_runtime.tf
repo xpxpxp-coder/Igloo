@@ -417,11 +417,14 @@ resource "aws_ecs_task_definition" "orchestration_api" {
 }
 
 resource "aws_ecs_service" "orchestration_api" {
-  name                   = "${local.workload_name}-orchestration-api"
-  cluster                = aws_ecs_cluster.command_center.id
-  task_definition        = aws_ecs_task_definition.orchestration_api.arn
-  desired_count          = 0
-  launch_type            = "FARGATE"
+  name                    = "${local.workload_name}-orchestration-api"
+  cluster                 = aws_ecs_cluster.command_center.id
+  task_definition         = aws_ecs_task_definition.orchestration_api.arn
+  desired_count           = 0
+  launch_type             = "FARGATE"
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
+
   enable_execute_command = false
   deployment_circuit_breaker {
     enable   = true
@@ -485,12 +488,15 @@ resource "aws_ecs_task_definition" "orchestration_worker" {
 }
 
 resource "aws_ecs_service" "orchestration_worker" {
-  for_each               = var.orchestration_worker_profiles
-  name                   = "${local.workload_name}-orchestration-worker-${each.key}"
-  cluster                = aws_ecs_cluster.command_center.id
-  task_definition        = aws_ecs_task_definition.orchestration_worker[each.key].arn
-  desired_count          = 0
-  launch_type            = "FARGATE"
+  for_each                = var.orchestration_worker_profiles
+  name                    = "${local.workload_name}-orchestration-worker-${each.key}"
+  cluster                 = aws_ecs_cluster.command_center.id
+  task_definition         = aws_ecs_task_definition.orchestration_worker[each.key].arn
+  desired_count           = 0
+  launch_type             = "FARGATE"
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
+
   enable_execute_command = false
   deployment_circuit_breaker {
     enable   = true
