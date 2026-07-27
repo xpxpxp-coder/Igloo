@@ -21,14 +21,14 @@ import type {
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { PRODUCT_NAME } from "@/shared/product/identity.generated";
 
-export const WELCOME_GUIDE_AGENT_NAME = "Fizz";
+export const WELCOME_GUIDE_AGENT_NAME = "Snowman Lead";
 export const WELCOME_GUIDE_PERSONA_ID = "builtin:fizz";
 export const WELCOME_TEAM_ID = "builtin-team:welcome";
 export const WELCOME_GUIDE_INTRO_MARKER = "buzz-welcome-intro.v1";
 const LEGACY_WELCOME_GUIDE_AGENT_NAME = "Kit";
 export const LEGACY_WELCOME_GUIDE_SYSTEM_PROMPT =
   "You are Kit, Snowman Command Center's friendly welcome guide. Help new users understand the community, channels, messages, and agents. Keep introductions concise, practical, and warm.";
-export const WELCOME_GUIDE_INTRO_MESSAGE = `Hi, I'm Fizz. Welcome to ${PRODUCT_NAME}.\n\nI can help you get oriented, answer questions, and make the first few steps feel less mysterious.\n\nFeel free to ask me what else you can do in ${PRODUCT_NAME}, or just talk through what you want to build.`;
+export const WELCOME_GUIDE_INTRO_MESSAGE = `Hi, I'm Snowman Lead. Welcome to ${PRODUCT_NAME}.\n\nI can help you get oriented, coordinate the right specialists, and make the first few steps feel less mysterious.\n\nBring me what you want to accomplish and I'll help the team turn it into governed work and useful artifacts.`;
 
 export type WelcomeTeamRole = "lead" | "teammate";
 
@@ -38,12 +38,25 @@ export type WelcomeTeamStarterDefinition = Readonly<{
   role: WelcomeTeamRole;
 }>;
 
-/** Stable identities used to provision the Rust-seeded Welcome Team. */
+/**
+ * Snowman display names mapped to stable upstream persona IDs. The IDs remain
+ * unchanged so existing installations keep their cryptographic agent records.
+ */
 export const WELCOME_TEAM_STARTERS = [
-  { name: "Fizz", personaId: "builtin:fizz", role: "lead" },
-  { name: "Honey", personaId: "builtin:honey", role: "teammate" },
-  { name: "Bumble", personaId: "builtin:bumble", role: "teammate" },
+  { name: "Snowman Lead", personaId: "builtin:fizz", role: "lead" },
+  { name: "Client Delivery", personaId: "builtin:honey", role: "teammate" },
+  {
+    name: "Research & Evidence",
+    personaId: "builtin:bumble",
+    role: "teammate",
+  },
 ] as const satisfies readonly WelcomeTeamStarterDefinition[];
+
+const LEGACY_WELCOME_STARTER_NAMES: Readonly<Record<string, string>> = {
+  "builtin:fizz": "Fizz",
+  "builtin:honey": "Honey",
+  "builtin:bumble": "Bumble",
+};
 
 export type WelcomeTeamAgents = [ManagedAgent, ManagedAgent, ManagedAgent];
 
@@ -233,7 +246,19 @@ export function welcomeStarterRuntimeUpdate(
   existing: ManagedAgent,
   desired: CreateManagedAgentInput,
 ) {
-  if (!desired.agentCommand) return null;
+  const legacyName = existing.personaId
+    ? LEGACY_WELCOME_STARTER_NAMES[existing.personaId]
+    : undefined;
+  const migratedName =
+    legacyName && existing.name === legacyName && desired.name !== legacyName
+      ? desired.name
+      : undefined;
+
+  if (!desired.agentCommand) {
+    return migratedName
+      ? { pubkey: existing.pubkey, name: migratedName }
+      : null;
+  }
 
   const desiredArgs = desired.agentArgs ?? [];
   const desiredModel = desired.model ?? null;
@@ -246,11 +271,14 @@ export function welcomeStarterRuntimeUpdate(
     existing.provider === desiredProvider &&
     existing.mcpCommand === desiredMcpCommand
   ) {
-    return null;
+    return migratedName
+      ? { pubkey: existing.pubkey, name: migratedName }
+      : null;
   }
 
   return {
     pubkey: existing.pubkey,
+    ...(migratedName ? { name: migratedName } : {}),
     agentCommand: desired.agentCommand,
     harnessOverride: true,
     agentArgs: desiredArgs,
@@ -314,11 +342,11 @@ async function provisionWelcomeTeam(
     const created = await createManagedAgent(desired);
     agents.push(created.agent);
   }
-  const [lead, honey, bumble] = agents;
-  if (!lead || !honey || !bumble) {
+  const [lead, delivery, research] = agents;
+  if (!lead || !delivery || !research) {
     throw new Error("Welcome Team provisioning did not return every starter.");
   }
-  const welcomeAgents: WelcomeTeamAgents = [lead, honey, bumble];
+  const welcomeAgents: WelcomeTeamAgents = [lead, delivery, research];
   const leadPubkey = lead.pubkey;
   for (const index of [1, 2] as const) {
     const teammate = welcomeAgents[index];

@@ -49,11 +49,17 @@ function isRelayMembershipDeniedError(error: unknown): boolean {
   );
 }
 
-const STARTER_PERSONA_ANIMATIONS: Record<string, string> = {
-  Fizz: "/onboarding/starter-team/fizz.png",
-  Honey: "/onboarding/starter-team/honey.png",
-  Bumble: "/onboarding/starter-team/bumble.png",
+const STARTER_PERSONA_PORTRAITS: Record<string, string> = {
+  "builtin:fizz": "/onboarding/starter-team/snowman-lead.png",
+  "builtin:honey": "/onboarding/starter-team/client-delivery.png",
+  "builtin:bumble": "/onboarding/starter-team/research-evidence.png",
 };
+
+const STARTER_PERSONA_IDS = [
+  "builtin:fizz",
+  "builtin:honey",
+  "builtin:bumble",
+] as const;
 
 /** Fade duration for the "entering" curtain over the mounting app. */
 const ENTERING_CURTAIN_FADE_MS = 500;
@@ -184,10 +190,8 @@ export function CommunityOnboardingFlow({
     void listPersonas()
       .then((personas) =>
         setStarterPersonas(
-          ["Fizz", "Honey", "Bumble"].flatMap((name) => {
-            const persona = personas.find(
-              (candidate) => candidate.displayName === name,
-            );
+          STARTER_PERSONA_IDS.flatMap((id) => {
+            const persona = personas.find((candidate) => candidate.id === id);
             return persona ? [persona] : [];
           }),
         ),
@@ -627,19 +631,18 @@ export function CommunityOnboardingFlow({
                 {starterPersonas.length > 0 ? (
                   <div className="flex flex-wrap justify-center gap-8">
                     {starterPersonas.map((persona) => {
-                      const animationUrl =
-                        STARTER_PERSONA_ANIMATIONS[persona.displayName];
+                      const portraitUrl = STARTER_PERSONA_PORTRAITS[persona.id];
                       return (
                         <div
                           className="flex w-40 flex-col items-center gap-3"
                           key={persona.id}
                         >
-                          {animationUrl ? (
+                          {portraitUrl ? (
                             <img
-                              alt={`${persona.displayName} animated character`}
+                              alt={`${persona.displayName} Snowman specialist`}
                               className="h-40 w-40 object-contain"
-                              data-testid={`starter-persona-${persona.displayName.toLowerCase()}`}
-                              src={animationUrl}
+                              data-testid={`starter-persona-${persona.id.replace("builtin:", "")}`}
+                              src={portraitUrl}
                             />
                           ) : (
                             <ProfileAvatar

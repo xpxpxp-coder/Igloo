@@ -7,15 +7,28 @@ import {
 import { cn } from "@/shared/lib/cn";
 
 type StageCharacter = {
+  id: string;
   name: string;
   animationUrl: string;
 };
 
-/** Same animated APNGs the "Meet your starter team" onboarding step uses. */
+/** Same Snowman specialist portraits the "Meet your starter team" step uses. */
 const STAGE_CHARACTERS: readonly StageCharacter[] = [
-  { name: "Fizz", animationUrl: "/onboarding/starter-team/fizz.png" },
-  { name: "Honey", animationUrl: "/onboarding/starter-team/honey.png" },
-  { name: "Bumble", animationUrl: "/onboarding/starter-team/bumble.png" },
+  {
+    id: "lead",
+    name: "Snowman Lead",
+    animationUrl: "/onboarding/starter-team/snowman-lead.png",
+  },
+  {
+    id: "delivery",
+    name: "Client Delivery",
+    animationUrl: "/onboarding/starter-team/client-delivery.png",
+  },
+  {
+    id: "research",
+    name: "Research Evidence",
+    animationUrl: "/onboarding/starter-team/research-evidence.png",
+  },
 ];
 
 const STAGE_EXIT_ANIMATION = "motion-kickoff-stage-exit";
@@ -65,7 +78,7 @@ export function WelcomeKickoffStage({
         <img
           alt=""
           className="motion-kickoff-character-enter h-16 w-16 object-contain"
-          data-testid={`welcome-kickoff-stage-${character.name.toLowerCase()}`}
+          data-testid={`welcome-kickoff-stage-${character.id}`}
           key={character.name}
           src={character.animationUrl}
           style={{ "--stagger-index": index } as React.CSSProperties}

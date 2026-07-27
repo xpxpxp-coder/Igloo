@@ -10,6 +10,7 @@ on:
     paths:
       - "benchmarks/harbor-buzz-orchestra/**"
       - ".github/workflows/benchmark-harbor.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

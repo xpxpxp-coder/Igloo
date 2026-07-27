@@ -301,12 +301,16 @@ test("Welcome failure retries once before allowing starter channel setup to be s
   );
   await page.goto("/");
 
-  for (const name of ["fizz", "honey", "bumble"]) {
-    const character = page.getByTestId(`starter-persona-${name}`);
+  for (const [id, asset] of [
+    ["fizz", "snowman-lead"],
+    ["honey", "client-delivery"],
+    ["bumble", "research-evidence"],
+  ] as const) {
+    const character = page.getByTestId(`starter-persona-${id}`);
     await expect(character).toBeVisible();
     await expect(character).toHaveAttribute(
       "src",
-      `/onboarding/starter-team/${name}.png`,
+      `/onboarding/starter-team/${asset}.png`,
     );
   }
 

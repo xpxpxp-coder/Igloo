@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "visual_direction": "Cute, capable Snowman specialists in a premium midnight-navy and glacier-blue intelligence environment aligned with snowmanai.org.",
+  "constraints": [
+    "No Block, Buzz, Sprout, bee, hive, or third-party visual identity",
+    "No embedded text or provider logos",
+    "Preserve a friendly two-sphere snowman, top-hat, carrot-nose silhouette",
+    "Use Snowman design tokens and responsive safe areas"
+  ],
+  "assets": [
+    {
+      "id": "snowman-agent-team",
+      "path": "product/assets/snowman-agent-team.png",
+      "sha256": "6ea5f4a41287d1aef8841ad30ba9ea0229d6603e388645a518753bfeb0defa1a",
+      "dimensions": "1536x1024",
+      "role": "Master workforce illustration for product storytelling, onboarding, documentation, and responsive campaign crops",
+      "alt": "A coordinated team of Snowman AI specialists working together in a midnight-blue command center"
+    },
+    {
+      "id": "snowman-lead",
+      "path": "desktop/public/onboarding/starter-team/snowman-lead.png",
+      "sha256": "e04edf48fb69e07267b743129338f01b9402487a4d36fa74c7808b195bcab934",
+      "dimensions": "1254x1254",
+      "role": "Snowman Lead onboarding portrait",
+      "alt": "Snowman Lead holding a connected operations orb"
+    },
+    {
+      "id": "client-delivery",
+      "path": "desktop/public/onboarding/starter-team/client-delivery.png",
+      "sha256": "eadd21c5c113b008343548e7c5507ccac3ac82bb8f103ba7a7e9ac91b8f34655",
+      "dimensions": "1254x1254",
+      "role": "Client Delivery onboarding portrait",
+      "alt": "Client Delivery Snowman specialist holding an artifact folder"
+    },
+    {
+      "id": "research-evidence",
+      "path": "desktop/public/onboarding/starter-team/research-evidence.png",
+      "sha256": "cb41759d3842f51dbe3151bef77e1ff1312ea0e21334fca044bd3dabc7f2d80d",
+      "dimensions": "1254x1254",
+      "role": "Research and Evidence onboarding portrait",
+      "alt": "Research and Evidence Snowman specialist holding an analytics tablet"
+    }
+  ]
+}

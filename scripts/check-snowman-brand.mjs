@@ -8,7 +8,12 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => readFileSync(resolve(root, path), "utf8");
 const identity = JSON.parse(read("product/identity.json"));
+const brandAssets = JSON.parse(read("product/brand-assets.json"));
 const failures = [];
+
+if (brandAssets.schema_version !== 1 || !Array.isArray(brandAssets.assets)) {
+  failures.push("product/brand-assets.json: unsupported asset manifest");
+}
 
 const required = new Map([
   [
@@ -237,10 +242,29 @@ const retiredAssets = [
   "desktop/public/landing/buzz-wordmark.png",
   "desktop/src-tauri/icons/buzz-source.png",
   "mobile/assets/images/buzz-icon.png",
+  "desktop/public/onboarding/starter-team/fizz.png",
+  "desktop/public/onboarding/starter-team/honey.png",
+  "desktop/public/onboarding/starter-team/bumble.png",
+  "docs/assets/sprout.png",
+  "docs/assets/sprout-icon.png",
 ];
 for (const path of retiredAssets) {
   if (existsSync(resolve(root, path))) {
     failures.push(`${path}: retired legacy brand asset exists`);
+  }
+}
+
+for (const asset of brandAssets.assets) {
+  const absolute = resolve(root, asset.path);
+  if (!existsSync(absolute)) {
+    failures.push(`${asset.path}: declared Snowman brand asset is missing`);
+    continue;
+  }
+  const actual = createHash("sha256")
+    .update(readFileSync(absolute))
+    .digest("hex");
+  if (actual !== asset.sha256) {
+    failures.push(`${asset.path}: Snowman brand asset digest drifted`);
   }
 }
 
