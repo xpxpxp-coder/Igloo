@@ -159,16 +159,34 @@ jobs:
       - name: Build chart dependencies
         run: helm dependency build deploy/charts/buzz
 
-      - name: ct install (quickstart profile)
-        run: >-
-          ct install
-          --config ct.yaml
-          --charts deploy/charts/buzz
-          --helm-extra-args "--timeout 600s"
-          --helm-extra-set-args
-          "--set image.repository=snowman-command-center
-          --set image.tag=chart-smoke
-          --set image.pullPolicy=Never"
+      - name: Render, apply, and await quickstart profile
+        run: |
+          set -euo pipefail
+          namespace="snowman-chart-smoke"
+          kubectl create namespace "$namespace"
+          helm template snowman-command-center deploy/charts/buzz \
+            --namespace "$namespace" \
+            --values deploy/charts/buzz/ci/quickstart-values.yaml \
+            --set image.repository=snowman-command-center \
+            --set image.tag=chart-smoke \
+            --set image.pullPolicy=Never \
+            | kubectl apply --namespace "$namespace" --filename -
+          kubectl rollout status deployment \
+            --all --namespace "$namespace" --timeout=600s
+          kubectl rollout status statefulset \
+            --all --namespace "$namespace" --timeout=600s
+          kubectl wait job \
+            --all --namespace "$namespace" \
+            --for=condition=complete --timeout=600s
+
+      - name: Quickstart diagnostics
+        if: failure()
+        run: |
+          namespace="snowman-chart-smoke"
+          kubectl get all --namespace "$namespace" --output=wide || true
+          kubectl get events --namespace "$namespace" \
+            --sort-by=.lastTimestamp || true
+          kubectl describe pods --namespace "$namespace" || true
 
   publish:
     # Packages the chart and pushes it to GHCR as an OCI artifact. Fires only on
