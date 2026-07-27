@@ -12,7 +12,11 @@ and fixed-content in-product reminder service. It
 also defines credentialless, one-shot ACP agent task definitions and a distinct
 deny-by-default executor/broker network boundary. The matching one-shot
 executor client exists in source, but no reviewed adapter image, action broker,
-model-token path, or task-launch coordinator is active. It
+model-token path, or task-launch coordinator is active. The private job broker
+exists in source but is not deployed. This root
+does define a separate KMS-encrypted broker runtime secret populated only by
+the one-shot bootstrap; no relay task can read that secret and no broker
+service is created yet. It
 fails before resource creation when the caller is in the wrong account, the
 management account is targeted, production shares the Analyst 360 workload
 account, the image is mutable or outside the exact Snowman ECR repository,

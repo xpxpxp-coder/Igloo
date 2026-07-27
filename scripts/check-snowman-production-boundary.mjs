@@ -312,6 +312,21 @@ requireFragment(
   "the general relay database role must not access agent job authority",
 );
 requireFragment(
+  "crates/buzz-db/src/runtime_security.rs",
+  "GRANT SELECT, UPDATE ON TABLE snowman_agent_jobs",
+  "the broker database identity must be read/update-only on its job ledger",
+);
+requireFragment(
+  "crates/snowman-bootstrap/src/main.rs",
+  "provision_agent_broker_role",
+  "the governed bootstrap must provision the separate broker database identity",
+);
+requireFragment(
+  "infra/aws/compute.tf",
+  'resource "aws_secretsmanager_secret" "agent_broker_runtime"',
+  "the broker database URL must use a separate KMS-encrypted runtime secret",
+);
+requireFragment(
   "crates/snowman-agent-executor/src/main.rs",
   ".redirect(Policy::none())",
   "the one-shot executor must reject broker redirects",

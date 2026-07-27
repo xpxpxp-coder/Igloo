@@ -1,7 +1,8 @@
 # Snowman private agent job broker
 
 Status: source service, shared contracts, durable schema, issuance function,
-and local contract tests implemented; AWS service deployment, coordinator,
+dedicated database-role bootstrap, KMS-encrypted runtime-secret substrate, and
+local contract/IaC tests implemented; AWS service deployment, coordinator,
 action tools, model authorization, and staged proof remain.
 
 ## Boundary
@@ -53,9 +54,9 @@ job authority.
 
 ## Remaining activation gates
 
-- Provision the dedicated broker and coordinator database roles/secrets through
-  the one-shot bootstrap and add the dormant broker ECS service/internal
-  listener with its exact security groups.
+- Run and prove the now-defined broker-role/secret bootstrap, provision the
+  separate coordinator role, and add the dormant broker ECS service/internal
+  TLS listener with its exact security groups.
 - Implement the coordinator's exact ECS `RunTask`/`StopTask` authority, random
   token generation, crash reconciliation, cancellation, expiration, and purge.
 - Add capability-specific action endpoints and MCP tools. Every action must

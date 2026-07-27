@@ -106,7 +106,9 @@ impl AppState {
             .connect(&config.database_url)
             .await
             .map_err(|_| ConfigError::Database)?;
-        verify_broker_role(&pool, &config.database_role).await?;
+        buzz_db::runtime_security::verify_agent_broker_role(&pool, &config.database_role)
+            .await
+            .map_err(|_| ConfigError::Database)?;
         Ok(Self {
             pool,
             bind_addr: config.bind_addr,
@@ -705,36 +707,6 @@ fn valid_capability(value: &str) -> bool {
                     character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
                 })
         })
-}
-
-async fn verify_broker_role(pool: &PgPool, expected_role: &str) -> Result<(), ConfigError> {
-    let row = sqlx::query(
-        "SELECT current_user = $1 AS exact_role, \
-         NOT has_database_privilege(current_user,current_database(),'CREATE') AS no_db_create, \
-         has_schema_privilege(current_user,'public','USAGE') AS schema_use, \
-         NOT has_schema_privilege(current_user,'public','CREATE') AS no_schema_create, \
-         has_table_privilege(current_user,'snowman_agent_jobs','SELECT') \
-           AND has_table_privilege(current_user,'snowman_agent_jobs','UPDATE') AS required_dml, \
-         NOT has_table_privilege(current_user,'snowman_agent_jobs','INSERT') \
-           AND NOT has_table_privilege(current_user,'snowman_agent_jobs','DELETE') \
-           AND NOT has_table_privilege(current_user,'snowman_agent_jobs','TRUNCATE') \
-           AND NOT has_table_privilege(current_user,'snowman_agent_jobs','TRIGGER') \
-           AND NOT has_table_privilege(current_user,'snowman_agent_jobs','REFERENCES') AS denied_dml",
-    )
-    .bind(expected_role)
-    .fetch_one(pool)
-    .await
-    .map_err(|_| ConfigError::Database)?;
-    let valid = row.try_get::<bool, _>("exact_role").unwrap_or(false)
-        && row.try_get::<bool, _>("no_db_create").unwrap_or(false)
-        && row.try_get::<bool, _>("schema_use").unwrap_or(false)
-        && row.try_get::<bool, _>("no_schema_create").unwrap_or(false)
-        && row.try_get::<bool, _>("required_dml").unwrap_or(false)
-        && row.try_get::<bool, _>("denied_dml").unwrap_or(false);
-    if !valid {
-        return Err(ConfigError::Database);
-    }
-    Ok(())
 }
 
 fn valid_role(value: &str) -> bool {

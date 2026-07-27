@@ -90,6 +90,9 @@ the highest risks without changing the production-readiness verdict:
   token to one active tenant/task/generation/runtime/model snapshot, enforce
   constant-time authentication and exact idempotent receipts, and explicitly
   deny the general relay database role access to job authority;
+- the governed one-shot bootstrap now creates and verifies the broker's exact
+  read/update-only database role and writes only its TLS RDS URL to a separate
+  KMS-encrypted secret that the relay execution role cannot read;
 - definition-time rejection of unimplemented workflow actions and unsafe
   webhook destinations/credential headers; and
 - a default-off Analyst lifecycle-event ingress with host-derived community

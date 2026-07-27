@@ -8892,6 +8892,7 @@ name = "snowman-agent-broker"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "buzz-db",
  "chrono",
  "hex",
  "serde_json",

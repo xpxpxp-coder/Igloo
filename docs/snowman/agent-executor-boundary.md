@@ -101,9 +101,9 @@ requires:
 
 - separately pinned adapter images (including any evaluated OpenClaw or Hermes
   adapter) that package the executor and exact immutable runtime manifest;
-- the broker/coordinator database roles and secrets, private service/listener,
-  cancellation/expiration/purge, capability-specific action receipts, and
-  approval enforcement;
+- staged proof of the now-defined broker database-role/secret bootstrap; the
+  coordinator role, private broker service/listener, cancellation/expiration/
+  purge, capability-specific action receipts, and approval enforcement;
 - coordinator `RunTask`/`StopTask` logic with exact task-definition and
   `iam:PassRole` restrictions outside the untrusted task;
 - a broker-authenticated model-gateway path for agent principals;

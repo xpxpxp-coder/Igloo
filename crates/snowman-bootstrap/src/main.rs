@@ -49,6 +49,13 @@ struct RelayRuntimeSecret {
     relay_owner_pubkey: String,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DatabaseRuntimeSecret {
+    #[serde(rename = "DATABASE_URL")]
+    database_url: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct WorkforceBootstrapManifest {
@@ -141,6 +148,12 @@ impl Drop for RelayRuntimeSecret {
         self.database_url.zeroize();
         self.relay_private_key.zeroize();
         self.git_hook_hmac_secret.zeroize();
+    }
+}
+
+impl Drop for DatabaseRuntimeSecret {
+    fn drop(&mut self) {
+        self.database_url.zeroize();
     }
 }
 
@@ -528,6 +541,30 @@ async fn existing_runtime_secret(
             Ok(None)
         }
         Err(error) => Err(error).context("could not inspect relay runtime secret"),
+    }
+}
+
+async fn existing_database_runtime_secret(
+    client: &Client,
+    arn: &str,
+) -> anyhow::Result<Option<DatabaseRuntimeSecret>> {
+    match client.get_secret_value().secret_id(arn).send().await {
+        Ok(output) => {
+            let value = output
+                .secret_string()
+                .context("database runtime secret must contain UTF-8 JSON")?;
+            let secret = serde_json::from_str(value)
+                .context("database runtime secret does not match the governed schema")?;
+            Ok(Some(secret))
+        }
+        Err(error)
+            if error
+                .as_service_error()
+                .is_some_and(|error| error.is_resource_not_found_exception()) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error).context("could not inspect database runtime secret"),
     }
 }
 
@@ -1019,6 +1056,12 @@ async fn main() -> anyhow::Result<()> {
     let runtime_secret_arn = required_env("SNOWMAN_RELAY_RUNTIME_SECRET_ARN")?;
     let runtime_role = required_env("SNOWMAN_RUNTIME_DB_ROLE")?;
     buzz_db::runtime_security::validate_role_name(&runtime_role)?;
+    let agent_broker_secret_arn = required_env("SNOWMAN_AGENT_BROKER_RUNTIME_SECRET_ARN")?;
+    let agent_broker_role = required_env("SNOWMAN_AGENT_BROKER_DB_ROLE")?;
+    buzz_db::runtime_security::validate_role_name(&agent_broker_role)?;
+    if agent_broker_role == runtime_role {
+        bail!("agent broker and relay database roles must be distinct");
+    }
     let owner_pubkey = required_env("SNOWMAN_RELAY_OWNER_PUBKEY")?.to_ascii_lowercase();
     validate_owner_pubkey(&owner_pubkey)?;
     let workforce_manifest = std::env::var("SNOWMAN_WORKFORCE_BOOTSTRAP_MANIFEST")
@@ -1058,6 +1101,15 @@ async fn main() -> anyhow::Result<()> {
                 random_hex(),
             )
         };
+    let existing_agent_broker =
+        existing_database_runtime_secret(&secrets, &agent_broker_secret_arn).await?;
+    let mut agent_broker_password = if let Some(existing) = &existing_agent_broker {
+        let parsed = url::Url::parse(&existing.database_url)
+            .context("agent broker DATABASE_URL is not a URL")?;
+        Zeroizing::new(decoded_url_password(&parsed)?)
+    } else {
+        Zeroizing::new(random_hex())
+    };
 
     let admin = PgPoolOptions::new()
         .max_connections(1)
@@ -1073,6 +1125,12 @@ async fn main() -> anyhow::Result<()> {
     };
     buzz_db::runtime_security::provision_runtime_role(&admin, &runtime_role, &runtime_password)
         .await?;
+    buzz_db::runtime_security::provision_agent_broker_role(
+        &admin,
+        &agent_broker_role,
+        &agent_broker_password,
+    )
+    .await?;
     buzz_db::partition::ensure_future_partitions(&admin, 6).await?;
 
     let runtime_url = database_url(&master, &database, &runtime_role, &runtime_password)?;
@@ -1083,6 +1141,20 @@ async fn main() -> anyhow::Result<()> {
         .context("could not verify the provisioned runtime identity")?;
     buzz_db::runtime_security::verify_runtime_role(&runtime, &runtime_role).await?;
     runtime.close().await;
+
+    let agent_broker_url = database_url(
+        &master,
+        &database,
+        &agent_broker_role,
+        &agent_broker_password,
+    )?;
+    let agent_broker = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&agent_broker_url)
+        .await
+        .context("could not verify the provisioned agent broker identity")?;
+    buzz_db::runtime_security::verify_agent_broker_role(&agent_broker, &agent_broker_role).await?;
+    agent_broker.close().await;
 
     let document = RelayRuntimeSecret {
         database_url: runtime_url.to_string(),
@@ -1099,7 +1171,20 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("could not write the governed relay runtime secret")?;
 
+    let mut agent_broker_document = serde_json::to_string(&DatabaseRuntimeSecret {
+        database_url: agent_broker_url.to_string(),
+    })?;
+    secrets
+        .put_secret_value()
+        .secret_id(&agent_broker_secret_arn)
+        .secret_string(agent_broker_document.clone())
+        .send()
+        .await
+        .context("could not write the governed agent broker runtime secret")?;
+
     encoded.zeroize();
+    agent_broker_document.zeroize();
+    agent_broker_password.zeroize();
     runtime_password.zeroize();
     master.password.zeroize();
     if let Some(receipt) = workforce_receipt {

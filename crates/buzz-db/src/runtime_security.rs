@@ -87,6 +87,87 @@ pub async fn provision_runtime_role(pool: &PgPool, role: &str, password: &str) -
     Ok(())
 }
 
+/// Create or reconcile the private agent-broker login with only read/update
+/// access to the one-shot job ledger. It cannot mint jobs, delete evidence,
+/// inspect relay tables, or create database objects.
+pub async fn provision_agent_broker_role(pool: &PgPool, role: &str, password: &str) -> Result<()> {
+    validate_role_name(role)?;
+    if password.len() < 32 {
+        return Err(DbError::InvalidData(
+            "agent broker database password must contain at least 32 characters".into(),
+        ));
+    }
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await?;
+    let role_identifier = quote_identifier(role);
+    let database_identifier = quote_identifier(&database);
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT set_config('snowman.agent_broker_role_password', $1, true)")
+        .bind(password)
+        .execute(&mut *transaction)
+        .await?;
+    let role_ddl = format!(
+        "DO $snowman$\n\
+         BEGIN\n\
+           IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n\
+             CREATE ROLE {role_identifier} LOGIN;\n\
+           END IF;\n\
+           ALTER ROLE {role_identifier}\n\
+             WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n\
+           EXECUTE format('ALTER ROLE %I PASSWORD %L', '{role}',\n\
+             current_setting('snowman.agent_broker_role_password'));\n\
+         END\n\
+         $snowman$;"
+    );
+    sqlx::raw_sql(AssertSqlSafe(role_ddl))
+        .execute(&mut *transaction)
+        .await?;
+    let grants = format!(
+        "REVOKE ALL ON DATABASE {database_identifier} FROM {role_identifier};\n\
+         REVOKE ALL ON SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role_identifier};\n\
+         GRANT CONNECT ON DATABASE {database_identifier} TO {role_identifier};\n\
+         GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
+         GRANT SELECT, UPDATE ON TABLE snowman_agent_jobs TO {role_identifier};"
+    );
+    sqlx::raw_sql(AssertSqlSafe(grants))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Fail closed unless the private agent broker has only its exact job-ledger
+/// read/update authority and no creation, insert, delete, or relay-table access.
+pub async fn verify_agent_broker_role(pool: &PgPool, expected_role: &str) -> Result<()> {
+    validate_role_name(expected_role)?;
+    let valid: bool = sqlx::query_scalar(
+        "SELECT current_user=$1 \
+         AND has_database_privilege(current_user,current_database(),'CONNECT') \
+         AND NOT has_database_privilege(current_user,current_database(),'CREATE') \
+         AND has_schema_privilege(current_user,'public','USAGE') \
+         AND NOT has_schema_privilege(current_user,'public','CREATE') \
+         AND has_table_privilege(current_user,'snowman_agent_jobs','SELECT') \
+         AND has_table_privilege(current_user,'snowman_agent_jobs','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','DELETE') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'events','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_work_tasks','SELECT')",
+    )
+    .bind(expected_role)
+    .fetch_one(pool)
+    .await?;
+    if !valid {
+        return Err(DbError::InvalidData(
+            "agent broker database identity violates its exact job-ledger boundary".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Fail closed unless the connected serving identity has its required DML
 /// capabilities and lacks database/schema creation authority.
 pub async fn verify_runtime_role(pool: &PgPool, expected_role: &str) -> Result<()> {
@@ -180,5 +261,15 @@ mod tests {
         assert!(
             source.contains("serving relay database identity must not access one-shot agent jobs")
         );
+    }
+
+    #[test]
+    fn agent_broker_role_is_read_update_only_on_its_job_ledger() {
+        let source = include_str!("runtime_security.rs");
+        assert!(source.contains("GRANT SELECT, UPDATE ON TABLE snowman_agent_jobs"));
+        assert!(source.contains("REVOKE ALL ON ALL TABLES IN SCHEMA public"));
+        assert!(source.contains("NOT has_table_privilege(current_user,'events','SELECT')"));
+        assert!(source
+            .contains("agent broker database identity violates its exact job-ledger boundary"));
     }
 }
