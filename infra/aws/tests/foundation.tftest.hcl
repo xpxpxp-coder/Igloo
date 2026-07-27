@@ -71,6 +71,14 @@ mock_provider "aws" {
     target = data.aws_iam_policy_document.agent_broker_execution
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
+  override_data {
+    target = data.aws_iam_policy_document.meeting_command_execution
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.meeting_command_task
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
 }
 
 variables {
@@ -129,6 +137,43 @@ run "dormant_staging_foundation" {
   assert {
     condition     = length(aws_lb.edge) == 0 && length(aws_wafv2_web_acl.edge) == 0
     error_message = "Dormant staging must not incur ALB/WAF edge cost."
+  }
+  assert {
+    condition     = aws_ecs_service.meeting_command.desired_count == 0 && length(aws_lb.meeting_command_private) == 0
+    error_message = "Meeting commands must remain dormant without the cost-bearing private NLB."
+  }
+  assert {
+    condition     = length(aws_ecs_task_definition.meeting_media) == 0 && length(aws_ecs_service.meeting_media) == 0
+    error_message = "No meeting-media runtime may be planned before executable and evidence inputs exist."
+  }
+}
+
+run "private_dormant_meeting_command" {
+  command = plan
+
+  variables {
+    meeting_command_private_ingress_enabled = true
+    meeting_command_private_dns_name        = "meeting.staging.internal.snowmanai.org"
+    meeting_command_tls_certificate_arn     = "arn:aws:acm:us-west-2:111111111111:certificate/20000000-0000-4000-8000-000000000001"
+    meeting_command_receiver_identity_id    = "20000000-0000-4000-8000-000000000002"
+    meeting_command_consumer_principal_arns = ["arn:aws:iam::333333333333:role/snowman-analyst-meeting-intake"]
+  }
+
+  assert {
+    condition     = aws_lb.meeting_command_private[0].internal && aws_lb.meeting_command_private[0].enable_deletion_protection
+    error_message = "Meeting commands require a protected internal load balancer."
+  }
+  assert {
+    condition     = aws_vpc_endpoint_service.meeting_command[0].acceptance_required
+    error_message = "Every Analyst meeting-command endpoint connection requires explicit acceptance."
+  }
+  assert {
+    condition     = aws_ecs_service.meeting_command.desired_count == 0 && aws_ecs_task_definition.meeting_command.cpu == "256" && aws_ecs_task_definition.meeting_command.memory == "512"
+    error_message = "Meeting commands must remain dormant and cost-bounded."
+  }
+  assert {
+    condition     = aws_appautoscaling_target.meeting_command.max_capacity == 2
+    error_message = "Meeting-command autoscaling must retain its exact cost ceiling."
   }
 }
 

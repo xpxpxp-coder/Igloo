@@ -560,6 +560,140 @@ variable "model_gateway_desired_count" {
   }
 }
 
+variable "meeting_command_desired_count" {
+  type        = number
+  description = "Desired private meeting-command tasks. The checked-in baseline remains dormant."
+  default     = 0
+  validation {
+    condition     = var.meeting_command_desired_count >= 0 && var.meeting_command_desired_count <= 2
+    error_message = "meeting_command_desired_count must be between 0 and 2."
+  }
+}
+
+variable "meeting_command_private_ingress_enabled" {
+  type        = bool
+  description = "Create the cost-bearing internal TLS NLB and accepted PrivateLink service for Analyst meeting commands."
+  default     = false
+}
+
+variable "meeting_command_private_dns_name" {
+  type        = string
+  description = "Exact Snowman private identity for the meeting-command service."
+  default     = "meeting.internal.snowmanai.org"
+  validation {
+    condition     = can(regex("^meeting(?:[.]staging)?[.]internal[.]snowmanai[.]org$", lower(var.meeting_command_private_dns_name)))
+    error_message = "meeting_command_private_dns_name must be the exact staging or production Snowman private meeting hostname."
+  }
+}
+
+variable "meeting_command_tls_certificate_arn" {
+  type        = string
+  description = "Exact Command Center account ACM certificate for the private meeting-command hostname."
+  default     = ""
+  validation {
+    condition = (
+      !var.meeting_command_private_ingress_enabled ||
+      can(regex("^arn:aws(?:-[a-z]+)?:acm:[a-z0-9-]+:[0-9]{12}:certificate/[0-9a-fA-F-]{36}$", var.meeting_command_tls_certificate_arn))
+    )
+    error_message = "Private meeting-command ingress requires an exact ACM certificate ARN."
+  }
+}
+
+variable "meeting_command_consumer_principal_arns" {
+  type        = set(string)
+  description = "Exact Analyst workload principals allowed to create the meeting-command PrivateLink endpoint."
+  default     = []
+  validation {
+    condition = alltrue([
+      for arn in var.meeting_command_consumer_principal_arns :
+      can(regex("^arn:aws(?:-[a-z]+)?:iam::[0-9]{12}:(?:root|role/[A-Za-z0-9+=,.@_/-]{1,512})$", arn))
+    ])
+    error_message = "Every meeting-command consumer must be an exact AWS account-root or role principal ARN."
+  }
+}
+
+variable "meeting_command_receiver_identity_id" {
+  type        = string
+  description = "Exact registered Snowman meeting-command receiver identity. Empty while the service is dormant."
+  default     = ""
+  validation {
+    condition     = var.meeting_command_receiver_identity_id == "" || can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$", var.meeting_command_receiver_identity_id))
+    error_message = "meeting_command_receiver_identity_id must be empty or an exact UUID."
+  }
+}
+
+variable "meeting_media_desired_count" {
+  type        = number
+  description = "Desired private meeting-media tasks. No task can be planned until an executable-runtime evidence digest and exact entrypoint exist."
+  default     = 0
+  validation {
+    condition     = var.meeting_media_desired_count >= 0 && var.meeting_media_desired_count <= 4
+    error_message = "meeting_media_desired_count must be between 0 and 4."
+  }
+}
+
+variable "meeting_media_runtime_evidence_sha256" {
+  type        = string
+  description = "Digest of staged executable, raw-audio non-persistence, isolation, consent, callback-authentication, and kill-switch evidence. Empty means no media task definition exists."
+  default     = ""
+  validation {
+    condition     = var.meeting_media_runtime_evidence_sha256 == "" || can(regex("^[0-9a-f]{64}$", var.meeting_media_runtime_evidence_sha256))
+    error_message = "meeting_media_runtime_evidence_sha256 must be empty or a lowercase SHA-256 digest."
+  }
+}
+
+variable "meeting_media_container_entrypoint" {
+  type        = string
+  description = "Reviewed executable path in the immutable Command Center image. Empty until the media gateway has a real server runtime."
+  default     = ""
+  validation {
+    condition     = contains(["", "/usr/local/bin/snowman-meeting-media-gateway"], var.meeting_media_container_entrypoint)
+    error_message = "meeting_media_container_entrypoint must remain empty or use the reviewed Snowman media-gateway executable path."
+  }
+}
+
+variable "meeting_external_provider_egress_enabled" {
+  type        = bool
+  description = "Fail-closed switch for the Snowman-owned provider-egress proxy path. It does not create direct internet access."
+  default     = false
+}
+
+variable "meeting_provider_egress_proxy_origin" {
+  type        = string
+  description = "Exact private Snowman proxy origin that enforces DNS, TLS, account, data-class, and route policy for approved providers."
+  default     = ""
+  validation {
+    condition = (
+      var.meeting_provider_egress_proxy_origin == "" ||
+      can(regex("^https://meeting-egress(?:[.]staging)?[.]internal[.]snowmanai[.]org:8443$", lower(var.meeting_provider_egress_proxy_origin)))
+    )
+    error_message = "meeting_provider_egress_proxy_origin must be empty or the exact Snowman private meeting-egress origin."
+  }
+}
+
+variable "meeting_provider_egress_proxy_security_group_id" {
+  type        = string
+  description = "Exact same-VPC security group of the separately reviewed Snowman provider-egress proxy. Empty keeps all external provider egress closed."
+  default     = ""
+  validation {
+    condition     = var.meeting_provider_egress_proxy_security_group_id == "" || can(regex("^sg-[0-9a-f]{8,17}$", var.meeting_provider_egress_proxy_security_group_id))
+    error_message = "meeting_provider_egress_proxy_security_group_id must be empty or an exact security-group ID."
+  }
+}
+
+variable "meeting_approved_provider_hosts" {
+  type        = set(string)
+  description = "Exact external destinations enforced by the Snowman egress proxy; never used as a direct security-group internet allowlist."
+  default     = []
+  validation {
+    condition = alltrue([
+      for host in var.meeting_approved_provider_hosts :
+      contains(["api.twilio.com", "api.openai.com", "api.elevenlabs.io"], lower(host))
+    ])
+    error_message = "Meeting provider hosts are limited to the reviewed Twilio, OpenAI, and optional ElevenLabs API origins."
+  }
+}
+
 variable "model_gateway_private_ingress_enabled" {
   type        = bool
   description = "Create the internal TLS NLB and cross-account PrivateLink endpoint service for the model gateway."

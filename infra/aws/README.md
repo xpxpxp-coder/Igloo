@@ -89,6 +89,19 @@ provider URL. This is the private execution path for Snowman-hosted specialist
 models; model images, weights, endpoint capacity, evaluations, and autoscaling
 are a separate still-dormant layer and are not implied by this substrate.
 
+The meeting-command service is packaged as a separate, hard-dormant private
+Fargate service. It uses an acceptance-required Analyst-only PrivateLink
+endpoint, exact Snowman TLS/DNS identity, a dedicated PostgreSQL runtime secret,
+receipt-only asymmetric KMS task authority, encrypted logs/alarms, and a
+two-task cost ceiling. It has no provider, mail, model, object-store, relay, or
+public network authority. The meeting-media service is more restrictive: no
+task definition or service exists until a real executable entrypoint and staged
+runtime evidence digest are supplied. Its prospective task has no AWS task
+role, object persistence, provider credential, public ingress, NAT, or direct
+internet route. Optional provider traffic can reach only a separately reviewed
+Snowman policy-proxy security group, and remains default-off. See
+`docs/snowman/meeting-aws-deployment.md` for the exact activation evidence.
+
 The following resource layers still have to be added and proven before this
 root is deployable:
 

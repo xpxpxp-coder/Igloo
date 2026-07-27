@@ -9,6 +9,8 @@ locals {
     "agent-broker",
     "agent-coordinator",
     "model-gateway",
+    "meeting-command",
+    "meeting-media",
     "inference",
     "migration",
     "audit-checkpoint",

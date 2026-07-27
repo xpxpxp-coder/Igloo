@@ -29,6 +29,45 @@ output "production_boundary" {
     analyst_event_api_enabled             = var.analyst_event_api_enabled
     model_gateway_desired_count           = var.model_gateway_desired_count
     model_gateway_private_ingress_enabled = var.model_gateway_private_ingress_enabled
+    meeting_command_desired_count         = var.meeting_command_desired_count
+    meeting_media_desired_count           = var.meeting_media_desired_count
+    meeting_provider_egress_enabled       = var.meeting_external_provider_egress_enabled
+  }
+}
+
+output "meeting_services_posture" {
+  description = "Dormant, private, evidence-gated meeting service coordinates. No provider credential, dial target, audio, transcript, or mailbox content is exported."
+  value = {
+    command = {
+      desired_count           = var.meeting_command_desired_count
+      task_definition_arn     = aws_ecs_task_definition.meeting_command.arn
+      execution_role_arn      = aws_iam_role.meeting_command_execution.arn
+      task_role_arn           = aws_iam_role.meeting_command_task.arn
+      runtime_secret_arn      = aws_secretsmanager_secret.meeting_command_runtime.arn
+      database_role           = "snowman_meeting_control"
+      receipt_signing_key_arn = aws_kms_key.meeting_command_receipts.arn
+      private_link = var.meeting_command_private_ingress_enabled ? {
+        service_name                   = aws_vpc_endpoint_service.meeting_command[0].service_name
+        service_id                     = aws_vpc_endpoint_service.meeting_command[0].id
+        private_dns_name               = var.meeting_command_private_dns_name
+        private_dns_verification_state = aws_vpc_endpoint_service.meeting_command[0].private_dns_name_configuration[0].state
+        accepted_principals            = sort(tolist(var.meeting_command_consumer_principal_arns))
+      } : null
+    }
+    media = {
+      runtime_packaged        = local.meeting_media_runtime_packaged
+      runtime_evidence_sha256 = var.meeting_media_runtime_evidence_sha256 == "" ? null : var.meeting_media_runtime_evidence_sha256
+      desired_count           = var.meeting_media_desired_count
+      task_definition_arn     = local.meeting_media_runtime_packaged ? aws_ecs_task_definition.meeting_media[0].arn : null
+      task_role_arn           = null
+      runtime_secret_arn      = aws_secretsmanager_secret.meeting_media_runtime.arn
+      database_role           = "snowman_meeting_media"
+      raw_audio_retention     = "none"
+      public_ingress          = false
+      direct_internet_egress  = false
+      provider_proxy_enabled  = var.meeting_external_provider_egress_enabled
+      approved_provider_hosts = sort(tolist(var.meeting_approved_provider_hosts))
+    }
   }
 }
 
@@ -83,6 +122,8 @@ output "network_posture" {
     reminder_security_group             = aws_security_group.reminder.id
     workforce_ingress_security_group    = aws_security_group.workforce_ingress.id
     model_gateway_security_group        = aws_security_group.model_gateway.id
+    meeting_command_security_group      = aws_security_group.meeting_command.id
+    meeting_media_security_group        = aws_security_group.meeting_media.id
     inference_security_group            = aws_security_group.inference.id
     nat_gateway_count                   = 0
     edge_enabled                        = var.edge_enabled
@@ -159,6 +200,8 @@ output "dormant_compute_posture" {
     agent_broker_runtime_secret_arn       = aws_secretsmanager_secret.agent_broker_runtime.arn
     agent_coordinator_runtime_secret_arn  = aws_secretsmanager_secret.agent_coordinator_runtime.arn
     model_gateway_runtime_secret_arn      = aws_secretsmanager_secret.model_gateway_runtime.arn
+    meeting_command_runtime_secret_arn    = aws_secretsmanager_secret.meeting_command_runtime.arn
+    meeting_media_runtime_secret_arn      = aws_secretsmanager_secret.meeting_media_runtime.arn
     agent_broker_task_definition_arn      = aws_ecs_task_definition.agent_broker.arn
     agent_coordinator_task_definition_arn = aws_ecs_task_definition.agent_coordinator.arn
     agent_job_token_hmac_key_arn          = aws_kms_key.agent_job_token.arn

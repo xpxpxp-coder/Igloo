@@ -50,6 +50,9 @@ locals {
     var.agent_broker_desired_count > 0 ||
     var.agent_coordinator_desired_count > 0 ||
     var.model_gateway_desired_count > 0 ||
+    var.meeting_command_desired_count > 0 ||
+    var.meeting_media_desired_count > 0 ||
+    var.meeting_external_provider_egress_enabled ||
     var.workforce_api_enabled ||
     var.workforce_worker_api_enabled ||
     var.workforce_identity_api_enabled ||

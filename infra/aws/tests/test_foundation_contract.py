@@ -377,6 +377,45 @@ class AwsFoundationContractTests(unittest.TestCase):
         ):
             self.assertIn(fragment, source)
 
+    def test_meeting_services_are_private_dormant_and_media_is_evidence_gated(self) -> None:
+        source = (ROOT / "meeting_services.tf").read_text(encoding="utf-8")
+        variables = (ROOT / "variables.tf").read_text(encoding="utf-8")
+        preflight = (ROOT / "preflight.tf").read_text(encoding="utf-8")
+        dockerfile = (ROOT.parent.parent / "Dockerfile").read_text(encoding="utf-8")
+        for fragment in (
+            'resource "aws_vpc_endpoint_service" "meeting_command"',
+            'acceptance_required        = true',
+            'allowed_principals         = sort(tolist(var.meeting_command_consumer_principal_arns))',
+            'enforce_security_group_inbound_rules_on_private_link_traffic = "off"',
+            'entryPoint             = ["/usr/local/bin/snowman-meeting-command-service"]',
+            'SNOWMAN_MEETING_COMMAND_DATABASE_ROLE", value = "snowman_meeting_control"',
+            'actions   = ["kms:Sign", "kms:GetPublicKey"]',
+            'resources = [aws_kms_key.meeting_command_receipts.arn]',
+            'condition     = var.meeting_command_desired_count == 0',
+            'count = local.meeting_media_runtime_packaged ? 1 : 0',
+            'SNOWMAN_MEETING_MEDIA_DATABASE_ROLE", value = "snowman_meeting_media"',
+            'SNOWMAN_MEETING_MEDIA_RAW_AUDIO_RETENTION", value = "none"',
+            'condition     = var.meeting_media_desired_count == 0',
+            'referenced_security_group_id = var.meeting_provider_egress_proxy_security_group_id',
+            'max_capacity       = 2',
+            'max_capacity       = 4',
+            'assign_public_ip = false',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, source)
+        self.assertIn('default     = false', variables)
+        self.assertIn('"api.twilio.com", "api.openai.com", "api.elevenlabs.io"', variables)
+        self.assertIn('var.meeting_command_desired_count == 0', preflight)
+        self.assertIn('var.meeting_media_desired_count == 0', preflight)
+        self.assertIn('!var.meeting_external_provider_egress_enabled', preflight)
+        self.assertIn('-p snowman-meeting-command-service --bin snowman-meeting-command-service', dockerfile)
+        self.assertIn('/usr/local/bin/snowman-meeting-command-service', dockerfile)
+        self.assertNotIn('resource "aws_secretsmanager_secret_version"', source)
+        self.assertNotIn('cidr_ipv4 = "0.0.0.0/0"', source)
+        self.assertNotIn('ghcr.io/block', source.lower())
+        self.assertNotIn('block.xyz', source.lower())
+        self.assertNotIn('actions   = ["s3:', source)
+
     def test_foundation_contains_no_upstream_runtime_authority(self) -> None:
         sources = "\n".join(
             path.read_text(encoding="utf-8")
@@ -385,7 +424,6 @@ class AwsFoundationContractTests(unittest.TestCase):
         for forbidden in (
             "ghcr.io/block",
             "block.xyz",
-            "api.openai.com",
             "anthropic.com",
         ):
             self.assertNotIn(forbidden, sources)

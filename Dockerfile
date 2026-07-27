@@ -71,6 +71,7 @@ RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
                                    -p snowman-agent-broker --bin snowman-agent-broker \
                                    -p snowman-agent-coordinator --bin snowman-agent-coordinator \
                                    -p snowman-model-gateway --bin snowman-model-gateway \
+                                   -p snowman-meeting-command-service --bin snowman-meeting-command-service \
                                    -p snowman-workforce-worker --bins \
     && strip target/release/buzz-relay \
     && strip target/release/buzz-admin \
@@ -79,6 +80,7 @@ RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
     && strip target/release/snowman-agent-broker \
     && strip target/release/snowman-agent-coordinator \
     && strip target/release/snowman-model-gateway \
+    && strip target/release/snowman-meeting-command-service \
     && strip target/release/snowman-workforce-worker \
     && strip target/release/snowman-workforce-scheduler \
     && strip target/release/snowman-workforce-trigger \
@@ -154,6 +156,7 @@ COPY --from=builder    /build/target/release/snowman-bootstrap /usr/local/bin/sn
 COPY --from=builder    /build/target/release/snowman-agent-broker /usr/local/bin/snowman-agent-broker
 COPY --from=builder    /build/target/release/snowman-agent-coordinator /usr/local/bin/snowman-agent-coordinator
 COPY --from=builder    /build/target/release/snowman-model-gateway /usr/local/bin/snowman-model-gateway
+COPY --from=builder    /build/target/release/snowman-meeting-command-service /usr/local/bin/snowman-meeting-command-service
 COPY --from=builder    /build/target/release/snowman-workforce-worker /usr/local/bin/snowman-workforce-worker
 COPY --from=builder    /build/target/release/snowman-workforce-scheduler /usr/local/bin/snowman-workforce-scheduler
 COPY --from=builder    /build/target/release/snowman-workforce-trigger /usr/local/bin/snowman-workforce-trigger

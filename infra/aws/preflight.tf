@@ -43,7 +43,7 @@ resource "terraform_data" "production_boundary_preflight" {
     precondition {
       condition = (
         var.environment != "staging" ||
-        (var.relay_desired_count == 0 && var.worker_desired_count == 0 && var.scheduler_desired_count == 0 && var.trigger_desired_count == 0 && var.reminder_desired_count == 0 && var.agent_broker_desired_count == 0 && var.agent_coordinator_desired_count == 0 && var.model_gateway_desired_count == 0)
+        (var.relay_desired_count == 0 && var.worker_desired_count == 0 && var.scheduler_desired_count == 0 && var.trigger_desired_count == 0 && var.reminder_desired_count == 0 && var.agent_broker_desired_count == 0 && var.agent_coordinator_desired_count == 0 && var.model_gateway_desired_count == 0 && var.meeting_command_desired_count == 0 && var.meeting_media_desired_count == 0)
       )
       error_message = "Staging remains dormant in baseline Terraform; verification windows use a reviewed override plan."
     }
@@ -58,12 +58,15 @@ resource "terraform_data" "production_boundary_preflight" {
         var.agent_broker_desired_count == 0 &&
         var.agent_coordinator_desired_count == 0 &&
         var.model_gateway_desired_count == 0 &&
+        var.meeting_command_desired_count == 0 &&
+        var.meeting_media_desired_count == 0 &&
+        !var.meeting_external_provider_egress_enabled &&
         !var.workforce_private_ingress_enabled &&
         !var.workforce_api_enabled &&
         !var.workforce_worker_api_enabled &&
         !var.analyst_event_api_enabled
       )
-      error_message = "Runtime desired counts remain hard-zero, and private workforce ingress/APIs remain hard-disabled, until the edge, database bootstrap, worker sandbox, and model-gateway activation contracts pass."
+      error_message = "Runtime desired counts remain hard-zero, external meeting-provider egress remains disabled, and private workforce ingress/APIs remain hard-disabled until the staged activation contracts pass."
     }
 
     precondition {
