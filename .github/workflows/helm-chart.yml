@@ -152,7 +152,9 @@ jobs:
           docker build \
             --tag snowman-command-center:chart-smoke \
             "${smoke_dir}"
-          kind load docker-image snowman-command-center:chart-smoke
+          kind load docker-image \
+            --name chart-testing \
+            snowman-command-center:chart-smoke
 
       - name: Build chart dependencies
         run: helm dependency build deploy/charts/buzz
