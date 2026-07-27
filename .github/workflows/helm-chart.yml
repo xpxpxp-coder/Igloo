@@ -163,10 +163,20 @@ jobs:
             --set image.tag=chart-smoke \
             --set image.pullPolicy=Never \
             | kubectl apply --namespace "$namespace" --filename -
-          kubectl rollout status deployment \
-            --all --namespace "$namespace" --timeout=600s
-          kubectl rollout status statefulset \
-            --all --namespace "$namespace" --timeout=600s
+          mapfile -t deployments < <(
+            kubectl get deployment --namespace "$namespace" --output=name
+          )
+          for workload in "${deployments[@]}"; do
+            kubectl rollout status "$workload" \
+              --namespace "$namespace" --timeout=600s
+          done
+          mapfile -t statefulsets < <(
+            kubectl get statefulset --namespace "$namespace" --output=name
+          )
+          for workload in "${statefulsets[@]}"; do
+            kubectl rollout status "$workload" \
+              --namespace "$namespace" --timeout=600s
+          done
           kubectl wait job \
             --all --namespace "$namespace" \
             --for=condition=complete --timeout=600s
