@@ -156,6 +156,17 @@ evidence for a runtime, recovery, accessibility, or operational claim.
   false commitments, spoken prompt injection, sensitive-data leakage, duplicate
   webhooks/calls, provider outage, spend exhaustion, accessibility, and complete
   post-meeting thread/work-product handoff.
+- Each meeting mailbox/calendar is a Snowman-managed Google Workspace user bound
+  to exactly one allowed tenant scope; restricted tenants do not share a mailbox
+  or Calendar data store. No agent receives mailbox OAuth credentials.
+- Gmail Pub/Sub notifications are treated as change hints and reconciled through
+  provider history with durable cursors, daily watch renewal, bounded fallback
+  sync, duplicate handling, and revocation. Calendar events are revision- and
+  cancellation-aware across recurrence and time-zone changes.
+- An accepted invite auto-joins only when organizer trust, tenant,
+  classification, join window, exact conference entry point, consent, and
+  duration/spend policy all pass. Forwarded mail, message instructions, and
+  attachments cannot independently authorize a call or external action.
 
 ### Tenant isolation
 

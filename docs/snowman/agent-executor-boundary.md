@@ -100,10 +100,13 @@ one-time authenticated-request evidence, derives a recoverable job-bound token
 using KMS HMAC without storing its plaintext, and launches exactly one pinned
 Fargate task with a deterministic ECS client token. Its production ECS call
 sets private subnets, one executor security group, public IP disabled, ECS Exec
-disabled, and only tenant ID, job ID, and broker token container overrides. A
-separately MACed model grant is issued but deliberately not passed in an ECS
-override; secure bootstrap and the executor-local proxy remain gates. The
-token is not reused as a model credential.
+disabled, and only tenant ID, job ID, and deterministic launch ID container
+overrides. The executor obtains the separate broker token and model grant only
+from the private coordinator after its NLB-preserved source IPv4 matches the
+exact running ECS task attachment and live lease/job authority. Credentials do
+not appear in the CloudTrail-recorded `RunTask` request and are never passed to
+the ACP child. The executor-local model proxy remains a gate; the broker token
+is not reused as a model credential.
 
 This is not yet an executable production sandbox because service deployment,
 full reconciliation, tools, and model credentials remain dormant. Activation still
@@ -111,11 +114,12 @@ requires:
 
 - separately pinned adapter images (including any evaluated OpenClaw or Hermes
   adapter) that package the executor and exact immutable runtime manifest;
-- staged proof of the now-defined broker/coordinator database-role/secret bootstrap;
+- staged proof of the now-defined database-role and source-attested task bootstrap;
   the private coordinator service, private broker service/listener, cancellation/expiration/
   purge, capability-specific action receipts, and approval enforcement;
-- due-launch and running-task reconciliation with cancellation/expiry/token
-  revocation, plus exact coordinator task-role/`iam:PassRole` restrictions;
+- source-IP spoof/reuse, lost-response retry, due-launch, running-task,
+  cancellation/expiry/token revocation, and exact coordinator
+  task-role/`iam:PassRole` staging proof;
 - a broker-authenticated model-gateway path for agent principals;
 - the executor-local model proxy and gateway live-state/spend enforcement for
   the now-issued short-lived model grant, which is distinct from the broker token

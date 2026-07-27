@@ -347,6 +347,31 @@ requireFragment(
   "only the digest of an agent model credential may be durable",
 );
 requireFragment(
+  "migrations/0046_snowman_agent_source_attested_bootstrap.sql",
+  "bootstrap_source_ip INET",
+  "agent credential redemption must preserve bounded task-source evidence",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/lib.rs",
+  "observation.private_ipv4 != Some(source_ipv4)",
+  "agent bootstrap must bind credentials to the exact ECS task attachment address",
+);
+requireFragment(
+  "crates/snowman-agent-coordinator/src/service.rs",
+  "ConnectInfo(peer): ConnectInfo<SocketAddr>",
+  "agent bootstrap must use the network peer address rather than a forwarded header",
+);
+requireFragment(
+  "infra/aws/agent_coordinator.tf",
+  "preserve_client_ip   = true",
+  "the private coordinator NLB must preserve the executor source address",
+);
+requireFragment(
+  "infra/aws/agent_executor.tf",
+  "SNOWMAN_AGENT_REQUIRE_SOURCE_ATTESTED_BOOTSTRAP",
+  "one-shot executors must fail closed without the source-attested bootstrap contract",
+);
+requireFragment(
   "crates/snowman-agent-coordinator/src/lib.rs",
   "MODEL_TOKEN_DOMAIN",
   "model credentials must be domain-separated from broker credentials",
@@ -563,6 +588,12 @@ const agentCoordinatorTerraform = read("infra/aws/agent_coordinator.tf");
 if (/cidr_ipv4\s*=\s*"0\.0\.0\.0\/0"|assign_public_ip\s*=\s*true/m.test(agentCoordinatorTerraform)) {
   failures.push(
     "infra/aws/agent_coordinator.tf: the coordinator must not receive a public network path",
+  );
+}
+const agentCoordinatorSource = read("crates/snowman-agent-coordinator/src/lib.rs");
+if (agentCoordinatorSource.includes('"SNOWMAN_AGENT_JOB_TOKEN"')) {
+  failures.push(
+    "crates/snowman-agent-coordinator/src/lib.rs: bearer credentials must not be included in ECS RunTask overrides",
   );
 }
 requireFragment(

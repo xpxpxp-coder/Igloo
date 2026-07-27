@@ -12,9 +12,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState::new(Config::from_env()?).await?;
     let listener = tokio::net::TcpListener::bind(state.bind_addr()).await?;
     tokio::spawn(state.clone().run_reconciler());
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

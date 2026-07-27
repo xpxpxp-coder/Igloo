@@ -104,11 +104,13 @@ resource "aws_ecs_task_definition" "agent_executor" {
     }
     environment = [
       { name = "SNOWMAN_AGENT_RUNTIME_ID", value = each.value.runtime_id },
+      { name = "SNOWMAN_AGENT_BOOTSTRAP_URL", value = "https://${local.agent_coordinator_expected_dns_name}/" },
       { name = "SNOWMAN_AGENT_BROKER_URL", value = var.agent_broker_url },
       { name = "SNOWMAN_MODEL_GATEWAY_URL", value = var.agent_model_gateway_url },
       { name = "SNOWMAN_AGENT_MAX_TASK_SECONDS", value = tostring(each.value.max_task_seconds) },
       { name = "SNOWMAN_AGENT_NETWORK_POLICY", value = "private-snowman-only" },
       { name = "SNOWMAN_AGENT_REQUIRE_BROKERED_JOB_TOKEN", value = "true" },
+      { name = "SNOWMAN_AGENT_REQUIRE_SOURCE_ATTESTED_BOOTSTRAP", value = "true" },
       { name = "SNOWMAN_AGENT_DISABLE_SELF_UPDATE", value = "true" },
     ]
     mountPoints = [

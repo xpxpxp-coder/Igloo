@@ -20,6 +20,8 @@ pub const JOB_RESULT_SCHEMA: &str = "snowman.agent.job.result.v1";
 pub const BROKER_ACK_SCHEMA: &str = "snowman.agent.broker.ack.v1";
 /// Short-lived, KMS-MACed model grant carried only by one executor process.
 pub const MODEL_GRANT_SCHEMA: &str = "snowman.agent.model-grant.v1";
+/// Private source-attested credential-bootstrap response schema.
+pub const BOOTSTRAP_CREDENTIALS_SCHEMA: &str = "snowman.agent.bootstrap-credentials.v1";
 
 /// Governed data class assigned before an agent receives a snapshot.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -126,6 +128,27 @@ pub struct ModelGrantClaims {
     pub expires_at: DateTime<Utc>,
 }
 
+/// Ephemeral credentials returned only to the exact ECS task IP recorded for a
+/// governed launch. Neither value may be forwarded to an ACP child process.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapCredentials {
+    /// Exact schema version.
+    pub schema_version: String,
+    /// Exact tenant boundary.
+    pub tenant_id: Uuid,
+    /// Exact launch whose network identity was attested.
+    pub launch_id: Uuid,
+    /// Exact one-shot job.
+    pub job_id: Uuid,
+    /// Broker-only bearer credential.
+    pub job_token: String,
+    /// Model-gateway-only bearer grant.
+    pub model_grant: String,
+    /// Hard expiration shared with the governed job.
+    pub expires_at: DateTime<Utc>,
+}
+
 /// Idempotent proof that the one-shot runtime began the exact snapshot.
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -215,5 +238,9 @@ mod tests {
         )
         .is_err());
         assert_eq!(MODEL_GRANT_SCHEMA, "snowman.agent.model-grant.v1");
+        assert_eq!(
+            BOOTSTRAP_CREDENTIALS_SCHEMA,
+            "snowman.agent.bootstrap-credentials.v1"
+        );
     }
 }

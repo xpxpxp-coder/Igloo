@@ -6,11 +6,14 @@
 //! lease into an ECS task. It never gives the task AWS credentials, a database
 //! credential, a model-provider credential, or an arbitrary network target.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::{IpAddr, Ipv4Addr},
+};
 
 use async_trait::async_trait;
 use aws_sdk_ecs::types::{
-    AssignPublicIp, AwsVpcConfiguration, ContainerOverride, KeyValuePair, LaunchType,
+    AssignPublicIp, Attachment, AwsVpcConfiguration, ContainerOverride, KeyValuePair, LaunchType,
     NetworkConfiguration, TaskOverride,
 };
 use aws_sdk_kms::{primitives::Blob, types::MacAlgorithmSpec};
@@ -19,8 +22,12 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use snowman_agent_broker::{issue_job_in_transaction, IssueError, IssueJob};
-use snowman_agent_contract::{JobSnapshot, ModelGrantClaims, MODEL_GRANT_SCHEMA};
+use snowman_agent_contract::{
+    BootstrapCredentials, JobSnapshot, ModelGrantClaims, BOOTSTRAP_CREDENTIALS_SCHEMA,
+    MODEL_GRANT_SCHEMA,
+};
 use sqlx::{PgPool, Row};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -185,6 +192,8 @@ pub struct LaunchReceipt {
 pub struct TaskObservation {
     /// ECS lifecycle state such as `PROVISIONING`, `RUNNING`, or `STOPPED`.
     pub last_status: String,
+    /// Private task address reported by the ECS awsvpc attachment, when ready.
+    pub private_ipv4: Option<Ipv4Addr>,
 }
 
 /// Stable, non-sensitive coordinator failure classes.
@@ -321,12 +330,8 @@ impl TokenDeriver for KmsTokenDeriver {
 /// Narrow ECS authority used by production and deterministic tests.
 #[async_trait]
 pub trait EcsControl: Send + Sync {
-    /// Start exactly one private task using only the three bootstrap coordinates.
-    async fn run_task(
-        &self,
-        spec: &LaunchSpec,
-        job_token: &str,
-    ) -> Result<String, CoordinatorError>;
+    /// Start exactly one private task using only public bootstrap coordinates.
+    async fn run_task(&self, spec: &LaunchSpec) -> Result<String, CoordinatorError>;
 
     /// Observe only the lifecycle state of the exact task.
     async fn describe_task(
@@ -358,23 +363,14 @@ impl AwsEcsControl {
 
 #[async_trait]
 impl EcsControl for AwsEcsControl {
-    async fn run_task(
-        &self,
-        spec: &LaunchSpec,
-        job_token: &str,
-    ) -> Result<String, CoordinatorError> {
-        if !(32..=2048).contains(&job_token.len())
-            || !job_token.bytes().all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(CoordinatorError::InvalidRequest);
-        }
+    async fn run_task(&self, spec: &LaunchSpec) -> Result<String, CoordinatorError> {
         let environment = [
             (
                 "SNOWMAN_AGENT_TENANT_ID",
                 spec.coordinates.tenant_id.to_string(),
             ),
             ("SNOWMAN_AGENT_JOB_ID", spec.coordinates.job_id.to_string()),
-            ("SNOWMAN_AGENT_JOB_TOKEN", job_token.to_owned()),
+            ("SNOWMAN_AGENT_LAUNCH_ID", spec.launch_id.to_string()),
         ]
         .into_iter()
         .map(|(name, value)| KeyValuePair::builder().name(name).value(value).build())
@@ -450,8 +446,10 @@ impl EcsControl for AwsEcsControl {
             .last_status()
             .filter(|value| valid_ecs_status(value))
             .ok_or(CoordinatorError::Ecs)?;
+        let private_ipv4 = task_private_ipv4(task.attachments())?;
         Ok(TaskObservation {
             last_status: last_status.to_owned(),
+            private_ipv4,
         })
     }
 
@@ -557,7 +555,7 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
             .commit()
             .await
             .map_err(|_| CoordinatorError::Database)?;
-        self.launch(spec, token).await
+        self.launch(spec).await
     }
 
     /// Retry due pending launches using the same KMS-derived job token and ECS
@@ -570,7 +568,7 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
         let rows = sqlx::query(
             "SELECT l.community_id,l.job_id,l.task_id,l.generation,l.launch_attempt_count,\
              l.runtime_profile,l.ecs_cluster_arn,l.task_definition_arn,l.client_token_sha256,\
-             j.deadline_at,j.snapshot_body,j.model_token_sha256 \
+             j.deadline_at,j.snapshot_body,j.job_token_sha256,j.model_token_sha256 \
              FROM snowman_agent_launches l JOIN snowman_agent_jobs j \
              ON j.community_id=l.community_id AND j.job_id=l.job_id \
              WHERE l.status IN ('pending','launching') AND l.reconcile_after<=NOW() \
@@ -640,20 +638,39 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
                 continue;
             }
             let token = self.token_deriver.derive(&spec.coordinates).await?;
+            let stored_job_digest: Vec<u8> = row
+                .try_get("job_token_sha256")
+                .map_err(|_| CoordinatorError::Database)?;
+            let actual_job_digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
+            if stored_job_digest.len() != 32
+                || stored_job_digest
+                    .as_slice()
+                    .ct_eq(actual_job_digest.as_slice())
+                    .unwrap_u8()
+                    != 1
+            {
+                return Err(CoordinatorError::Conflict);
+            }
             let model_token = self.token_deriver.derive_model_grant(&snapshot).await?;
             let stored_model_digest: Vec<u8> = row
                 .try_get("model_token_sha256")
                 .map_err(|_| CoordinatorError::Database)?;
             let actual_model_digest: [u8; 32] = Sha256::digest(model_token.as_bytes()).into();
-            if stored_model_digest != actual_model_digest {
+            if stored_model_digest.len() != 32
+                || stored_model_digest
+                    .as_slice()
+                    .ct_eq(actual_model_digest.as_slice())
+                    .unwrap_u8()
+                    != 1
+            {
                 return Err(CoordinatorError::Conflict);
             }
             if deadline_at <= Utc::now() + Duration::seconds(30) {
-                expire_unobserved_launch(&self.pool, &self.ecs, &spec, token.as_str()).await?;
+                expire_unobserved_launch(&self.pool, &self.ecs, &spec).await?;
                 reconciled += 1;
                 continue;
             }
-            match self.launch(spec, token).await {
+            match self.launch(spec).await {
                 Ok(_) => reconciled += 1,
                 Err(CoordinatorError::Busy) => {}
                 Err(error) => return Err(error),
@@ -870,6 +887,156 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
         Ok(true)
     }
 
+    /// Redeem the broker and model credentials only for the private IPv4
+    /// address currently attached to the exact running ECS task. The launch ID
+    /// is a public coordinate, not a bearer secret; authority comes from the
+    /// NLB-preserved source address plus live ECS and database state.
+    pub async fn redeem_bootstrap(
+        &self,
+        tenant_id: Uuid,
+        launch_id: Uuid,
+        source_ip: IpAddr,
+    ) -> Result<BootstrapCredentials, CoordinatorError> {
+        let source_ipv4 = match source_ip {
+            IpAddr::V4(value)
+                if value.is_private()
+                    && !value.is_loopback()
+                    && !value.is_link_local()
+                    && !value.is_broadcast()
+                    && !value.is_unspecified() =>
+            {
+                value
+            }
+            _ => return Err(CoordinatorError::InvalidRequest),
+        };
+        if tenant_id.is_nil() || launch_id.is_nil() {
+            return Err(CoordinatorError::InvalidRequest);
+        }
+        let row = sqlx::query(
+            "SELECT l.job_id,l.task_id,l.generation,l.ecs_cluster_arn,l.ecs_task_arn,\
+             l.runtime_profile,l.status launch_status,j.deadline_at,j.snapshot_body,\
+             j.job_token_sha256,j.model_token_sha256 FROM snowman_agent_launches l \
+             JOIN snowman_agent_jobs j ON j.community_id=l.community_id AND j.job_id=l.job_id \
+             WHERE l.community_id=$1 AND l.launch_id=$2",
+        )
+        .bind(tenant_id)
+        .bind(launch_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| CoordinatorError::Database)?
+        .ok_or(CoordinatorError::InvalidRequest)?;
+        let job_id: Uuid = row
+            .try_get("job_id")
+            .map_err(|_| CoordinatorError::Database)?;
+        let task_id: Uuid = row
+            .try_get("task_id")
+            .map_err(|_| CoordinatorError::Database)?;
+        let generation: i64 = row
+            .try_get("generation")
+            .map_err(|_| CoordinatorError::Database)?;
+        let generation = u32::try_from(generation).map_err(|_| CoordinatorError::Conflict)?;
+        let cluster_arn: String = row
+            .try_get("ecs_cluster_arn")
+            .map_err(|_| CoordinatorError::Database)?;
+        let task_arn: String = row
+            .try_get::<Option<String>, _>("ecs_task_arn")
+            .map_err(|_| CoordinatorError::Database)?
+            .ok_or(CoordinatorError::Busy)?;
+        let launch_status: String = row
+            .try_get("launch_status")
+            .map_err(|_| CoordinatorError::Database)?;
+        let runtime_id: String = row
+            .try_get("runtime_profile")
+            .map_err(|_| CoordinatorError::Database)?;
+        let deadline_at: DateTime<Utc> = row
+            .try_get("deadline_at")
+            .map_err(|_| CoordinatorError::Database)?;
+        let snapshot_body: Vec<u8> = row
+            .try_get("snapshot_body")
+            .map_err(|_| CoordinatorError::Database)?;
+        let snapshot: JobSnapshot =
+            serde_json::from_slice(&snapshot_body).map_err(|_| CoordinatorError::Conflict)?;
+        if launch_status != "running"
+            || deadline_at <= Utc::now() + Duration::seconds(30)
+            || !valid_task_arn_for_cluster(&task_arn, &cluster_arn)
+            || snapshot.tenant_id != tenant_id.to_string()
+            || snapshot.workspace_id != tenant_id
+            || snapshot.job_id != job_id
+            || snapshot.task_id != task_id
+            || snapshot.generation != generation
+            || snapshot.runtime_id != runtime_id
+            || snapshot.deadline_at != deadline_at
+        {
+            return Err(CoordinatorError::Conflict);
+        }
+        let observation = self.ecs.describe_task(&cluster_arn, &task_arn).await?;
+        if observation.last_status != "RUNNING" || observation.private_ipv4.is_none() {
+            return Err(CoordinatorError::Busy);
+        }
+        if observation.private_ipv4 != Some(source_ipv4) {
+            return Err(CoordinatorError::InvalidRequest);
+        }
+        let coordinates = JobCoordinates {
+            tenant_id,
+            job_id,
+            task_id,
+            generation,
+            deadline_at,
+        };
+        let job_token = self.token_deriver.derive(&coordinates).await?;
+        let model_grant = self.token_deriver.derive_model_grant(&snapshot).await?;
+        let stored_job_digest: Vec<u8> = row
+            .try_get("job_token_sha256")
+            .map_err(|_| CoordinatorError::Database)?;
+        let stored_model_digest: Vec<u8> = row
+            .try_get("model_token_sha256")
+            .map_err(|_| CoordinatorError::Database)?;
+        if !token_digest_matches(&stored_job_digest, job_token.as_bytes())
+            || !token_digest_matches(&stored_model_digest, model_grant.as_bytes())
+        {
+            return Err(CoordinatorError::Conflict);
+        }
+        let updated = sqlx::query(
+            "UPDATE snowman_agent_launches l SET bootstrap_redeemed_at=\
+             COALESCE(l.bootstrap_redeemed_at,NOW()),bootstrap_last_redeemed_at=NOW(),\
+             bootstrap_source_ip=COALESCE(l.bootstrap_source_ip,$3::inet),\
+             bootstrap_redeem_count=l.bootstrap_redeem_count+1,updated_at=NOW() \
+             FROM snowman_agent_jobs j,snowman_work_tasks t,snowman_work_requests r,\
+             snowman_task_leases lease WHERE l.community_id=$1 AND l.launch_id=$2 \
+             AND l.ecs_task_arn=$4 AND l.status='running' \
+             AND l.bootstrap_redeem_count<5 \
+             AND (l.bootstrap_source_ip IS NULL OR l.bootstrap_source_ip=$3::inet) \
+             AND j.community_id=l.community_id AND j.job_id=l.job_id \
+             AND j.status='issued' AND j.token_revoked_at IS NULL \
+             AND j.deadline_at>NOW()+INTERVAL '30 seconds' \
+             AND t.community_id=l.community_id AND t.request_id=l.request_id \
+             AND t.task_id=l.task_id AND t.status IN ('leased','running') \
+             AND r.community_id=l.community_id AND r.request_id=l.request_id \
+             AND r.status IN ('running','reviewing') \
+             AND lease.community_id=l.community_id AND lease.task_id=l.task_id \
+             AND lease.generation=l.generation AND lease.expires_at>NOW()",
+        )
+        .bind(tenant_id)
+        .bind(launch_id)
+        .bind(source_ipv4.to_string())
+        .bind(&task_arn)
+        .execute(&self.pool)
+        .await
+        .map_err(|_| CoordinatorError::Database)?;
+        if updated.rows_affected() != 1 {
+            return Err(CoordinatorError::Conflict);
+        }
+        Ok(BootstrapCredentials {
+            schema_version: BOOTSTRAP_CREDENTIALS_SCHEMA.into(),
+            tenant_id,
+            launch_id,
+            job_id,
+            job_token: job_token.to_string(),
+            model_grant: model_grant.to_string(),
+            expires_at: deadline_at,
+        })
+    }
+
     fn validate_request(&self, request: &VerifiedLaunchRequest) -> Result<(), CoordinatorError> {
         let now = Utc::now();
         if request.snapshot.job_id.is_nil()
@@ -890,11 +1057,7 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
         Ok(())
     }
 
-    async fn launch(
-        &self,
-        spec: LaunchSpec,
-        token: Zeroizing<String>,
-    ) -> Result<LaunchReceipt, CoordinatorError> {
+    async fn launch(&self, spec: LaunchSpec) -> Result<LaunchReceipt, CoordinatorError> {
         let claim_id = Uuid::new_v4();
         let claimed = sqlx::query(
             "UPDATE snowman_agent_launches SET status='launching',claim_id=$3,\
@@ -914,7 +1077,7 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
         if claimed.is_none() {
             return existing_launch_receipt(&self.pool, &spec).await;
         }
-        let task_arn = match self.ecs.run_task(&spec, token.as_str()).await {
+        let task_arn = match self.ecs.run_task(&spec).await {
             Ok(value) => value,
             Err(error) => {
                 release_launch_claim(&self.pool, &spec, claim_id).await?;
@@ -1170,7 +1333,6 @@ async fn expire_unobserved_launch<E: EcsControl>(
     pool: &PgPool,
     ecs: &E,
     spec: &LaunchSpec,
-    token: &str,
 ) -> Result<(), CoordinatorError> {
     sqlx::query(
         "UPDATE snowman_agent_jobs SET status='expired',token_revoked_at=NOW(),updated_at=NOW() \
@@ -1185,7 +1347,7 @@ async fn expire_unobserved_launch<E: EcsControl>(
     // recover a task ARN after a crash between ECS acceptance and DB commit.
     // Revocation commits first, so a newly created task cannot fetch its
     // snapshot during the brief interval before StopTask completes.
-    let task_arn = ecs.run_task(spec, token).await?;
+    let task_arn = ecs.run_task(spec).await?;
     let mut transaction = pool.begin().await.map_err(|_| CoordinatorError::Database)?;
     sqlx::query(
         "UPDATE snowman_agent_launches SET status='stopping',ecs_task_arn=$3,\
@@ -1419,6 +1581,38 @@ fn started_by(launch_id: Uuid) -> String {
     format!("snowman-{}", &simple[..28])
 }
 
+fn task_private_ipv4(attachments: &[Attachment]) -> Result<Option<Ipv4Addr>, CoordinatorError> {
+    let mut found = None;
+    for attachment in attachments {
+        for detail in attachment.details() {
+            if detail.name() != Some("privateIPv4Address") {
+                continue;
+            }
+            let address = detail
+                .value()
+                .and_then(|value| value.parse::<Ipv4Addr>().ok())
+                .filter(|value| {
+                    value.is_private()
+                        && !value.is_loopback()
+                        && !value.is_link_local()
+                        && !value.is_broadcast()
+                        && !value.is_unspecified()
+                })
+                .ok_or(CoordinatorError::Ecs)?;
+            if found.is_some_and(|existing| existing != address) {
+                return Err(CoordinatorError::Ecs);
+            }
+            found = Some(address);
+        }
+    }
+    Ok(found)
+}
+
+fn token_digest_matches(stored: &[u8], token: &[u8]) -> bool {
+    let actual: [u8; 32] = Sha256::digest(token).into();
+    stored.len() == 32 && stored.ct_eq(actual.as_slice()).unwrap_u8() == 1
+}
+
 fn valid_runtime_id(value: &str) -> bool {
     (3..=32).contains(&value.len())
         && value.bytes().enumerate().all(|(index, byte)| {
@@ -1640,6 +1834,39 @@ mod tests {
         let mut rejected = snapshot;
         rejected.data_policy.pii_prohibited = false;
         assert!(model_grant_claims(&rejected).is_err());
+    }
+
+    #[test]
+    fn task_network_attestation_accepts_one_private_ipv4_only() {
+        let attachment = Attachment::builder()
+            .details(
+                KeyValuePair::builder()
+                    .name("privateIPv4Address")
+                    .value("10.42.7.19")
+                    .build(),
+            )
+            .build();
+        assert_eq!(
+            task_private_ipv4(&[attachment]).unwrap(),
+            Some("10.42.7.19".parse().unwrap())
+        );
+        let public = Attachment::builder()
+            .details(
+                KeyValuePair::builder()
+                    .name("privateIPv4Address")
+                    .value("8.8.8.8")
+                    .build(),
+            )
+            .build();
+        assert!(task_private_ipv4(&[public]).is_err());
+    }
+
+    #[test]
+    fn credential_digest_comparison_rejects_wrong_or_truncated_tokens() {
+        let digest = Sha256::digest(b"purpose-bound-token");
+        assert!(token_digest_matches(&digest, b"purpose-bound-token"));
+        assert!(!token_digest_matches(&digest, b"different-token"));
+        assert!(!token_digest_matches(&digest[..31], b"purpose-bound-token"));
     }
 
     #[test]

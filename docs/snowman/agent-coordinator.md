@@ -1,9 +1,9 @@
 # Snowman agent launch coordinator
 
-Status: private service, least-privilege database bootstrap, crash-fenced launch
-library, running/expired task reconciliation, and hard-dormant AWS service
-definition implemented in source; worker wiring, model credentials, action
-brokers, and staged proof remain.
+Status: private service, least-privilege database bootstrap, crash-fenced launch,
+source-IP-attested credential bootstrap, running/expired task reconciliation,
+and hard-dormant AWS service definition implemented in source; worker wiring,
+model-proxy enforcement, action brokers, and staged proof remain.
 
 ## Purpose
 
@@ -37,7 +37,13 @@ capabilities, select a destination, or approve an action.
   definition, container, subnets, and security group. It is not a credential.
 - `RunTask` starts exactly one Fargate task, disables ECS Exec and public IPs,
   supplies no task/execution role override, and permits only tenant ID, job ID,
-  and broker token container overrides.
+  and deterministic launch ID container overrides. These are public coordinates;
+  no bearer credential is placed in the CloudTrail-recorded request.
+- The task redeems credentials over the private TLS NLB. The NLB preserves the
+  task's IPv4 source; the coordinator matches it to the exact live ECS awsvpc
+  attachment, rechecks tenant/job/task/generation, active lease, request/task
+  state, deadline, revocation, and both stored token digests, then records the
+  source and a maximum-five retry count. Forwarded-IP headers are rejected.
 - Launch exhaustion and deadline expiry revoke the broker token. Deadline
   recovery revokes before replaying the idempotent ECS call to recover and stop
   any task whose ARN was lost during a crash.
@@ -49,10 +55,11 @@ capabilities, select a destination, or approve an action.
 The broker token cannot authenticate to the model gateway. The coordinator now
 mints a separate KMS-HMAC model grant binding the exact tenant, job, task fence,
 model, specialist role, capabilities, minimization evidence, aggregate budgets,
-and deadline; only its SHA-256 digest is stored. The grant is not delivered to
-the task until a non-CloudTrail-bearing bootstrap path, the local model proxy,
-and the gateway's live job-state/spend checks are complete. The ACP environment
-denylist already treats the future grant as sensitive.
+and deadline; only its SHA-256 digest is stored. The separate broker and model
+credentials are delivered only through the source-attested bootstrap response,
+never through ECS metadata or an ACP child environment. The executor-local model
+proxy and gateway live job-state/spend checks remain mandatory before the model
+grant can authorize inference.
 
 ## AWS boundary
 
@@ -81,7 +88,8 @@ IAM authority. Its desired count is hard-zero in Terraform.
   cancellation, aggregate-spend, and lost-response checks; never reuse the
   broker token. Implement capability-specific action brokers separately.
 - Run Postgres integration, NIP-98 replay, cross-tenant, cancellation, crash,
-  expiration, prompt-injection, exfiltration, DNS/egress, and cost tests in AWS.
+  expiration, source-IP spoofing/reuse, bootstrap lost-response, prompt-injection,
+  exfiltration, DNS/egress, and cost tests in AWS.
 - Apply an exact reviewed Terraform plan only after workload identity and cost
   posture are reverified. Keep the service at zero outside a test window.
 

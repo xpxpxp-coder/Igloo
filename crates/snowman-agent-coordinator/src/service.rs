@@ -4,7 +4,7 @@ use std::{collections::BTreeMap, net::SocketAddr, str::FromStr, sync::Arc, time:
 
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -205,6 +205,10 @@ pub fn router(state: AppState) -> Router {
         .route("/_liveness", get(liveness))
         .route("/_readiness", get(readiness))
         .route("/v1/tenants/{tenant_id}/launches", post(post_launch))
+        .route(
+            "/v1/tenants/{tenant_id}/launches/{launch_id}/bootstrap",
+            post(post_bootstrap),
+        )
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BYTES))
         .with_state(state)
 }
@@ -270,6 +274,37 @@ async fn post_launch(
         ecs_task_arn: receipt.ecs_task_arn,
         launched: receipt.launched,
     }))
+}
+
+async fn post_bootstrap(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Path((tenant_id, launch_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, ApiError> {
+    if !body.is_empty()
+        || headers.contains_key(header::AUTHORIZATION)
+        || headers.contains_key("forwarded")
+        || headers.contains_key("x-forwarded-for")
+        || headers.contains_key("x-real-ip")
+    {
+        return Err(ApiError::Invalid);
+    }
+    let credentials = state
+        .coordinator
+        .redeem_bootstrap(tenant_id, launch_id, peer.ip())
+        .await
+        .map_err(ApiError::from)?;
+    let mut response = Json(credentials).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store, private, max-age=0"),
+    );
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, header::HeaderValue::from_static("no-cache"));
+    Ok(response)
 }
 
 struct VerifiedAuth {

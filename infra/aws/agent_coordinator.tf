@@ -67,6 +67,7 @@ resource "aws_lb_target_group" "agent_coordinator_private" {
   vpc_id      = aws_vpc.command_center.id
 
   deregistration_delay = 30
+  preserve_client_ip   = true
   health_check {
     enabled             = true
     protocol            = "HTTP"

@@ -12,8 +12,9 @@ use sha2::{Digest, Sha256};
 #[cfg(test)]
 use snowman_agent_contract::{AgentDataPolicy, Classification};
 use snowman_agent_contract::{
-    BrokerAck, JobSnapshot, ResultReceipt, RuntimeOutcome, StartedReceipt, BROKER_ACK_SCHEMA,
-    JOB_RESULT_SCHEMA, JOB_SNAPSHOT_SCHEMA, JOB_STARTED_SCHEMA,
+    BootstrapCredentials, BrokerAck, JobSnapshot, ResultReceipt, RuntimeOutcome, StartedReceipt,
+    BOOTSTRAP_CREDENTIALS_SCHEMA, BROKER_ACK_SCHEMA, JOB_RESULT_SCHEMA, JOB_SNAPSHOT_SCHEMA,
+    JOB_STARTED_SCHEMA,
 };
 use url::Url;
 use uuid::Uuid;
@@ -23,6 +24,7 @@ const MANIFEST_PATH: &str = "/opt/snowman/runtime/manifest.json";
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 const MAX_SNAPSHOT_BYTES: usize = 768 * 1024;
 const MAX_BROKER_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_BOOTSTRAP_RESPONSE_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -41,10 +43,11 @@ enum Error {
 }
 
 struct Config {
+    bootstrap_url: Url,
     broker_url: Url,
     tenant_id: Uuid,
     job_id: Uuid,
-    job_token: Zeroizing<String>,
+    launch_id: Uuid,
     runtime_id: String,
     model_gateway_url: Url,
     max_task_duration: Duration,
@@ -52,6 +55,7 @@ struct Config {
 
 impl Config {
     fn from_env() -> Result<Self, Error> {
+        let bootstrap_url = parse_snowman_origin(&required("SNOWMAN_AGENT_BOOTSTRAP_URL")?)?;
         let broker_url = parse_snowman_origin(&required("SNOWMAN_AGENT_BROKER_URL")?)?;
         let model_gateway_url = parse_snowman_origin(&required("SNOWMAN_MODEL_GATEWAY_URL")?)?;
         let tenant_id = required("SNOWMAN_AGENT_TENANT_ID")?
@@ -60,13 +64,9 @@ impl Config {
         let job_id = required("SNOWMAN_AGENT_JOB_ID")?
             .parse::<Uuid>()
             .map_err(|_| Error::Configuration("job ID is invalid"))?;
-        let job_token = Zeroizing::new(required("SNOWMAN_AGENT_JOB_TOKEN")?);
-        if job_token.len() < 32
-            || job_token.len() > 2048
-            || !job_token.chars().all(|value| value.is_ascii_graphic())
-        {
-            return Err(Error::Configuration("job token is invalid"));
-        }
+        let launch_id = required("SNOWMAN_AGENT_LAUNCH_ID")?
+            .parse::<Uuid>()
+            .map_err(|_| Error::Configuration("launch ID is invalid"))?;
         let runtime_id = required("SNOWMAN_AGENT_RUNTIME_ID")?;
         if !valid_identifier(&runtime_id, 64) {
             return Err(Error::Configuration("runtime ID is invalid"));
@@ -79,6 +79,7 @@ impl Config {
         }
         if env::var("SNOWMAN_AGENT_NETWORK_POLICY").as_deref() != Ok("private-snowman-only")
             || env::var("SNOWMAN_AGENT_REQUIRE_BROKERED_JOB_TOKEN").as_deref() != Ok("true")
+            || env::var("SNOWMAN_AGENT_REQUIRE_SOURCE_ATTESTED_BOOTSTRAP").as_deref() != Ok("true")
             || env::var("SNOWMAN_AGENT_DISABLE_SELF_UPDATE").as_deref() != Ok("true")
         {
             return Err(Error::Configuration(
@@ -86,10 +87,11 @@ impl Config {
             ));
         }
         Ok(Self {
+            bootstrap_url,
             broker_url,
             tenant_id,
             job_id,
-            job_token,
+            launch_id,
             runtime_id,
             model_gateway_url,
             max_task_duration: Duration::from_secs(max_task_seconds),
@@ -221,9 +223,12 @@ async fn execute() -> Result<(), Error> {
     let config = Config::from_env()?;
     let manifest = load_manifest(MANIFEST_PATH)?;
     validate_manifest(&manifest, &config.runtime_id)?;
+    let mut credentials = fetch_bootstrap(&config).await?;
+    let job_token = Zeroizing::new(std::mem::take(&mut credentials.job_token));
+    let _model_grant = Zeroizing::new(std::mem::take(&mut credentials.model_grant));
     let broker = BrokerClient::new(
         config.broker_url.clone(),
-        config.job_token.clone(),
+        job_token,
         config.max_task_duration,
     )?;
     let (snapshot, snapshot_sha256) = broker.snapshot(config.tenant_id, config.job_id).await?;
@@ -295,6 +300,78 @@ async fn execute() -> Result<(), Error> {
     }
     tracing::info!(job_id=%config.job_id, generation=snapshot.generation, "one-shot agent job completed");
     Ok(())
+}
+
+async fn fetch_bootstrap(config: &Config) -> Result<BootstrapCredentials, Error> {
+    let url = config
+        .bootstrap_url
+        .join(&format!(
+            "v1/tenants/{}/launches/{}/bootstrap",
+            config.tenant_id, config.launch_id
+        ))
+        .map_err(|_| Error::Configuration("bootstrap endpoint could not be constructed"))?;
+    let http = Client::builder()
+        .no_proxy()
+        .redirect(Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30))
+        .user_agent("snowman-agent-executor-bootstrap/1")
+        .build()
+        .map_err(|_| Error::Transport)?;
+    let mut response = None;
+    for attempt in 0..12_u32 {
+        let candidate = match http
+            .post(url.clone())
+            .header(header::ACCEPT, "application/json")
+            .send()
+            .await
+        {
+            Ok(value) => value,
+            Err(_) if attempt < 11 => {
+                let factor = 1_u64 << attempt.min(4);
+                tokio::time::sleep(Duration::from_millis((250 * factor).min(5_000))).await;
+                continue;
+            }
+            Err(_) => return Err(Error::Transport),
+        };
+        if candidate.status().is_success() {
+            response = Some(candidate);
+            break;
+        }
+        if !matches!(candidate.status().as_u16(), 409 | 429 | 503) || attempt == 11 {
+            return Err(Error::BrokerRejected(candidate.status().as_u16()));
+        }
+        let factor = 1_u64 << attempt.min(4);
+        tokio::time::sleep(Duration::from_millis((250 * factor).min(5_000))).await;
+    }
+    let credentials: BootstrapCredentials = decode_bounded(
+        response.ok_or(Error::Transport)?,
+        MAX_BOOTSTRAP_RESPONSE_BYTES,
+    )
+    .await?;
+    if credentials.schema_version != BOOTSTRAP_CREDENTIALS_SCHEMA
+        || credentials.tenant_id != config.tenant_id
+        || credentials.launch_id != config.launch_id
+        || credentials.job_id != config.job_id
+        || credentials.expires_at <= Utc::now()
+        || !(32..=2048).contains(&credentials.job_token.len())
+        || !credentials.job_token.starts_with("sj1_")
+        || !credentials
+            .job_token
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic())
+        || !(64..=32_768).contains(&credentials.model_grant.len())
+        || !credentials.model_grant.starts_with("smg1_")
+        || !credentials
+            .model_grant
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic())
+    {
+        return Err(Error::BrokerContract(
+            "bootstrap credential contract is invalid",
+        ));
+    }
+    Ok(credentials)
 }
 
 fn successful_outcome(result: &OneShotResult) -> RuntimeOutcome {
@@ -509,10 +586,11 @@ mod tests {
 
     fn config() -> Config {
         Config {
+            bootstrap_url: Url::parse("https://coordinator.internal.snowmanai.org/").unwrap(),
             broker_url: Url::parse("https://agents.internal.snowmanai.org/").unwrap(),
             tenant_id: Uuid::parse_str("20000000-0000-4000-8000-000000000001").unwrap(),
             job_id: Uuid::parse_str("10000000-0000-4000-8000-000000000001").unwrap(),
-            job_token: Zeroizing::new("a".repeat(64)),
+            launch_id: Uuid::parse_str("30000000-0000-4000-8000-000000000001").unwrap(),
             runtime_id: "snowman-acp".into(),
             model_gateway_url: Url::parse("https://models.internal.snowmanai.org/").unwrap(),
             max_task_duration: Duration::from_secs(3600),

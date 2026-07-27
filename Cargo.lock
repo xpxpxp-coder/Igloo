@@ -8967,6 +8967,7 @@ dependencies = [
  "snowman-agent-broker",
  "snowman-agent-contract",
  "sqlx",
+ "subtle",
  "thiserror 2.0.18",
  "tokio",
  "tower-http",

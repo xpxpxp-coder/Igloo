@@ -425,6 +425,15 @@ resource "aws_vpc_security_group_ingress_rule" "agent_coordinator_from_worker" {
   description                  = "NIP-98 launch requests from assigned Snowman workforce services"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "agent_coordinator_from_executor" {
+  security_group_id            = aws_security_group.agent_coordinator_ingress.id
+  referenced_security_group_id = aws_security_group.agent_executor.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "Source-preserved, task-IP-attested credential bootstrap only"
+}
+
 resource "aws_vpc_security_group_egress_rule" "worker_to_agent_coordinator" {
   security_group_id            = aws_security_group.worker.id
   referenced_security_group_id = aws_security_group.agent_coordinator_ingress.id
@@ -432,6 +441,15 @@ resource "aws_vpc_security_group_egress_rule" "worker_to_agent_coordinator" {
   to_port                      = 443
   ip_protocol                  = "tcp"
   description                  = "Private launch API only"
+}
+
+resource "aws_vpc_security_group_egress_rule" "agent_executor_to_coordinator" {
+  security_group_id            = aws_security_group.agent_executor.id
+  referenced_security_group_id = aws_security_group.agent_coordinator_ingress.id
+  from_port                    = 443
+  to_port                      = 443
+  ip_protocol                  = "tcp"
+  description                  = "Exact source-attested bootstrap endpoint only"
 }
 
 resource "aws_vpc_security_group_egress_rule" "agent_coordinator_ingress_to_task" {

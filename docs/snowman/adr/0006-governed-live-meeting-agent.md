@@ -96,6 +96,51 @@ and hangup: <https://developers.openai.com/api/docs/guides/realtime-sip>.
   and links to resulting work products. New agents rebuild context from that
   governed packet rather than replaying unbounded audio.
 
+## Snowman mailbox and calendar intake
+
+The meeting agent has a real Snowman-managed Google Workspace user identity,
+mailbox, and primary calendar (for example `meetings@snowmanai.org`), not merely
+an email alias. Google documents that aliases are not Google Accounts and do not
+support delegation, while a dedicated account can retain mail, labels, replies,
+and calendar attendance evidence:
+<https://support.google.com/a/answer/11946994>. Aptive and other restricted
+workspaces use a dedicated mailbox/calendar identity rather than sharing one
+mail store across tenants.
+
+- A user may forward an email thread or invite the Snowman meeting identity.
+  Gmail change notifications enter a Snowman-controlled Google Cloud Pub/Sub
+  topic and wake an idempotent intake worker. The worker retrieves exact changes
+  through Gmail history rather than trusting notification content. Gmail watches
+  are renewed daily and a bounded reconciliation sync covers delayed or dropped
+  notifications, as required by Google's push model:
+  <https://developers.google.com/workspace/gmail/api/guides/push>.
+- Calendar events are synchronized by immutable provider/event coordinates.
+  Start/end/time zone, organizer, attendees, recurrence, revisions,
+  cancellation, and conference entry points are normalized into an approved
+  meeting object. Google Calendar exposes Google Meet and phone conference
+  details through `conferenceData`:
+  <https://developers.google.com/workspace/calendar/api/guides/create-events>.
+- Email bodies, attachments, quoted history, calendar descriptions, and remote
+  conference instructions are untrusted content. They can supply context or
+  propose work but cannot change tenant, classification, provider route,
+  retention, approval, dial target, capabilities, or credentials.
+- Auto-join requires an accepted, current calendar event; an allowlisted or
+  explicitly trusted organizer; exact tenant routing; a bounded join window;
+  an approved phone/SIP/meeting entry point; consent policy; and sufficient
+  duration/spend budget. A forwarded email alone never authorizes dialing.
+- Cancellation, time/entry-point revision, organizer change, conflicting
+  events, or revoked mailbox authorization invalidates the scheduled join and
+  downstream meeting tools. Duplicate messages and recurring-event updates are
+  idempotent.
+- Raw mail and any retained transcript remain under Analyst 360 evidence and
+  retention authority. Command Center and specialist agents receive a bounded,
+  citation-bearing context packet and immutable message/artifact references,
+  not unrestricted mailbox credentials or an unbounded historical mailbox.
+- The intake identity receives least-privilege Gmail/Calendar scopes and cannot
+  administer Google Workspace. Sending mail, accepting an untrusted invitation,
+  changing attendees, or creating an external commitment remains separately
+  capability- and policy-gated with a complete receipt.
+
 ## Required controls and evidence
 
 - Distinct service identity and short-lived credential per meeting agent;
@@ -114,6 +159,10 @@ and hangup: <https://developers.openai.com/api/docs/guides/realtime-sip>.
   precision/recall, false task creation, hallucinated commitments, prompt
   injection spoken aloud, sensitive-data leakage, latency, recovery, and
   accessibility.
+- Mail/calendar tests cover spoofed organizers, forwarded prompt injection,
+  malicious attachments and links, duplicate/dropped Pub/Sub notifications,
+  watch renewal, recurrence and daylight-saving changes, late cancellation,
+  conference-detail replacement, cross-tenant forwarding, and join timing.
 
 This feature is not production-ready until those controls pass staged huddle
 and phone UAT. Twilio, OpenAI, and ElevenLabs authorization for design does not

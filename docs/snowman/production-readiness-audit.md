@@ -97,6 +97,12 @@ the highest risks without changing the production-readiness verdict:
   hard-dormant private ECS service definition behind an executor-only TLS NLB
   and split-horizon Snowman DNS; it receives no AWS task role or public IP and
   can reach only RDS, VPC DNS, and exact private AWS execution endpoints;
+- the coordinator no longer places a bearer token in the CloudTrail-recorded
+  ECS `RunTask` override. One-shot tasks receive only public tenant/job/launch
+  coordinates and redeem broker/model credentials over private TLS after the
+  NLB-preserved source IPv4 matches the exact running ECS awsvpc attachment and
+  live tenant lease/job authority; retries and source evidence are bounded and
+  durable without storing plaintext credentials;
 - definition-time rejection of unimplemented workflow actions and unsafe
   webhook destinations/credential headers; and
 - a default-off Analyst lifecycle-event ingress with host-derived community
