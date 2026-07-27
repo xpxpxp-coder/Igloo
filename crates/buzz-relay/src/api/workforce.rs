@@ -350,10 +350,7 @@ async fn authenticate_principal(
     if state.config.snowman_workforce.is_none() {
         return Err(api_error(StatusCode::NOT_FOUND, "not found"));
     }
-    let raw_host = headers
-        .get(axum::http::header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
+    let raw_host = crate::tenant::authoritative_host(headers);
     let tenant = crate::tenant::bind_community(&state.db, raw_host)
         .await
         .map_err(|_| api_error(StatusCode::NOT_FOUND, "not found"))?;

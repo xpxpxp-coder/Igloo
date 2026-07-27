@@ -324,10 +324,7 @@ async fn nip11_or_ws_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let raw_host = headers
-        .get(axum::http::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+    let raw_host = crate::tenant::authoritative_host(&headers);
 
     // `/` is an explicit relay route, so it never reaches the SPA fallback.
     // Short-circuit the exact admin authority here and never let it serve the

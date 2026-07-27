@@ -336,6 +336,56 @@ mod row_zero_host_binding {
              existence"
         );
     }
+
+    /// Obligation: proxy metadata supplied by a client can neither rescue an
+    /// unmapped direct Host nor replace a mapped direct Host. Snowman's ALB
+    /// preserves Host, so the relay deliberately ignores every forwarding-host
+    /// convention rather than accepting a second tenant selector.
+    #[tokio::test]
+    #[ignore]
+    async fn forwarded_host_claims_never_select_a_tenant() {
+        let client = reqwest::Client::builder()
+            .build()
+            .expect("build reqwest client");
+
+        for (name, value) in [
+            ("x-forwarded-host", "a.localhost:3000"),
+            ("x-original-host", "a.localhost:3000"),
+            (
+                "forwarded",
+                "for=192.0.2.1;host=a.localhost:3000;proto=https",
+            ),
+        ] {
+            let response = client
+                .get(url_unknown())
+                .header(name, value)
+                .send()
+                .await
+                .unwrap_or_else(|error| panic!("forwarding attack {name} failed: {error}"));
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::NOT_FOUND,
+                "{name} supplied a mapped tenant for an unmapped direct Host"
+            );
+        }
+
+        let response = client
+            .get(url_a())
+            .header("x-forwarded-host", "unknown.localhost:3000")
+            .header("x-original-host", "unknown.localhost:3000")
+            .header(
+                "forwarded",
+                "for=192.0.2.1;host=unknown.localhost:3000;proto=https",
+            )
+            .send()
+            .await
+            .expect("mapped-host negative control");
+        assert_ne!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "forwarding metadata overrode the mapped direct Host"
+        );
+    }
 }
 
 /// Create an `open`-visibility channel (kind:9007) in the community bound to

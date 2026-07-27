@@ -49,6 +49,7 @@ const runtimeAuthorityFiles = [
   "crates/snowman-agent-coordinator/src/main.rs",
   "crates/snowman-agent-executor/src/main.rs",
   "crates/snowman-meeting-control/src/lib.rs",
+  "crates/snowman-tool-broker/src/lib.rs",
   "crates/snowman-bootstrap/src/main.rs",
   "crates/buzz-db/src/runtime_security.rs",
   "crates/buzz-pubsub/src/connection.rs",
@@ -63,6 +64,7 @@ const runtimeAuthorityFiles = [
   "migrations/0043_snowman_agent_jobs.sql",
   "migrations/0044_snowman_agent_launches.sql",
   "migrations/0048_snowman_governed_meetings.sql",
+  "migrations/0049_snowman_agent_tool_authority.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -847,6 +849,31 @@ requireFragment(
   "crates/buzz-dev-mcp/src/paths.rs",
   "path escapes the Snowman agent workspace",
   "agent file tools must reject workspace escape",
+);
+requireFragment(
+  "crates/snowman-tool-broker/src/lib.rs",
+  "shell_prohibited: true",
+  "production agent actions must never translate a capability into shell authority",
+);
+requireFragment(
+  "crates/snowman-tool-broker/src/lib.rs",
+  "child_credentials_prohibited: true",
+  "tool execution plans must prohibit child credential inheritance",
+);
+requireFragment(
+  "crates/snowman-tool-broker/src/lib.rs",
+  "descriptor_relative_no_symlink",
+  "filesystem routes must require descriptor-relative no-symlink enforcement",
+);
+requireFragment(
+  "crates/snowman-tool-broker/src/lib.rs",
+  "broker_task_role_only",
+  "AWS actions must stay inside the trusted broker task role",
+);
+requireFragment(
+  "migrations/0049_snowman_agent_tool_authority.sql",
+  "external_checkpoint_sha256",
+  "tool evidence must bind to an immutable external checkpoint",
 );
 requireFragment(
   "crates/buzz-dev-mcp/src/shim.rs",

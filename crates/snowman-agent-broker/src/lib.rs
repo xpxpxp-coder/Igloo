@@ -947,4 +947,25 @@ mod tests {
             assert!(!valid_database_url(&invalid));
         }
     }
+
+    #[test]
+    fn every_private_job_read_and_mutation_is_tenant_scoped() {
+        for query in [SELECT_JOB, SELECT_JOB_FOR_UPDATE] {
+            assert!(query.contains("WHERE community_id=$1 AND job_id=$2"));
+            assert!(!query.contains("WHERE job_id=$1"));
+        }
+
+        let production = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        for fragment in [
+            "WHERE community_id=$1 AND job_id=$2 AND status='issued'",
+            "WHERE community_id=$1 AND job_id=$2 AND status IN ('issued','started')",
+            "WHERE community_id=$1 AND task_id=$2 AND generation=$3",
+            "WHERE t.community_id=$1 AND t.task_id=$3 AND t.request_id=$4",
+        ] {
+            assert!(
+                production.contains(fragment),
+                "missing tenant-first broker boundary: {fragment}"
+            );
+        }
+    }
 }

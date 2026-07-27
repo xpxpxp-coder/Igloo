@@ -16,6 +16,21 @@
 
 use buzz_core::tenant::{normalize_host, CommunityId, TenantContext};
 
+/// Return the direct HTTP authority used for row-zero tenant binding.
+///
+/// Snowman deliberately does not trust `Forwarded`, `X-Forwarded-Host`, or
+/// `X-Original-Host`. The production ALB preserves the original `Host` header,
+/// WAF admits only the exact Snowman hostname, and the relay task security
+/// group admits only the ALB. Keeping the selection here makes that trust
+/// boundary explicit and testable instead of relying on every handler to
+/// remember which proxy header is authoritative.
+pub fn authoritative_host(headers: &axum::http::HeaderMap) -> &str {
+    headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+}
+
 /// Resolves a normalized connection host to its community, or `None` when the
 /// host maps to no community on this deployment.
 ///
@@ -178,6 +193,35 @@ mod tests {
             CommunityId::from_uuid(Uuid::from_u128(id)),
         );
         MapResolver { map, fail: false }
+    }
+
+    #[test]
+    fn direct_host_is_authoritative_over_all_forwarding_claims() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::HOST, "a.snowmanai.org".parse().unwrap());
+        headers.insert("x-forwarded-host", "b.snowmanai.org".parse().unwrap());
+        headers.insert("x-original-host", "b.snowmanai.org".parse().unwrap());
+        headers.insert(
+            axum::http::HeaderName::from_static("forwarded"),
+            "for=192.0.2.1;host=b.snowmanai.org;proto=https"
+                .parse()
+                .unwrap(),
+        );
+
+        assert_eq!(authoritative_host(&headers), "a.snowmanai.org");
+    }
+
+    #[test]
+    fn forwarding_claim_cannot_supply_a_missing_or_invalid_host() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-host", "a.snowmanai.org".parse().unwrap());
+        assert_eq!(authoritative_host(&headers), "");
+
+        headers.insert(
+            axum::http::header::HOST,
+            axum::http::HeaderValue::from_bytes(b"\xff").unwrap(),
+        );
+        assert_eq!(authoritative_host(&headers), "");
     }
 
     #[tokio::test]

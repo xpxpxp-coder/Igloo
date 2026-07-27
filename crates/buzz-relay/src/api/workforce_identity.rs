@@ -126,10 +126,7 @@ pub async fn enroll_human_session(
             "workforce enrollment request is too large",
         ));
     }
-    let raw_host = headers
-        .get(axum::http::header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
+    let raw_host = crate::tenant::authoritative_host(&headers);
     let tenant = crate::tenant::bind_community(&state.db, raw_host)
         .await
         .map_err(|_| api_error(StatusCode::NOT_FOUND, "not found"))?;
@@ -285,10 +282,7 @@ pub async fn revoke_human_session(
             "workforce revocation request is too large",
         ));
     }
-    let raw_host = headers
-        .get(axum::http::header::HOST)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("");
+    let raw_host = crate::tenant::authoritative_host(&headers);
     let tenant = crate::tenant::bind_community(&state.db, raw_host)
         .await
         .map_err(|_| api_error(StatusCode::NOT_FOUND, "not found"))?;

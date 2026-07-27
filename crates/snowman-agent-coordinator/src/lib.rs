@@ -1929,6 +1929,24 @@ mod tests {
     }
 
     #[test]
+    fn launch_bootstrap_and_cancellation_queries_are_tenant_first() {
+        let source = include_str!("lib.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for fragment in [
+            "WHERE t.community_id=$1 AND t.request_id=$2 AND t.task_id=$3",
+            "WHERE l.community_id=$1 AND l.launch_id=$2",
+            "WHERE community_id=$1 AND job_id=$2 AND status IN ('issued','started')",
+            "WHERE community_id=$1 AND job_id=$2 AND status IN ('running','stopping')",
+            "WHERE community_id=$1 AND auth_event_id=$2",
+        ] {
+            assert!(
+                production.contains(fragment),
+                "missing tenant-first coordinator boundary: {fragment}"
+            );
+        }
+    }
+
+    #[test]
     fn cancellation_reason_is_a_bounded_evidence_code() {
         assert!(valid_failure_code("operator_cancelled"));
         for invalid in ["no", "UPPER", "contains space", "delete;drop"] {
