@@ -88,7 +88,9 @@ def test_provisioner_config_missing_api_key_is_explicit(state_dir, tmp_path, mon
         benchmark.write_provisioner_config(benchmark.load_state(), endpoints)
 
 
-def test_env_file_wires_owner_and_ports(state_dir):
+def test_env_file_wires_owner_and_ports(state_dir, monkeypatch):
+    image = "ghcr.io/snowman-ai-org/snowman-command-center@sha256:" + "a" * 64
+    monkeypatch.setenv("BUZZ_IMAGE", image)
     state = benchmark.load_state()
     env_path = benchmark.write_env_file(state)
     env = dict(
@@ -98,6 +100,7 @@ def test_env_file_wires_owner_and_ports(state_dir):
     assert env["BUZZ_HTTP_PORT"] == str(benchmark.RELAY_HTTP_PORT)
     assert env["BUZZ_PG_HOST_PORT"] == str(benchmark.PG_HOST_PORT)
     assert env["BUZZ_REQUIRE_RELAY_MEMBERSHIP"] == "true"
+    assert env["BUZZ_IMAGE"] == image
 
 
 def test_compose_command_isolates_the_project(state_dir):
