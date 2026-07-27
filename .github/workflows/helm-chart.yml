@@ -104,10 +104,10 @@ jobs:
           done
 
   install-on-kind:
-    # Full end-to-end install requires the Snowman-owned command-center image to
-    # exist and to embed Max's startup migrations. Runs only after Sami's
-    # image PR merges (`workflow_dispatch`) or on a schedule once main carries
-    # both prerequisites. Render/lint above is the per-PR signal.
+    # Proves the complete chart can install and become Ready without pulling an
+    # unpublished application image. The workflow builds a minimal Snowman-owned
+    # health endpoint image locally and loads it directly into kind; application
+    # behavior is covered by the Rust and image workflows.
     #
     # `inputs.version == ''` excludes the chart-tag rescue dispatch (which
     # carries a version): that path only packages+publishes, it does not install.
@@ -142,11 +142,31 @@ jobs:
           version: v0.24.0
           node_image: kindest/node:v1.31.0
 
+      - name: Build and load registry-free chart smoke image
+        run: |
+          set -euo pipefail
+          smoke_dir="deploy/charts/buzz/tests/smoke-image"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath -ldflags="-s -w" \
+            -o "${smoke_dir}/snowman-chart-smoke" "${smoke_dir}/main.go"
+          docker build \
+            --tag snowman-command-center:chart-smoke \
+            "${smoke_dir}"
+          kind load docker-image snowman-command-center:chart-smoke
+
       - name: Build chart dependencies
         run: helm dependency build deploy/charts/buzz
 
       - name: ct install (quickstart profile)
-        run: ct install --config ct.yaml --charts deploy/charts/buzz --helm-extra-args "--timeout 600s"
+        run: >-
+          ct install
+          --config ct.yaml
+          --charts deploy/charts/buzz
+          --helm-extra-args "--timeout 600s"
+          --helm-extra-set-args
+          "--set image.repository=snowman-command-center
+          --set image.tag=chart-smoke
+          --set image.pullPolicy=Never"
 
   publish:
     # Packages the chart and pushes it to GHCR as an OCI artifact. Fires only on
