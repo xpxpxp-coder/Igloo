@@ -651,9 +651,12 @@ resource "aws_ecs_task_definition" "meeting_media" {
     environment = [
       { name = "SNOWMAN_MEETING_MEDIA_BIND_ADDR", value = "0.0.0.0:8080" },
       { name = "SNOWMAN_MEETING_MEDIA_DATABASE_ROLE", value = "snowman_meeting_media" },
+      { name = "SNOWMAN_MEETING_MEDIA_MAX_CONNECTIONS", value = "8" },
+      { name = "SNOWMAN_MEETING_MEDIA_MAX_INFLIGHT_REQUESTS", value = "32" },
       { name = "SNOWMAN_MEETING_MEDIA_NETWORK_POLICY", value = "private-snowman-only" },
       { name = "SNOWMAN_MEETING_MEDIA_RAW_AUDIO_RETENTION", value = "none" },
       { name = "SNOWMAN_MEETING_MEDIA_PROVIDER_EGRESS_ENABLED", value = tostring(var.meeting_external_provider_egress_enabled) },
+      { name = "SNOWMAN_MEETING_MEDIA_CALLBACK_INGRESS_ENABLED", value = "false" },
       { name = "SNOWMAN_MEETING_MEDIA_PROVIDER_EGRESS_PROXY_ORIGIN", value = var.meeting_provider_egress_proxy_origin },
       { name = "SNOWMAN_MEETING_MEDIA_APPROVED_PROVIDER_HOSTS", value = join(",", sort(tolist(var.meeting_approved_provider_hosts))) },
       { name = "HTTP_PROXY", value = "" },
@@ -664,6 +667,13 @@ resource "aws_ecs_task_definition" "meeting_media" {
       name      = "SNOWMAN_MEETING_MEDIA_DATABASE_URL"
       valueFrom = "${aws_secretsmanager_secret.meeting_media_runtime.arn}:DATABASE_URL::"
     }]
+    healthCheck = {
+      command     = ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8080/_readiness >/dev/null || exit 1"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 30
+    }
     logConfiguration = {
       logDriver = "awslogs"
       options = {

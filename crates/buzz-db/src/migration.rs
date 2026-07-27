@@ -560,7 +560,7 @@ mod tests {
         let mut migrations: Vec<_> = MIGRATOR.iter().collect();
         migrations.sort_by_key(|migration| migration.version);
 
-        assert_eq!(migrations.len(), 55);
+        assert_eq!(migrations.len(), 57);
         assert_eq!(migrations[0].version, 1);
         assert_eq!(&*migrations[0].description, "initial schema");
         assert!(migrations[0]
@@ -671,6 +671,24 @@ mod tests {
             .sql
             .as_str()
             .contains("CREATE TABLE snowman_orchestration_terminal_receipts"));
+        assert_eq!(migrations[55].version, 56);
+        assert_eq!(
+            &*migrations[55].description,
+            "snowman meeting media service"
+        );
+        assert!(migrations[55]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_meeting_media_callers"));
+        assert_eq!(migrations[56].version, 57);
+        assert_eq!(
+            &*migrations[56].description,
+            "snowman orchestration control delivery"
+        );
+        assert!(migrations[56]
+            .sql
+            .as_str()
+            .contains("CREATE TABLE snowman_orchestration_control_delivery_receipts"));
 
         // The git repo-name registry is an additive migration, never folded into
         // 0001 — folding it would change 0001's checksum and break brownfield

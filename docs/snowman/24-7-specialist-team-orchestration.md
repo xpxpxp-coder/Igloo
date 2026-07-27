@@ -1,8 +1,9 @@
 # Snowman 24/7 specialist-team orchestration boundary
 
-Status: production-oriented execution lifecycle implemented in source; a
-long-running worker, dedicated database role, private AWS packaging, live
-PostgreSQL race tests, and staged verification remain gated.
+Status: production-oriented execution lifecycle, control-outbox API, isolated
+long-running worker, and dedicated database role are implemented in source;
+private AWS packaging, destination-adapter activation, live PostgreSQL race
+tests, and staged verification remain gated.
 
 The Snowman orchestration layer turns a governed user request, project,
 deadline, recurring analysis, or next-best-action proposal into a bounded
@@ -89,13 +90,35 @@ weekday, catch-up, and local-minute resolution use the pinned
 `chrono-tz/0.10.4` implementation; this is recorded as the compiled timezone
 implementation and does not claim an independently attested IANA data release.
 
+Migration 0057 adds immutable, per-lease delivery receipts for cancellation and
+reminder commands. The service exposes NIP-98/body/replay-bound control claims
+and delivery results at the exact tenant/workspace boundary. Claims use
+`FOR UPDATE SKIP LOCKED`, increment a lease generation, recover only expired
+leases, and require the same service identity to commit the result. A success
+requires an allowlisted Snowman delivery reference plus response digest; a
+failure stores only a stable failure digest and either schedules a bounded
+retry or reaches durable dead letter.
+
+`snowman-orchestration-worker` continuously runs the bounded scheduler cycle,
+claims dispatch and control work, invokes only fixed private
+`*.internal.snowmanai.org` destinations, and commits each digest-only result.
+It uses exact NIP-98 URL/method/body signatures with a fresh nonce, disables
+redirects and proxies, caps response bodies, carries no database or provider
+credential, and stops taking new claims on SIGTERM while allowing its current
+bounded cycle to record results. Stable dispatch, coordinator-job, outbox, and
+lease coordinates make a destination acceptance followed by a lost response
+safe to retry through an idempotent adapter. Structured metrics include
+scheduler lag, recurrence/materialization counts, lease recovery, dead letters,
+claimed reserved cost, and delivery status without tenant content.
+
 ## Remaining launch gates
 
-- add the authenticated claim/delivery surface for the durable reminder and
-  cancellation control outbox, then package a long-running scheduler/delivery
-  worker that invokes the bounded cycle, dispatch claim/delivery, control, and
-  receipt surfaces;
-- provision and verify a dedicated least-privilege orchestration database role;
+- deploy the fixed coordinator-dispatch, coordinator-cancellation, and
+  reminder destination adapters behind private TLS and prove their exact
+  idempotent receipt contracts; source wiring deliberately fails closed until
+  those adapter routes exist;
+- package the service and worker as hard-dormant private ECS tasks with exact
+  security groups, secrets, alarms, and activation evidence;
 - independently attest the IANA data release used by the pinned timezone build;
 - connect the default-off team-operations UI to the private API and complete
   keyboard, screen-reader, zoom, reduced-motion, and mobile verification;

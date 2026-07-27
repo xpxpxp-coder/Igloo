@@ -41,6 +41,8 @@ const runtimeAuthorityFiles = [
   "crates/snowman-orchestration/src/lib.rs",
   "crates/snowman-orchestration-service/src/lib.rs",
   "crates/snowman-orchestration-service/src/main.rs",
+  "crates/snowman-orchestration-worker/src/lib.rs",
+  "crates/snowman-orchestration-worker/src/main.rs",
   "crates/snowman-aws-auth/src/lib.rs",
   "crates/snowman-analyst-client/src/lib.rs",
   "crates/snowman-workforce-worker/src/lib.rs",
@@ -54,6 +56,9 @@ const runtimeAuthorityFiles = [
   "crates/snowman-meeting-control/src/lib.rs",
   "crates/snowman-meeting-media-gateway/src/lib.rs",
   "crates/snowman-meeting-media-gateway/src/adapters.rs",
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "crates/snowman-meeting-media-gateway/src/server.rs",
+  "crates/snowman-meeting-media-gateway/src/main.rs",
   "crates/snowman-audit-checkpoint/src/lib.rs",
   "crates/snowman-audit-checkpoint/src/model.rs",
   "crates/snowman-audit-checkpoint/src/service.rs",
@@ -80,6 +85,8 @@ const runtimeAuthorityFiles = [
   "migrations/0053_snowman_orchestration_service.sql",
   "migrations/0054_snowman_audit_checkpoints.sql",
   "migrations/0055_snowman_orchestration_execution_lifecycle.sql",
+  "migrations/0056_snowman_meeting_media_service.sql",
+  "migrations/0057_snowman_orchestration_control_delivery.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -174,6 +181,41 @@ if (/fetch\(\s*["'`]https?:\/\//i.test(releaseSource)) {
     "web/src/shared/lib/buzz-download.ts: cross-origin release fetch",
   );
 }
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  'Self::Twilio => "api.twilio.com"',
+  "provider egress must map Twilio to its exact operations-sealed host",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  'Self::OpenAi => "api.openai.com"',
+  "provider egress must map OpenAI to its exact operations-sealed host",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  'Self::ElevenLabs => "api.elevenlabs.io"',
+  "provider egress must map optional ElevenLabs to its exact operations-sealed host",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "resolved_ips: Vec<IpAddr>",
+  "provider transport must receive only a freshly validated pinned address set",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "tls_server_name: String",
+  "provider transport must bind certificate validation, SNI, and authority",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "ReceiptStatus::Indeterminate",
+  "provider cancellation and timeout races must remain sticky and non-retriable",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "Secret reference resolved only inside the transport",
+  "provider credentials must be injected only within the direct transport",
+);
 requireFragment(
   "desktop/src-tauri/src/commands/workspace.rs",
   "validate_snowman_relay_url(&relay_url)?;",
@@ -591,6 +633,21 @@ requireFragment(
   "proactive action policy must distinguish automatic work from human-gated work",
 );
 requireFragment(
+  "crates/snowman-meeting-media-gateway/src/server.rs",
+  "DisabledProviderRuntime",
+  "meeting media must fail closed until its injected policy-proxy runtime is packaged",
+);
+requireFragment(
+  "crates/snowman-meeting-media-gateway/src/server.rs",
+  "status='indeterminate'",
+  "meeting media must durably fence a provider send before network execution",
+);
+requireFragment(
+  "migrations/0056_snowman_meeting_media_service.sql",
+  "status TEXT NOT NULL DEFAULT 'disabled'",
+  "meeting media callers and callbacks must default disabled",
+);
+requireFragment(
   "crates/snowman-orchestration/src/lib.rs",
   "valid_analyst_ref",
   "orchestration memory and work-product context must remain immutable Analyst 360 references",
@@ -629,6 +686,26 @@ requireFragment(
   "migrations/0053_snowman_orchestration_service.sql",
   "enabled BOOLEAN NOT NULL DEFAULT FALSE",
   "persisted recurrence schedules must remain disabled by default",
+);
+requireFragment(
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "verify_orchestration_role(&pool",
+  "the orchestration service must verify its dedicated database identity at startup",
+);
+requireFragment(
+  "migrations/0057_snowman_orchestration_control_delivery.sql",
+  "PRIMARY KEY (community_id, outbox_id, lease_generation)",
+  "control delivery receipts must preserve the tenant and lease fence",
+);
+requireFragment(
+  "crates/snowman-orchestration-worker/src/lib.rs",
+  ".redirect(Policy::none())",
+  "the orchestration worker must reject destination redirects",
+);
+requireFragment(
+  "crates/snowman-orchestration-worker/src/lib.rs",
+  ".no_proxy()",
+  "the orchestration worker must not inherit ambient proxy egress",
 );
 requireFragment(
   "crates/buzz-db/src/workforce.rs",

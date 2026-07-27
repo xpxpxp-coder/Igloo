@@ -3,7 +3,7 @@
 Status: **executable control contract, persistence schema, and transport-injected
 provider adapters; no live provider traffic is activated or staging-proven**.
 
-The `snowman-meeting-media-gateway` crate and migration 0050 define the media
+The `snowman-meeting-media-gateway` crate and migrations 0050/0056 define the media
 boundary between the consent-complete meeting-control service, native Snowman
 huddles, and explicitly approved phone/speech providers. The `adapters` module
 now builds and parses the provider protocols behind injected transport,
@@ -11,6 +11,16 @@ signature-verifier, sealed-target-resolver, egress-policy, and Secrets Manager
 reference traits. Its tests use only mocks: it does not place a live call,
 connect a live WebSocket, resolve a real conference coordinate, or claim a
 staging-proven Twilio/OpenAI/ElevenLabs integration.
+
+The crate now includes a production-oriented private server executable at
+`/usr/local/bin/snowman-meeting-media-gateway`. Control requests use a
+tenant-scoped, short-lived service token stored only by SHA-256 digest and are
+applied through serializable transactions. Join authority moves to
+`indeterminate` before any injected provider call, so a lost response cannot
+cause exact replay to dial twice. Provider callbacks and WebSocket upgrades are
+on a separate router and require a separately injected callback authenticator.
+The packaged executable injects disabled implementations for both boundaries;
+provider egress, callback ingress, and ECS desired count remain zero.
 
 ## Authority and data boundary
 

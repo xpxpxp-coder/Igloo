@@ -52,6 +52,10 @@ pub const LIFECYCLE_SCHEMA: &str = "snowman.orchestration.lifecycle.v1";
 pub const DELIVERY_SCHEMA: &str = "snowman.orchestration.delivery-result.v1";
 /// Exact terminal execution receipt schema.
 pub const TERMINAL_RECEIPT_SCHEMA: &str = "snowman.orchestration.terminal-receipt.v1";
+/// Exact control-outbox claim request schema.
+pub const CONTROL_CLAIM_SCHEMA: &str = "snowman.orchestration.control-claim.v1";
+/// Exact control-outbox delivery result schema.
+pub const CONTROL_DELIVERY_SCHEMA: &str = "snowman.orchestration.control-delivery.v1";
 /// Pinned timezone data release compiled into the scheduler binary.
 /// Pinned scheduler timezone implementation. This identifies the compiled
 /// crate release; it does not claim an independently verified IANA data tag.
@@ -589,8 +593,123 @@ pub struct DispatchLease {
     pub analyst_context_references: Vec<String>,
     /// Exact broker capabilities.
     pub required_capabilities: Vec<String>,
+    /// Cancellation fence observed at claim time.
+    pub cancellation_generation: u64,
+    /// Worst-case reserved task cost for observability only.
+    pub reserved_cost_microusd: u64,
     /// Lease expiry.
     pub lease_expires_at: DateTime<Utc>,
+}
+
+/// Bounded command kinds that may leave the durable orchestration control outbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlCommandKind {
+    /// Revoke the exact already-submitted coordinator job.
+    CancelDispatch,
+    /// Deliver one fixed, policy-created deadline reminder.
+    DeliverReminder,
+}
+
+impl ControlCommandKind {
+    /// Stable persisted and observability label.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CancelDispatch => "cancel_dispatch",
+            Self::DeliverReminder => "deliver_reminder",
+        }
+    }
+}
+
+/// Exact authenticated request for a bounded batch of due control commands.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlClaimRequest {
+    /// Contract schema.
+    pub schema_version: String,
+    /// Replay-protected request identity.
+    pub request_id: Uuid,
+    /// Exact tenant-bound delivery service identity.
+    pub service_identity_id: Uuid,
+    /// Operations-owned service principal.
+    pub service_principal: String,
+    /// Exact caller-policy generation.
+    pub policy_generation: u64,
+    /// Explicit allowlist for this worker process.
+    pub command_kinds: BTreeSet<ControlCommandKind>,
+    /// Maximum rows returned by this claim.
+    pub max_claims: u16,
+    /// Crash lease duration.
+    pub lease_seconds: u16,
+}
+
+/// One crash-fenced reminder or cancellation command. No destination body,
+/// provider coordinate, client content, or credential is included.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlLease {
+    /// Stable outbox identity.
+    pub outbox_id: Uuid,
+    /// Exact tenant.
+    pub community_id: Uuid,
+    /// Exact workspace.
+    pub workspace_id: Uuid,
+    /// Allowlisted command kind.
+    pub command_kind: ControlCommandKind,
+    /// Exact plan.
+    pub plan_id: Uuid,
+    /// Exact plan generation.
+    pub plan_generation: u64,
+    /// Dispatch coordinate for cancellations only.
+    pub dispatch_id: Option<Uuid>,
+    /// Stable occurrence coordinate.
+    pub occurrence_id: Uuid,
+    /// Digest of the deterministic command fields.
+    pub command_sha256: String,
+    /// Stable coordinator job reference for cancellation only.
+    pub coordinator_job_reference: Option<String>,
+    /// Monotonic claim fence.
+    pub lease_generation: u64,
+    /// Lease expiry.
+    pub lease_expires_at: DateTime<Utc>,
+}
+
+/// Bounded control-delivery outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlDeliveryOutcome {
+    /// The destination durably accepted the exact command.
+    Delivered,
+    /// No acceptance was observed; the same command may be retried.
+    RetryableFailure,
+}
+
+/// Exact digest-only result for one control-outbox lease.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlDeliveryResultCommand {
+    /// Contract schema.
+    pub schema_version: String,
+    /// Exact delivery service identity.
+    pub service_identity_id: Uuid,
+    /// Operations-owned service principal.
+    pub service_principal: String,
+    /// Exact caller-policy generation.
+    pub policy_generation: u64,
+    /// Claimed lease generation.
+    pub lease_generation: u64,
+    /// Digest returned in the claim.
+    pub command_sha256: String,
+    /// Bounded result.
+    pub outcome: ControlDeliveryOutcome,
+    /// Immutable Snowman acceptance coordinate on success.
+    pub delivery_reference: Option<String>,
+    /// Digest of the bounded destination response on success.
+    pub response_sha256: Option<String>,
+    /// Digest of a bounded failure classification on failure.
+    pub failure_sha256: Option<String>,
+    /// Retry delay on retryable failure.
+    pub retry_after_seconds: Option<u16>,
 }
 
 #[derive(Clone)]
@@ -604,6 +723,7 @@ struct VerifiedAuth {
 pub struct Config {
     bind_addr: SocketAddr,
     database_url: String,
+    database_role: String,
     max_connections: u32,
     private_origin: Url,
 }
@@ -627,6 +747,9 @@ impl Config {
             .parse()
             .map_err(|_| ConfigError::Invalid("bind address"))?;
         let database_url = required("SNOWMAN_ORCHESTRATION_DATABASE_URL")?;
+        let database_role = required("SNOWMAN_ORCHESTRATION_DATABASE_ROLE")?;
+        buzz_db::runtime_security::validate_role_name(&database_role)
+            .map_err(|_| ConfigError::Invalid("database role"))?;
         let max_connections = env_value("SNOWMAN_ORCHESTRATION_MAX_CONNECTIONS")
             .unwrap_or_else(|| "8".into())
             .parse::<u32>()
@@ -642,6 +765,7 @@ impl Config {
         Ok(Self {
             bind_addr,
             database_url,
+            database_role,
             max_connections,
             private_origin,
         })
@@ -663,6 +787,9 @@ impl AppState {
             .max_connections(config.max_connections)
             .acquire_timeout(Duration::from_secs(10))
             .connect(&config.database_url)
+            .await
+            .map_err(|_| ConfigError::Database)?;
+        buzz_db::runtime_security::verify_orchestration_role(&pool, &config.database_role)
             .await
             .map_err(|_| ConfigError::Database)?;
         Ok(Self {
@@ -710,6 +837,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/scheduler/cycle",
             post(run_scheduler_cycle),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/scheduler/control-claims",
+            post(claim_control_commands),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/control/{outbox_id}/delivery",
+            post(record_control_delivery),
         )
         .route(
             "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/dispatches/{dispatch_id}/delivery",
@@ -959,6 +1094,65 @@ async fn run_scheduler_cycle(
     Ok(Json(result))
 }
 
+async fn claim_control_commands(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<Vec<ControlLease>>, ApiError> {
+    check_body(&body)?;
+    let url = endpoint_url(
+        &state.private_origin,
+        &format!("v1/tenants/{tenant_id}/workspaces/{workspace_id}/scheduler/control-claims"),
+    )?;
+    let auth = verify_auth(&headers, url.as_str(), &body)?;
+    let request: ControlClaimRequest =
+        serde_json::from_slice(&body).map_err(|_| ApiError(Error::Invalid))?;
+    validate_control_claim(&request)?;
+    let digest: [u8; 32] = Sha256::digest(&body).into();
+    let leases = claim_control_outbox(
+        &state.pool,
+        tenant_id,
+        workspace_id,
+        &request,
+        &auth,
+        digest,
+        Utc::now(),
+    )
+    .await?;
+    Ok(Json(leases))
+}
+
+async fn record_control_delivery(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id, outbox_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<ApiReceipt>, ApiError> {
+    check_body(&body)?;
+    let url = endpoint_url(
+        &state.private_origin,
+        &format!("v1/tenants/{tenant_id}/workspaces/{workspace_id}/control/{outbox_id}/delivery"),
+    )?;
+    let auth = verify_auth(&headers, url.as_str(), &body)?;
+    let command: ControlDeliveryResultCommand =
+        serde_json::from_slice(&body).map_err(|_| ApiError(Error::Invalid))?;
+    validate_control_delivery(&command)?;
+    let digest: [u8; 32] = Sha256::digest(&body).into();
+    let result = persist_control_delivery(
+        &state.pool,
+        tenant_id,
+        workspace_id,
+        outbox_id,
+        &command,
+        &auth,
+        digest,
+        Utc::now(),
+    )
+    .await?;
+    Ok(Json(result))
+}
+
 async fn record_delivery_result(
     State(state): State<AppState>,
     Path((tenant_id, workspace_id, dispatch_id)): Path<(Uuid, Uuid, Uuid)>,
@@ -1135,6 +1329,53 @@ fn validate_scheduler_cycle(request: &SchedulerCycleRequest) -> Result<(), ApiEr
         || request.policy_generation == 0
         || !(1..=MAX_CLAIMS).contains(&request.max_records)
         || !(60..=3_600).contains(&request.submitted_timeout_seconds)
+    {
+        return Err(ApiError(Error::Invalid));
+    }
+    Ok(())
+}
+
+fn validate_control_claim(request: &ControlClaimRequest) -> Result<(), ApiError> {
+    if request.schema_version != CONTROL_CLAIM_SCHEMA
+        || request.request_id.is_nil()
+        || request.service_identity_id.is_nil()
+        || request.policy_generation == 0
+        || request.command_kinds.is_empty()
+        || request.command_kinds.len() > 2
+        || !(1..=MAX_CLAIMS).contains(&request.max_claims)
+        || !(30..=900).contains(&request.lease_seconds)
+    {
+        return Err(ApiError(Error::Invalid));
+    }
+    Ok(())
+}
+
+fn validate_control_delivery(command: &ControlDeliveryResultCommand) -> Result<(), ApiError> {
+    let delivered = command.outcome == ControlDeliveryOutcome::Delivered;
+    if command.schema_version != CONTROL_DELIVERY_SCHEMA
+        || command.service_identity_id.is_nil()
+        || command.policy_generation == 0
+        || command.lease_generation == 0
+        || !valid_hex_digest(&command.command_sha256)
+        || delivered
+            != (command
+                .delivery_reference
+                .as_deref()
+                .is_some_and(valid_control_delivery_reference)
+                && command
+                    .response_sha256
+                    .as_deref()
+                    .is_some_and(valid_hex_digest))
+        || delivered != command.failure_sha256.is_none()
+        || delivered == command.retry_after_seconds.is_some()
+        || (!delivered
+            && command
+                .failure_sha256
+                .as_deref()
+                .is_none_or(|value| !valid_hex_digest(value)))
+        || command
+            .retry_after_seconds
+            .is_some_and(|seconds| !(1..=MAX_RETRY_SECONDS).contains(&seconds))
     {
         return Err(ApiError(Error::Invalid));
     }
@@ -3476,6 +3717,400 @@ async fn finalize_occurrence_if_terminal(
     Ok(())
 }
 
+async fn claim_control_outbox(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    request: &ControlClaimRequest,
+    auth: &VerifiedAuth,
+    digest: [u8; 32],
+    now: DateTime<Utc>,
+) -> Result<Vec<ControlLease>, ApiError> {
+    let mut tx = serializable(pool).await?;
+    authorize_and_record(
+        &mut tx,
+        Scope {
+            tenant_id,
+            workspace_id,
+            identity_id: request.service_identity_id,
+            principal: &request.service_principal,
+            policy_generation: request.policy_generation,
+            capability: "orchestration.scheduler.control",
+        },
+        auth,
+        digest,
+        now,
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE snowman_orchestration_control_outbox o SET status='cancelled',updated_at=$1 \
+         FROM snowman_orchestration_plans p WHERE o.community_id=$2 AND o.workspace_id=$3 \
+           AND o.command_kind='deliver_reminder' AND o.status IN ('pending','leased') \
+           AND p.community_id=o.community_id AND p.plan_id=o.plan_id \
+           AND p.generation=o.plan_generation AND p.state<>'active'",
+    )
+    .bind(now)
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let command_kinds = request
+        .command_kinds
+        .iter()
+        .map(|kind| kind.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let rows = sqlx::query(
+        "SELECT o.outbox_id,o.command_kind,o.plan_id,o.plan_generation,o.dispatch_id,o.occurrence_id,\
+                o.command_sha256,o.attempt_count,o.max_attempts,o.lease_generation,\
+                d.coordinator_job_reference \
+         FROM snowman_orchestration_control_outbox o \
+         JOIN snowman_orchestration_plans p ON p.community_id=o.community_id \
+           AND p.plan_id=o.plan_id AND p.generation=o.plan_generation \
+         LEFT JOIN snowman_orchestration_dispatches d ON d.community_id=o.community_id \
+           AND d.dispatch_id=o.dispatch_id \
+         WHERE o.community_id=$1 AND o.workspace_id=$2 AND o.command_kind=ANY($3) \
+           AND ((o.status='pending' AND o.next_attempt_at<=$4) \
+             OR (o.status='leased' AND o.lease_expires_at<=$4)) \
+           AND o.attempt_count<o.max_attempts \
+           AND (o.command_kind='cancel_dispatch' OR p.state='active') \
+         ORDER BY o.next_attempt_at,o.outbox_id FOR UPDATE OF o SKIP LOCKED LIMIT $5",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(command_kinds)
+    .bind(now)
+    .bind(i64::from(request.max_claims))
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?;
+    let lease_expires_at = now + ChronoDuration::seconds(i64::from(request.lease_seconds));
+    let mut leases = Vec::with_capacity(rows.len());
+    for row in rows {
+        let outbox_id: Uuid = row
+            .try_get("outbox_id")
+            .map_err(|_| ApiError(Error::Database))?;
+        let prior_generation: i64 = row
+            .try_get("lease_generation")
+            .map_err(|_| ApiError(Error::Database))?;
+        let next_generation = prior_generation
+            .checked_add(1)
+            .ok_or(ApiError(Error::Conflict))?;
+        let attempt_count: i32 = row
+            .try_get("attempt_count")
+            .map_err(|_| ApiError(Error::Database))?;
+        let updated = sqlx::query(
+            "UPDATE snowman_orchestration_control_outbox SET status='leased',lease_generation=$1,\
+             lease_owner_identity_id=$2,lease_expires_at=$3,attempt_count=$4,updated_at=$5 \
+             WHERE community_id=$6 AND workspace_id=$7 AND outbox_id=$8 \
+               AND status IN ('pending','leased') AND lease_generation=$9",
+        )
+        .bind(next_generation)
+        .bind(request.service_identity_id)
+        .bind(lease_expires_at)
+        .bind(attempt_count + 1)
+        .bind(now)
+        .bind(tenant_id)
+        .bind(workspace_id)
+        .bind(outbox_id)
+        .bind(prior_generation)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+        if updated.rows_affected() != 1 {
+            return Err(ApiError(Error::Conflict));
+        }
+        let kind: String = row
+            .try_get("command_kind")
+            .map_err(|_| ApiError(Error::Database))?;
+        let command_kind = match kind.as_str() {
+            "cancel_dispatch" => ControlCommandKind::CancelDispatch,
+            "deliver_reminder" => ControlCommandKind::DeliverReminder,
+            _ => return Err(ApiError(Error::Database)),
+        };
+        let command_sha256: Vec<u8> = row
+            .try_get("command_sha256")
+            .map_err(|_| ApiError(Error::Database))?;
+        if command_sha256.len() != 32 {
+            return Err(ApiError(Error::Database));
+        }
+        leases.push(ControlLease {
+            outbox_id,
+            community_id: tenant_id,
+            workspace_id,
+            command_kind,
+            plan_id: row
+                .try_get("plan_id")
+                .map_err(|_| ApiError(Error::Database))?,
+            plan_generation: u64::try_from(
+                row.try_get::<i64, _>("plan_generation")
+                    .map_err(|_| ApiError(Error::Database))?,
+            )
+            .map_err(|_| ApiError(Error::Database))?,
+            dispatch_id: row
+                .try_get("dispatch_id")
+                .map_err(|_| ApiError(Error::Database))?,
+            occurrence_id: row
+                .try_get("occurrence_id")
+                .map_err(|_| ApiError(Error::Database))?,
+            command_sha256: hex::encode(command_sha256),
+            coordinator_job_reference: row
+                .try_get("coordinator_job_reference")
+                .map_err(|_| ApiError(Error::Database))?,
+            lease_generation: u64::try_from(next_generation)
+                .map_err(|_| ApiError(Error::Database))?,
+            lease_expires_at,
+        });
+    }
+    tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+    Ok(leases)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn persist_control_delivery(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    outbox_id: Uuid,
+    command: &ControlDeliveryResultCommand,
+    auth: &VerifiedAuth,
+    request_digest: [u8; 32],
+    now: DateTime<Utc>,
+) -> Result<ApiReceipt, ApiError> {
+    let mut tx = serializable(pool).await?;
+    authorize_and_record(
+        &mut tx,
+        Scope {
+            tenant_id,
+            workspace_id,
+            identity_id: command.service_identity_id,
+            principal: &command.service_principal,
+            policy_generation: command.policy_generation,
+            capability: "orchestration.scheduler.control",
+        },
+        auth,
+        request_digest,
+        now,
+    )
+    .await?;
+    if let Some(prior) = sqlx::query(
+        "SELECT r.request_sha256,o.plan_id,o.plan_generation \
+         FROM snowman_orchestration_control_delivery_receipts r \
+         JOIN snowman_orchestration_control_outbox o ON o.community_id=r.community_id \
+           AND o.outbox_id=r.outbox_id \
+         WHERE r.community_id=$1 AND r.outbox_id=$2 AND r.lease_generation=$3",
+    )
+    .bind(tenant_id)
+    .bind(outbox_id)
+    .bind(command.lease_generation as i64)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    {
+        let prior_digest: Vec<u8> = prior
+            .try_get("request_sha256")
+            .map_err(|_| ApiError(Error::Database))?;
+        if prior_digest != request_digest {
+            return Err(ApiError(Error::Conflict));
+        }
+        let scope = PlanScope {
+            tenant_id,
+            workspace_id,
+            plan_id: prior
+                .try_get("plan_id")
+                .map_err(|_| ApiError(Error::Database))?,
+        };
+        let generation = u64::try_from(
+            prior
+                .try_get::<i64, _>("plan_generation")
+                .map_err(|_| ApiError(Error::Database))?,
+        )
+        .map_err(|_| ApiError(Error::Database))?;
+        tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+        return Ok(scoped_receipt(
+            outbox_id,
+            scope,
+            generation,
+            "duplicate",
+            request_digest,
+            now,
+        ));
+    }
+    let row = sqlx::query(
+        "SELECT command_kind,plan_id,plan_generation,dispatch_id,occurrence_id,command_sha256,\
+                attempt_count,max_attempts,lease_generation,lease_owner_identity_id,lease_expires_at \
+         FROM snowman_orchestration_control_outbox WHERE community_id=$1 AND workspace_id=$2 \
+           AND outbox_id=$3 AND status='leased' FOR UPDATE",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(outbox_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|_| ApiError(Error::Database))?
+    .ok_or(ApiError(Error::Conflict))?;
+    let stored_command_digest: Vec<u8> = row
+        .try_get("command_sha256")
+        .map_err(|_| ApiError(Error::Database))?;
+    let lease_owner: Option<Uuid> = row
+        .try_get("lease_owner_identity_id")
+        .map_err(|_| ApiError(Error::Database))?;
+    let lease_expiry: Option<DateTime<Utc>> = row
+        .try_get("lease_expires_at")
+        .map_err(|_| ApiError(Error::Database))?;
+    if lease_owner != Some(command.service_identity_id)
+        || row
+            .try_get::<i64, _>("lease_generation")
+            .map_err(|_| ApiError(Error::Database))?
+            != command.lease_generation as i64
+        || lease_expiry.is_none_or(|expiry| expiry <= now)
+        || stored_command_digest != decode_digest(&command.command_sha256)?
+    {
+        return Err(ApiError(Error::Conflict));
+    }
+    let kind: String = row
+        .try_get("command_kind")
+        .map_err(|_| ApiError(Error::Database))?;
+    let attempt_count: i32 = row
+        .try_get("attempt_count")
+        .map_err(|_| ApiError(Error::Database))?;
+    let max_attempts: i32 = row
+        .try_get("max_attempts")
+        .map_err(|_| ApiError(Error::Database))?;
+    let outcome = if command.outcome == ControlDeliveryOutcome::Delivered {
+        "delivered"
+    } else if attempt_count >= max_attempts {
+        "dead_letter"
+    } else {
+        "retryable_failure"
+    };
+    sqlx::query(
+        "INSERT INTO snowman_orchestration_control_delivery_receipts \
+         (community_id,workspace_id,outbox_id,lease_generation,command_kind,command_sha256,\
+          request_sha256,outcome,delivery_reference,response_sha256,failure_sha256,accepted_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(outbox_id)
+    .bind(command.lease_generation as i64)
+    .bind(&kind)
+    .bind(&stored_command_digest)
+    .bind(request_digest.as_slice())
+    .bind(outcome)
+    .bind(&command.delivery_reference)
+    .bind(
+        command
+            .response_sha256
+            .as_deref()
+            .map(decode_digest)
+            .transpose()?,
+    )
+    .bind(
+        command
+            .failure_sha256
+            .as_deref()
+            .map(decode_digest)
+            .transpose()?,
+    )
+    .bind(now)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_conflict)?;
+    if outcome == "delivered" {
+        sqlx::query(
+            "UPDATE snowman_orchestration_control_outbox SET status='delivered',\
+             lease_owner_identity_id=NULL,lease_expires_at=NULL,updated_at=$1 \
+             WHERE community_id=$2 AND outbox_id=$3 AND lease_generation=$4 AND status='leased'",
+        )
+        .bind(now)
+        .bind(tenant_id)
+        .bind(outbox_id)
+        .bind(command.lease_generation as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+        if kind == "deliver_reminder" {
+            let plan_id: Uuid = row
+                .try_get("plan_id")
+                .map_err(|_| ApiError(Error::Database))?;
+            let plan_generation: i64 = row
+                .try_get("plan_generation")
+                .map_err(|_| ApiError(Error::Database))?;
+            let occurrence_id: Uuid = row
+                .try_get("occurrence_id")
+                .map_err(|_| ApiError(Error::Database))?;
+            sqlx::query(
+                "UPDATE snowman_orchestration_reminder_receipts SET status='delivered',delivered_at=$1 \
+                 WHERE community_id=$2 AND plan_id=$3 AND plan_generation=$4 \
+                   AND occurrence_id=$5 AND status='pending'",
+            )
+            .bind(now)
+            .bind(tenant_id)
+            .bind(plan_id)
+            .bind(plan_generation)
+            .bind(occurrence_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| ApiError(Error::Database))?;
+        }
+    } else if outcome == "retryable_failure" {
+        let retry_at = now
+            + ChronoDuration::seconds(i64::from(
+                command
+                    .retry_after_seconds
+                    .ok_or(ApiError(Error::Invalid))?,
+            ));
+        sqlx::query(
+            "UPDATE snowman_orchestration_control_outbox SET status='pending',\
+             lease_owner_identity_id=NULL,lease_expires_at=NULL,next_attempt_at=$1,updated_at=$2 \
+             WHERE community_id=$3 AND outbox_id=$4 AND lease_generation=$5 AND status='leased'",
+        )
+        .bind(retry_at)
+        .bind(now)
+        .bind(tenant_id)
+        .bind(outbox_id)
+        .bind(command.lease_generation as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+    } else {
+        sqlx::query(
+            "UPDATE snowman_orchestration_control_outbox SET status='dead_letter',\
+             lease_owner_identity_id=NULL,lease_expires_at=NULL,updated_at=$1 \
+             WHERE community_id=$2 AND outbox_id=$3 AND lease_generation=$4 AND status='leased'",
+        )
+        .bind(now)
+        .bind(tenant_id)
+        .bind(outbox_id)
+        .bind(command.lease_generation as i64)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| ApiError(Error::Database))?;
+    }
+    let scope = PlanScope {
+        tenant_id,
+        workspace_id,
+        plan_id: row
+            .try_get("plan_id")
+            .map_err(|_| ApiError(Error::Database))?,
+    };
+    let generation = u64::try_from(
+        row.try_get::<i64, _>("plan_generation")
+            .map_err(|_| ApiError(Error::Database))?,
+    )
+    .map_err(|_| ApiError(Error::Database))?;
+    tx.commit().await.map_err(|_| ApiError(Error::Database))?;
+    Ok(scoped_receipt(
+        outbox_id,
+        scope,
+        generation,
+        outcome,
+        request_digest,
+        now,
+    ))
+}
+
 async fn claim_ready_dispatches(
     pool: &PgPool,
     tenant_id: Uuid,
@@ -3504,7 +4139,7 @@ async fn claim_ready_dispatches(
     let rows = sqlx::query(
         "SELECT d.dispatch_id,d.plan_id,d.plan_generation,d.task_id,d.lease_generation,\
                 d.coordinator_job_reference,d.model_route_reference,d.analyst_context_references,\
-                d.required_capabilities,d.attempt_count,d.max_attempts,d.cancellation_generation \
+                d.required_capabilities,d.reserved_cost_microusd,d.attempt_count,d.max_attempts,d.cancellation_generation \
          FROM snowman_orchestration_dispatches d \
          JOIN snowman_orchestration_plans p ON p.community_id=d.community_id AND p.plan_id=d.plan_id \
            AND p.generation=d.plan_generation \
@@ -3582,6 +4217,16 @@ async fn claim_ready_dispatches(
             required_capabilities: row
                 .try_get("required_capabilities")
                 .map_err(|_| ApiError(Error::Database))?,
+            cancellation_generation: u64::try_from(
+                row.try_get::<i64, _>("cancellation_generation")
+                    .map_err(|_| ApiError(Error::Database))?,
+            )
+            .map_err(|_| ApiError(Error::Database))?,
+            reserved_cost_microusd: u64::try_from(
+                row.try_get::<i64, _>("reserved_cost_microusd")
+                    .map_err(|_| ApiError(Error::Database))?,
+            )
+            .map_err(|_| ApiError(Error::Database))?,
             lease_expires_at,
         });
     }
@@ -3889,6 +4534,15 @@ fn valid_any_execution_ref(value: &str) -> bool {
     ]
     .iter()
     .any(|prefix| valid_execution_ref(value, prefix))
+}
+
+fn valid_control_delivery_reference(value: &str) -> bool {
+    for prefix in ["snowman:agent-job:", "snowman:reminder-delivery:"] {
+        if valid_execution_ref(value, prefix) {
+            return true;
+        }
+    }
+    false
 }
 
 fn terminal_outcome(value: TerminalOutcome) -> &'static str {

@@ -434,6 +434,71 @@ pub async fn provision_meeting_control_role(
     Ok(())
 }
 
+/// Create or reconcile the private meeting-media login. It may read only the
+/// admitted meeting/consent authority needed to fence a live session, maintain
+/// its digest-only media ledgers, and append bounded tool intents. It cannot
+/// read collaboration content, evidence bodies, agent/model authority, or
+/// delete/rewrite immutable receipts.
+pub async fn provision_meeting_media_role(pool: &PgPool, role: &str, password: &str) -> Result<()> {
+    validate_role_name(role)?;
+    if password.len() < 32 {
+        return Err(DbError::InvalidData(
+            "meeting media database password must contain at least 32 characters".into(),
+        ));
+    }
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await?;
+    let role_identifier = quote_identifier(role);
+    let database_identifier = quote_identifier(&database);
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT set_config('snowman.meeting_media_role_password', $1, true)")
+        .bind(password)
+        .execute(&mut *transaction)
+        .await?;
+    let role_ddl = format!(
+        "DO $snowman$\n\
+         BEGIN\n\
+           IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n\
+             CREATE ROLE {role_identifier} LOGIN;\n\
+           END IF;\n\
+           ALTER ROLE {role_identifier}\n\
+             WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n\
+           EXECUTE format('ALTER ROLE %I PASSWORD %L', '{role}',\n\
+             current_setting('snowman.meeting_media_role_password'));\n\
+         END\n\
+         $snowman$;"
+    );
+    sqlx::raw_sql(AssertSqlSafe(role_ddl))
+        .execute(&mut *transaction)
+        .await?;
+    let grants = format!(
+        "REVOKE ALL ON DATABASE {database_identifier} FROM {role_identifier};\n\
+         REVOKE ALL ON SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role_identifier};\n\
+         GRANT CONNECT ON DATABASE {database_identifier} TO {role_identifier};\n\
+         GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
+         GRANT SELECT ON TABLE snowman_workforce_identities,\n\
+           snowman_meeting_mailboxes,snowman_meetings,snowman_meeting_sessions,\n\
+           snowman_meeting_participant_consents,snowman_meeting_media_routes,\n\
+           snowman_meeting_media_callers,snowman_meeting_media_callback_bindings\n\
+           TO {role_identifier};\n\
+         GRANT SELECT,INSERT,UPDATE ON TABLE snowman_meeting_media_sessions,\n\
+           snowman_meeting_media_provider_sessions TO {role_identifier};\n\
+         GRANT SELECT,INSERT ON TABLE snowman_meeting_media_commands,\n\
+           snowman_meeting_media_webhook_receipts,\n\
+           snowman_meeting_media_usage_receipts,\n\
+           snowman_meeting_media_turn_receipts,\n\
+           snowman_meeting_tool_intents TO {role_identifier};"
+    );
+    sqlx::raw_sql(AssertSqlSafe(grants))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
 /// Fail closed unless the private agent broker has only its exact job-ledger
 /// read/update authority and no creation, insert, delete, or relay-table access.
 pub async fn verify_agent_broker_role(pool: &PgPool, expected_role: &str) -> Result<()> {
@@ -625,6 +690,59 @@ pub async fn verify_meeting_control_role(pool: &PgPool, expected_role: &str) -> 
     Ok(())
 }
 
+/// Fail closed unless the meeting-media runtime has only its admitted-state
+/// reads, digest-ledger writes, and append-only intent authority.
+pub async fn verify_meeting_media_role(pool: &PgPool, expected_role: &str) -> Result<()> {
+    validate_role_name(expected_role)?;
+    let valid: bool = sqlx::query_scalar(
+        "SELECT current_user=$1 \
+         AND has_database_privilege(current_user,current_database(),'CONNECT') \
+         AND NOT has_database_privilege(current_user,current_database(),'CREATE') \
+         AND has_schema_privilege(current_user,'public','USAGE') \
+         AND NOT has_schema_privilege(current_user,'public','CREATE') \
+         AND has_table_privilege(current_user,'snowman_meetings','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_meetings','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_sessions','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_sessions','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_participant_consents','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_participant_consents','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_media_routes','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_routes','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_media_callers','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_callers','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_media_callback_bindings','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_callback_bindings','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_media_sessions','SELECT,INSERT,UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_sessions','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_media_provider_sessions','SELECT,INSERT,UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_provider_sessions','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_media_commands','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_commands','UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_media_usage_receipts','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_usage_receipts','UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_media_turn_receipts','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_turn_receipts','UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_media_webhook_receipts','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_media_webhook_receipts','UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_meeting_tool_intents','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_meeting_tool_intents','UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'events','SELECT') \
+         AND NOT has_table_privilege(current_user,'channels','SELECT') \
+         AND NOT has_table_privilege(current_user,'audit_log','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_model_generations','SELECT')",
+    )
+    .bind(expected_role)
+    .fetch_one(pool)
+    .await?;
+    if !valid {
+        return Err(DbError::InvalidData(
+            "meeting media database identity violates its exact live-media boundary".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Fail closed unless the connected serving identity has its required DML
 /// capabilities and lacks database/schema creation authority.
 pub async fn verify_runtime_role(pool: &PgPool, expected_role: &str) -> Result<()> {
@@ -713,6 +831,118 @@ pub async fn verify_runtime_role(pool: &PgPool, expected_role: &str) -> Result<(
     Ok(())
 }
 
+/// Create or reconcile the private orchestration-service login. It may mutate
+/// only the metadata-only orchestration lifecycle, append auth/receipt
+/// evidence, and inspect exact workforce identity/capability bindings. It has
+/// no collaboration, agent-job, provider, media, audit, or Analyst data access.
+pub async fn provision_orchestration_role(pool: &PgPool, role: &str, password: &str) -> Result<()> {
+    validate_role_name(role)?;
+    if password.len() < 32 {
+        return Err(DbError::InvalidData(
+            "orchestration database password must contain at least 32 characters".into(),
+        ));
+    }
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await?;
+    let role_identifier = quote_identifier(role);
+    let database_identifier = quote_identifier(&database);
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT set_config('snowman.orchestration_role_password', $1, true)")
+        .bind(password)
+        .execute(&mut *transaction)
+        .await?;
+    let role_ddl = format!(
+        "DO $snowman$\n\
+         BEGIN\n\
+           IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n\
+             CREATE ROLE {role_identifier} LOGIN;\n\
+           END IF;\n\
+           ALTER ROLE {role_identifier}\n\
+             WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n\
+           EXECUTE format('ALTER ROLE %I PASSWORD %L', '{role}',\n\
+             current_setting('snowman.orchestration_role_password'));\n\
+         END\n\
+         $snowman$;"
+    );
+    sqlx::raw_sql(AssertSqlSafe(role_ddl))
+        .execute(&mut *transaction)
+        .await?;
+    let grants = format!(
+        "REVOKE ALL ON DATABASE {database_identifier} FROM {role_identifier};\n\
+         REVOKE ALL ON SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role_identifier};\n\
+         GRANT CONNECT ON DATABASE {database_identifier} TO {role_identifier};\n\
+         GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
+         GRANT SELECT ON TABLE snowman_workforce_identities,\n\
+           snowman_workforce_key_bindings,snowman_workforce_capability_grants\n\
+           TO {role_identifier};\n\
+         GRANT SELECT,INSERT ON TABLE snowman_orchestration_auth_events,\n\
+           snowman_orchestration_commands,snowman_orchestration_delivery_attempts,\n\
+           snowman_orchestration_terminal_receipts,snowman_orchestration_dead_letters,\n\
+           snowman_orchestration_progress_digests,\n\
+           snowman_orchestration_control_delivery_receipts\n\
+           TO {role_identifier};\n\
+         GRANT SELECT,INSERT,UPDATE ON TABLE snowman_orchestration_plans,\n\
+           snowman_orchestration_schedule_policies,\n\
+           snowman_orchestration_plan_automatic_capabilities,\n\
+           snowman_orchestration_personas,snowman_orchestration_persona_capabilities,\n\
+           snowman_orchestration_tasks,snowman_orchestration_task_context_refs,\n\
+           snowman_orchestration_task_dependencies,\n\
+           snowman_orchestration_task_required_capabilities,\n\
+           snowman_orchestration_task_artifact_contracts,\n\
+           snowman_orchestration_recurrences,snowman_orchestration_dispatches,\n\
+           snowman_orchestration_dispatch_receipts,\n\
+           snowman_orchestration_reminder_receipts,\n\
+           snowman_orchestration_occurrences,snowman_orchestration_control_outbox\n\
+           TO {role_identifier};\n\
+         GRANT SELECT ON TABLE snowman_orchestration_callers TO {role_identifier};"
+    );
+    sqlx::raw_sql(AssertSqlSafe(grants))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Fail closed unless the orchestration service runs with only its exact
+/// metadata-control privileges and cannot reach user content or execution
+/// authority owned by other Snowman services.
+pub async fn verify_orchestration_role(pool: &PgPool, expected_role: &str) -> Result<()> {
+    validate_role_name(expected_role)?;
+    let valid: bool = sqlx::query_scalar(
+        "SELECT current_user=$1 \
+         AND has_database_privilege(current_user,current_database(),'CONNECT') \
+         AND NOT has_database_privilege(current_user,current_database(),'CREATE') \
+         AND has_schema_privilege(current_user,'public','USAGE') \
+         AND NOT has_schema_privilege(current_user,'public','CREATE') \
+         AND has_table_privilege(current_user,'snowman_orchestration_callers','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_callers','INSERT,UPDATE,DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_orchestration_plans','SELECT,INSERT,UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_plans','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_orchestration_control_outbox','SELECT,INSERT,UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_control_outbox','DELETE,TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_orchestration_control_delivery_receipts','SELECT,INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_control_delivery_receipts','UPDATE,DELETE,TRUNCATE') \
+         AND NOT has_table_privilege(current_user,'events','SELECT') \
+         AND NOT has_table_privilege(current_user,'channels','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_agent_jobs','INSERT,UPDATE,DELETE') \
+         AND NOT has_table_privilege(current_user,'snowman_meetings','SELECT') \
+         AND NOT has_table_privilege(current_user,'audit_log','SELECT')",
+    )
+    .bind(expected_role)
+    .fetch_one(pool)
+    .await?;
+    if !valid {
+        return Err(DbError::InvalidData(
+            "orchestration database identity violates its exact metadata-control boundary".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -792,5 +1022,17 @@ mod tests {
         );
         assert!(source
             .contains("meeting control database identity violates its exact meeting boundary"));
+    }
+
+    #[test]
+    fn orchestration_role_is_metadata_only_and_receipts_are_append_only() {
+        let source = include_str!("runtime_security.rs");
+        assert!(source.contains("pub async fn verify_orchestration_role"));
+        assert!(source
+            .contains("snowman_orchestration_control_delivery_receipts','UPDATE,DELETE,TRUNCATE'"));
+        assert!(source.contains("NOT has_table_privilege(current_user,'events','SELECT')"));
+        assert!(source.contains(
+            "orchestration database identity violates its exact metadata-control boundary"
+        ));
     }
 }

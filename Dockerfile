@@ -73,6 +73,9 @@ RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
                                    -p snowman-model-gateway --bin snowman-model-gateway \
                                    -p snowman-audit-checkpoint --bin snowman-audit-checkpoint \
                                    -p snowman-meeting-command-service --bin snowman-meeting-command-service \
+                                   -p snowman-meeting-media-gateway --bin snowman-meeting-media-gateway \
+                                   -p snowman-orchestration-service --bin snowman-orchestration-service \
+                                   -p snowman-orchestration-worker --bin snowman-orchestration-worker \
                                    -p snowman-workforce-worker --bins \
     && strip target/release/buzz-relay \
     && strip target/release/buzz-admin \
@@ -83,6 +86,9 @@ RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
     && strip target/release/snowman-model-gateway \
     && strip target/release/snowman-audit-checkpoint \
     && strip target/release/snowman-meeting-command-service \
+    && strip target/release/snowman-meeting-media-gateway \
+    && strip target/release/snowman-orchestration-service \
+    && strip target/release/snowman-orchestration-worker \
     && strip target/release/snowman-workforce-worker \
     && strip target/release/snowman-workforce-scheduler \
     && strip target/release/snowman-workforce-trigger \
@@ -160,6 +166,9 @@ COPY --from=builder    /build/target/release/snowman-agent-coordinator /usr/loca
 COPY --from=builder    /build/target/release/snowman-model-gateway /usr/local/bin/snowman-model-gateway
 COPY --from=builder    /build/target/release/snowman-audit-checkpoint /usr/local/bin/snowman-audit-checkpoint
 COPY --from=builder    /build/target/release/snowman-meeting-command-service /usr/local/bin/snowman-meeting-command-service
+COPY --from=builder    /build/target/release/snowman-meeting-media-gateway /usr/local/bin/snowman-meeting-media-gateway
+COPY --from=builder    /build/target/release/snowman-orchestration-service /usr/local/bin/snowman-orchestration-service
+COPY --from=builder    /build/target/release/snowman-orchestration-worker /usr/local/bin/snowman-orchestration-worker
 COPY --from=builder    /build/target/release/snowman-workforce-worker /usr/local/bin/snowman-workforce-worker
 COPY --from=builder    /build/target/release/snowman-workforce-scheduler /usr/local/bin/snowman-workforce-scheduler
 COPY --from=builder    /build/target/release/snowman-workforce-trigger /usr/local/bin/snowman-workforce-trigger

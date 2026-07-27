@@ -1,7 +1,8 @@
 # Meeting services: dormant AWS deployment contract
 
-Status: **Terraform-packaged command service; media runtime deliberately absent
-until executable and staged evidence exist; no AWS resources have been applied**.
+Status: **Terraform-packaged command and default-off media executables; media
+deployment remains absent until immutable runtime evidence exists; no AWS
+resources have been applied**.
 
 The Command Center AWS root packages the meeting path as two separate private
 services. Google Workspace mail and Calendar intake remains in Analyst 360 and
@@ -34,17 +35,22 @@ ingress is disabled.
 
 ## Meeting-media service
 
-The provider-neutral media crate is not yet a server executable. Terraform
-therefore creates no media task definition, service, Cloud Map namespace, IAM
-execution role, or autoscaling target unless both of these immutable inputs are
-present:
+The provider-neutral media crate now packages the private
+`snowman-meeting-media-gateway` executable. It exposes authenticated join,
+stop, usage, and bounded intent routes on its private control listener and a
+different callback/WebSocket router for provider ingress. The shipped runtime
+injects fail-closed provider and callback implementations, so it cannot dial,
+stream, or accept a callback. Terraform still creates no media task definition,
+service, Cloud Map namespace, IAM execution role, or autoscaling target unless
+both of these immutable inputs are present:
 
 - a reviewed `/usr/local/bin/snowman-meeting-media-gateway` entrypoint; and
 - a SHA-256 evidence digest covering executable provenance, consent fencing,
   callback authentication, tenant isolation, kill switches, raw-audio
   non-persistence, recovery, and staged UAT.
 
-Even then, the checked-in desired count remains zero. The conditional task has
+Even then, the checked-in desired count remains zero and callback ingress is
+hard-disabled. The conditional task has
 no AWS task role, no S3 permission, no model permission, no queue permission,
 no provider credential, no public IP, and no direct internet route. It receives
 only a dedicated `snowman_meeting_media` database URL, has a read-only root,

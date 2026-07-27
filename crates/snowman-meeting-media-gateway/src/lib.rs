@@ -21,6 +21,9 @@ use uuid::Uuid;
 
 /// Executable, transport-injected provider adapters for governed live media.
 pub mod adapters;
+/// Private server, transactional repository, and separately authenticated
+/// provider-ingress boundaries.
+pub mod server;
 
 /// Contract schema for a join command.
 pub const JOIN_SCHEMA: &str = "snowman.meeting-media.join.v1";
@@ -366,6 +369,9 @@ pub struct ProviderPlan {
 pub enum SessionStatus {
     /// Join plan released; provider establishment is pending.
     Joining,
+    /// Provider execution may have crossed the network boundary but no final
+    /// receipt is durable; exact replay cannot invoke it again.
+    Indeterminate,
     /// Provider session is active.
     Active,
     /// Cancellation, budget, or deadline teardown is pending.
@@ -517,7 +523,7 @@ impl UsageReceipt {
 }
 
 /// Result of accounting one exact provider usage receipt.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub enum UsageAccounting {
     /// The increment was inside the session ceiling.
     Accounted {

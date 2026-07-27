@@ -1069,19 +1069,27 @@ async fn main() -> anyhow::Result<()> {
     let audit_checkpoint_secret_arn = required_env("SNOWMAN_AUDIT_CHECKPOINT_RUNTIME_SECRET_ARN")?;
     let audit_checkpoint_role = required_env("SNOWMAN_AUDIT_CHECKPOINT_DB_ROLE")?;
     buzz_db::runtime_security::validate_role_name(&audit_checkpoint_role)?;
+    let orchestration_secret_arn = required_env("SNOWMAN_ORCHESTRATION_RUNTIME_SECRET_ARN")?;
+    let orchestration_role = required_env("SNOWMAN_ORCHESTRATION_DB_ROLE")?;
+    buzz_db::runtime_security::validate_role_name(&orchestration_role)?;
+    let meeting_media_secret_arn = required_env("SNOWMAN_MEETING_MEDIA_RUNTIME_SECRET_ARN")?;
+    let meeting_media_role = required_env("SNOWMAN_MEETING_MEDIA_DB_ROLE")?;
+    buzz_db::runtime_security::validate_role_name(&meeting_media_role)?;
     if [
         runtime_role.as_str(),
         agent_broker_role.as_str(),
         agent_coordinator_role.as_str(),
         model_gateway_role.as_str(),
         audit_checkpoint_role.as_str(),
+        orchestration_role.as_str(),
+        meeting_media_role.as_str(),
     ]
     .into_iter()
     .collect::<std::collections::BTreeSet<_>>()
     .len()
-        != 5
+        != 7
     {
-        bail!("relay, agent broker, agent coordinator, model gateway, and audit checkpoint database roles must be distinct");
+        bail!("relay, agent broker, agent coordinator, model gateway, audit checkpoint, orchestration, and meeting media database roles must be distinct");
     }
     let owner_pubkey = required_env("SNOWMAN_RELAY_OWNER_PUBKEY")?.to_ascii_lowercase();
     validate_owner_pubkey(&owner_pubkey)?;
@@ -1158,6 +1166,24 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Zeroizing::new(random_hex())
     };
+    let existing_orchestration =
+        existing_database_runtime_secret(&secrets, &orchestration_secret_arn).await?;
+    let mut orchestration_password = if let Some(existing) = &existing_orchestration {
+        let parsed = url::Url::parse(&existing.database_url)
+            .context("orchestration DATABASE_URL is not a URL")?;
+        Zeroizing::new(decoded_url_password(&parsed)?)
+    } else {
+        Zeroizing::new(random_hex())
+    };
+    let existing_meeting_media =
+        existing_database_runtime_secret(&secrets, &meeting_media_secret_arn).await?;
+    let mut meeting_media_password = if let Some(existing) = &existing_meeting_media {
+        let parsed = url::Url::parse(&existing.database_url)
+            .context("meeting media DATABASE_URL is not a URL")?;
+        Zeroizing::new(decoded_url_password(&parsed)?)
+    } else {
+        Zeroizing::new(random_hex())
+    };
 
     let admin = PgPoolOptions::new()
         .max_connections(1)
@@ -1195,6 +1221,18 @@ async fn main() -> anyhow::Result<()> {
         &admin,
         &audit_checkpoint_role,
         &audit_checkpoint_password,
+    )
+    .await?;
+    buzz_db::runtime_security::provision_orchestration_role(
+        &admin,
+        &orchestration_role,
+        &orchestration_password,
+    )
+    .await?;
+    buzz_db::runtime_security::provision_meeting_media_role(
+        &admin,
+        &meeting_media_role,
+        &meeting_media_password,
     )
     .await?;
     buzz_db::partition::ensure_future_partitions(&admin, 6).await?;
@@ -1273,6 +1311,36 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     audit_checkpoint.close().await;
 
+    let orchestration_url = database_url(
+        &master,
+        &database,
+        &orchestration_role,
+        &orchestration_password,
+    )?;
+    let orchestration = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&orchestration_url)
+        .await
+        .context("could not verify the provisioned orchestration identity")?;
+    buzz_db::runtime_security::verify_orchestration_role(&orchestration, &orchestration_role)
+        .await?;
+    orchestration.close().await;
+
+    let meeting_media_url = database_url(
+        &master,
+        &database,
+        &meeting_media_role,
+        &meeting_media_password,
+    )?;
+    let meeting_media = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&meeting_media_url)
+        .await
+        .context("could not verify the provisioned meeting media identity")?;
+    buzz_db::runtime_security::verify_meeting_media_role(&meeting_media, &meeting_media_role)
+        .await?;
+    meeting_media.close().await;
+
     let document = RelayRuntimeSecret {
         database_url: runtime_url.to_string(),
         relay_private_key,
@@ -1332,15 +1400,41 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("could not write the governed audit checkpoint runtime secret")?;
 
+    let mut orchestration_document = serde_json::to_string(&DatabaseRuntimeSecret {
+        database_url: orchestration_url.to_string(),
+    })?;
+    secrets
+        .put_secret_value()
+        .secret_id(&orchestration_secret_arn)
+        .secret_string(orchestration_document.clone())
+        .send()
+        .await
+        .context("could not write the governed orchestration runtime secret")?;
+
+    let mut meeting_media_document = serde_json::to_string(&DatabaseRuntimeSecret {
+        database_url: meeting_media_url.to_string(),
+    })?;
+    secrets
+        .put_secret_value()
+        .secret_id(&meeting_media_secret_arn)
+        .secret_string(meeting_media_document.clone())
+        .send()
+        .await
+        .context("could not write the governed meeting media runtime secret")?;
+
     encoded.zeroize();
     agent_broker_document.zeroize();
     agent_coordinator_document.zeroize();
     model_gateway_document.zeroize();
     audit_checkpoint_document.zeroize();
+    orchestration_document.zeroize();
+    meeting_media_document.zeroize();
     agent_broker_password.zeroize();
     agent_coordinator_password.zeroize();
     model_gateway_password.zeroize();
     audit_checkpoint_password.zeroize();
+    orchestration_password.zeroize();
+    meeting_media_password.zeroize();
     runtime_password.zeroize();
     master.password.zeroize();
     if let Some(receipt) = workforce_receipt {
