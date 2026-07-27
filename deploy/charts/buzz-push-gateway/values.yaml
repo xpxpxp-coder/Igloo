@@ -1,7 +1,9 @@
 replicaCount: 2
 image:
   repository: ghcr.io/snowman-ai-org/snowman-push-gateway
-  tag: ""
+  # Development/default render only. values-production.yaml clears this and
+  # requires the release system to inject an immutable Snowman-owned digest.
+  tag: main
   digest: ""
   pullPolicy: IfNotPresent
   pullSecrets: []
