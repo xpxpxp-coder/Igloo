@@ -82,6 +82,10 @@ const visibleFiles = [
   "desktop/src/features/notifications/hooks.ts",
   "desktop/src/features/local-archive/ui/localArchiveKinds.ts",
   "desktop/src/features/projects/ui/CreateProjectDialog.tsx",
+  "desktop/src/features/agents/ui/PersonaModelField.tsx",
+  "desktop/src/features/agents/ui/agentSessionToolCatalog.ts",
+  "desktop/src/features/agents/ui/agentSessionToolClassifier.ts",
+  "desktop/src/features/agents/ui/agentSessionTranscriptHelpers.ts",
   "desktop/src/features/profile/ui/NostrBindConsentDialog.tsx",
   "desktop/src/features/profile/ui/AnimatedAvatarCapture.tsx",
   "mobile/lib/app.dart",
@@ -91,6 +95,8 @@ const visibleFiles = [
   "web/src/features/repos/ui/ReposPage.tsx",
   "crates/buzz-cli/src/lib.rs",
   "crates/buzz-admin/src/main.rs",
+  "desktop/src-tauri/src/managed_agents/nest_agents.md",
+  "desktop/src-tauri/src/managed_agents/nest_skill.md",
 ];
 const forbiddenVisible = [
   /Welcome to Buzz/i,
@@ -107,6 +113,10 @@ const forbiddenVisible = [
   /Buzz Desktop/i,
   /Buzz-native/i,
   /bee-garden/i,
+  /Reads workflow state from Buzz/i,
+  /Buzz will choose an available shared model/i,
+  /Add agents in the Buzz desktop app/i,
+  /# Buzz CLI Skill/i,
 ];
 for (const path of visibleFiles) {
   const source = read(path);
@@ -120,6 +130,7 @@ const releaseSurfaceFiles = [
   ".github/workflows/release.yml",
   ".github/workflows/docker.yml",
   "desktop/src-tauri/Info.plist",
+  ".github/workflows/signed-macos-canary.yml",
 ];
 const forbiddenReleaseSurface = [
   /Buzz Desktop/i,
@@ -129,6 +140,9 @@ const forbiddenReleaseSurface = [
   /github\.com\/block\//i,
   /ghcr\.io\/block\//i,
   /block\/apple-codesign-action/i,
+  /Buzz\.app/i,
+  /Buzz_[^\n]*signed\.dmg/i,
+  /buzz-macos-canary/i,
 ];
 for (const path of releaseSurfaceFiles) {
   const source = read(path);
@@ -136,6 +150,51 @@ for (const path of releaseSurfaceFiles) {
     if (pattern.test(source)) {
       failures.push(`${path}: retired release identity or endpoint ${pattern}`);
     }
+  }
+}
+
+const operationalSurfaces = [
+  "README.md",
+  "docker-compose.yml",
+  "docker-compose.harness.yml",
+  "deploy/charts/buzz/Chart.yaml",
+  "deploy/charts/buzz/README.md",
+  "deploy/charts/buzz/values.schema.json",
+  "deploy/charts/buzz/templates/NOTES.txt",
+];
+const forbiddenOperationalSurface = [
+  /github\.com\/block\//i,
+  /ghcr\.io\/block\//i,
+  /block\.xyz/i,
+  /squareup\//i,
+  /com\.buzz\.(service|env|volume|network)/i,
+  /container_name:\s*buzz-/i,
+  /name:\s*buzz-(postgres|minio|prometheus)-data/i,
+  /name:\s*buzz-net/i,
+  /# Buzz Helm Chart/i,
+  /name:\s*Block/i,
+];
+for (const path of operationalSurfaces) {
+  const source = read(path);
+  for (const pattern of forbiddenOperationalSurface) {
+    if (pattern.test(source)) {
+      failures.push(`${path}: legacy operational brand or endpoint ${pattern}`);
+    }
+  }
+}
+
+for (const [path, fragment] of [
+  ["docker-compose.yml", "name: snowman-command-center"],
+  ["docker-compose.yml", 'ai.snowman.environment: "development"'],
+  ["docker-compose.harness.yml", "name: snowman-command-center-harness"],
+  [
+    ".github/workflows/signed-macos-canary.yml",
+    "Snowman_Command_Center_${VERSION}_aarch64-signed.dmg",
+  ],
+  ["deploy/charts/buzz/Chart.yaml", "Snowman Command Center"],
+]) {
+  if (!read(path).includes(fragment)) {
+    failures.push(`${path}: missing Snowman operational identity ${fragment}`);
   }
 }
 

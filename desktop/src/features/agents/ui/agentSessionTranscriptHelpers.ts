@@ -6,6 +6,8 @@ import {
 } from "./agentSessionToolCatalog";
 import { asRecord, asString, titleCase } from "./agentSessionUtils";
 
+const SNOWMAN_EVENT_TITLE = "Snowman event";
+
 export function extractPromptText(payload: Record<string, unknown>): string {
   const params = asRecord(payload.params);
   const prompt = params.prompt;
@@ -49,7 +51,7 @@ export function parsePromptText(text: string): {
   return {
     sections,
     userText: eventContent,
-    userTitle: eventKind ? titleCase(eventKind) : "Buzz event",
+    userTitle: eventKind ? titleCase(eventKind) : SNOWMAN_EVENT_TITLE,
     userPubkey: eventAuthorPubkey,
     userEventId: eventId,
   };

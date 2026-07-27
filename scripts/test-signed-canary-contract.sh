@@ -11,12 +11,14 @@ grep -Fq 'SOURCE_REF: ${{ github.ref }}' "$workflow"
 grep -Fq '"refs/heads/main"' "$workflow"
 grep -Fq 'contents: read' "$workflow"
 grep -Fq 'id-token: write' "$workflow"
-grep -Fq 'block/apple-codesign-action@' "$workflow"
+grep -Fq 'Snowman macOS signing gate' "$workflow"
+grep -Fq 'Snowman Command Center.app' "$workflow"
+grep -Fq 'snowman-command-center-macos-canary-' "$workflow"
 grep -Fq 'actions/upload-artifact@' "$workflow"
 grep -Fq 'retention-days: 7' "$workflow"
 grep -Fq '"createUpdaterArtifacts": false' "$workflow"
 
-if grep -Eq 'contents: write|gh release|buzz-desktop-latest|latest\.json|TAURI_SIGNING_PRIVATE_KEY|verify-release-ref\.sh|refs/tags/' "$workflow"; then
+if grep -Eqi 'contents: write|gh release|buzz-desktop-latest|latest\.json|TAURI_SIGNING_PRIVATE_KEY|verify-release-ref\.sh|refs/tags/|block/apple-codesign-action|Buzz\.app|Buzz_' "$workflow"; then
   echo "signed canary workflow gained a release or publishing capability" >&2
   exit 1
 fi

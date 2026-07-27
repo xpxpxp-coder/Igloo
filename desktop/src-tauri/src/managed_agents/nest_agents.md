@@ -61,6 +61,6 @@ The human operator signs off for accountability.
 <!-- BEGIN BUZZ MANAGED — regenerated automatically, do not edit below -->
 ## Active Agents
 
-*(No agents deployed yet. Add agents in the Buzz desktop app.)*
+*(No agents deployed yet. Add agents in Snowman Command Center.)*
 
 <!-- END BUZZ MANAGED -->

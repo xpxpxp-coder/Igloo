@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-      id-token: write # required by block/apple-codesign-action for OIDC
+      id-token: write # reserved for the Snowman-owned signing provider
     steps:
       - name: Require main
         env:
@@ -182,9 +182,9 @@ jobs:
           EXTRACT_DIR="${RUNNER_TEMP}/signed-app-extract"
           rm -rf "$EXTRACT_DIR" && mkdir -p "$EXTRACT_DIR"
           ditto -x -k "$SIGNED_APP_ZIP" "$EXTRACT_DIR"
-          codesign --verify --deep --strict --verbose=2 "$EXTRACT_DIR/Buzz.app"
-          spctl --assess --type execute --verbose=4 "$EXTRACT_DIR/Buzz.app"
-          desktop/scripts/verify-macos-entitlements.sh "$EXTRACT_DIR/Buzz.app"
+          codesign --verify --deep --strict --verbose=2 "$EXTRACT_DIR/Snowman Command Center.app"
+          spctl --assess --type execute --verbose=4 "$EXTRACT_DIR/Snowman Command Center.app"
+          desktop/scripts/verify-macos-entitlements.sh "$EXTRACT_DIR/Snowman Command Center.app"
 
       - name: Stage signed DMG
         id: artifact
@@ -193,7 +193,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          NAME="Buzz_${VERSION}_aarch64-signed.dmg"
+          NAME="Snowman_Command_Center_${VERSION}_aarch64-signed.dmg"
           cp "$SIGNED_DMG" "$RUNNER_TEMP/$NAME"
           echo "path=$RUNNER_TEMP/$NAME" >> "$GITHUB_OUTPUT"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
@@ -201,7 +201,7 @@ jobs:
       - name: Upload signed canary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: buzz-macos-canary-${{ github.sha }}
+          name: snowman-command-center-macos-canary-${{ github.sha }}
           path: ${{ steps.artifact.outputs.path }}
           if-no-files-found: error
           retention-days: 7

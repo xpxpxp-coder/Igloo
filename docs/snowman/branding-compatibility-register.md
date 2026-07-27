@@ -29,6 +29,9 @@ Snowman. They do not authorize an upstream connection.
 | Legacy desktop process names (`Buzz`, `buzz-desktop`) | Safe orphan-agent cleanup must recognize an older process during an in-place upgrade | Never shown to users; new process names are Snowman Command Center | Remove only after the supported upgrade window and process-lifecycle tests prove it safe. |
 | Built-in persona IDs such as `builtin:fizz` | Existing agent/team references and user customization preservation | Persona presentation will migrate separately with alias-aware records | Complete a non-destructive persona migration and UAT. |
 | Dart package name `buzz` | Internal import namespace across the inherited mobile source | App name, bundle ID, icons, copy, links, and store metadata are Snowman | Rename after generated import migration can prove a clean build. |
+| `~/.buzz`, `.buzz-dev`, and `.agents/skills/buzz-cli` | Existing agent workspace and skill locations contain persistent user work and harness symlinks | Workspace headings and skill descriptions render Snowman; the installed executable remains `buzz` | Add read-old/write-new relocation with rollback and symlink tests before changing paths. |
+| Helm chart/package ID and template helpers named `buzz` | Existing values files, releases, selectors, and upgrade history bind this package ID | Chart descriptions, notes, maintainers, images, and operator docs render Snowman Command Center | Publish a versioned chart alias and prove in-place Helm upgrade before renaming the chart/helper IDs. |
+| Managed-section markers containing `BUZZ` | Existing generated workspace files use these exact delimiters to preserve human-authored content | Never rendered as a product label; generated headings and instructions are Snowman | Dual-read marker migration proves no custom workspace content is lost. |
 
 ## Not compatibility exceptions
 
@@ -37,3 +40,9 @@ mutable image defaults, deployment names, installers, application/store metadata
 docs, alerts, dashboards, and support/legal surfaces are not protocol
 requirements. They must migrate to Snowman or be explicitly disabled before
 release.
+
+The development Compose project, containers, networks, labels, and named
+volumes use `snowman-command-center-*`. The prior `buzz-*` development volumes
+are not deleted by this migration; they remain recoverable for an operator who
+needs to copy local-only data into the new development volumes. Production data
+must never be migrated through the development Compose topology.

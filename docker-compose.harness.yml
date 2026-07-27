@@ -1,16 +1,18 @@
 # =============================================================================
 # Isolated test-relay backing stack — GUI read-model overhaul harness (Dawn).
 #
-# A SEPARATE Compose project (`buzz-harness`) so the shared :3000 relay and the
-# default `buzz-*` dev stack are never touched. No fixed container_names (they
+# A SEPARATE Snowman Compose project so the shared :3000 relay and the
+# default command-center dev stack are never touched. No fixed container_names (they
 # collide across projects) and alternate host ports. Mirrors Eva's evaperf-*
 # isolation pattern.
 #
-#   Bring up:  docker compose -p buzz-harness -f docker-compose.harness.yml up -d
+#   Bring up:  docker compose -p snowman-command-center-harness -f docker-compose.harness.yml up -d
 #   Ports:     postgres 5471 · redis 6471 · minio 9471/9472
 #   Relay (run separately by scripts/start-isolated-test-relay.sh):
 #              main 3030 · health 8088 · metrics 9202
 # =============================================================================
+name: snowman-command-center-harness
+
 services:
   postgres:
     image: postgres:17-alpine
