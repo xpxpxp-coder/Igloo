@@ -148,6 +148,22 @@ output "managed_state" {
   }
 }
 
+output "audit_checkpoint_runtime" {
+  description = "Dormant-by-default immutable audit checkpoint runtime and evidence coordinates."
+  value = {
+    task_definition_arn    = aws_ecs_task_definition.audit_checkpoint.arn
+    schedule_arn           = aws_cloudwatch_event_rule.audit_checkpoint.arn
+    schedule_enabled       = var.audit_checkpoint_schedule_enabled
+    bucket_arn             = aws_s3_bucket.object["audit"].arn
+    signing_key_arn        = aws_kms_key.audit_checkpoint.arn
+    encryption_key_arn     = aws_kms_key.data.arn
+    runtime_secret_arn     = aws_secretsmanager_secret.audit_checkpoint_runtime.arn
+    database_role          = "snowman_audit_checkpoint"
+    build_sha256           = local.audit_checkpoint_build_sha256
+    database_schema_sha256 = var.audit_checkpoint_database_schema_sha256
+  }
+}
+
 output "valkey_runtime_contract" {
   description = "Non-secret relay settings and IAM resources required for short-lived Valkey authentication."
   value = {

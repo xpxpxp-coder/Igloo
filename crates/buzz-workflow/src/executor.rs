@@ -590,30 +590,10 @@ pub async fn dispatch_action(
         }
 
         AddReaction { emoji } => {
-            info!(run_id = %run_id, step = step_id, "AddReaction → :{emoji}:");
-            if trigger_ctx.message_id.is_empty() {
-                return Err(WorkflowError::InvalidDefinition(
-                    "AddReaction: no trigger.message_id available".into(),
-                ));
-            }
-
-            #[cfg(feature = "reqwest")]
-            {
-                let result = add_reaction_impl(&trigger_ctx.message_id, emoji).await?;
-                Ok(StepResult::Completed(result))
-            }
-
-            #[cfg(not(feature = "reqwest"))]
-            {
-                warn!(
-                    run_id = %run_id,
-                    step = step_id,
-                    "AddReaction: reqwest feature not enabled, skipping HTTP call"
-                );
-                Ok(StepResult::Completed(
-                    serde_json::json!({ "added": false, "skipped": true }),
-                ))
-            }
+            let _ = (emoji, trigger_ctx);
+            Err(WorkflowError::NotImplemented(
+                "AddReaction is disabled until it uses a broker-authorized in-process sink".into(),
+            ))
         }
 
         CallWebhook {
@@ -622,29 +602,11 @@ pub async fn dispatch_action(
             headers,
             body,
         } => {
-            let method_str = method.as_deref().unwrap_or("POST");
-            info!(run_id = %run_id, step = step_id, "CallWebhook → {method_str} {url}");
-
-            #[cfg(feature = "reqwest")]
-            {
-                let result = call_webhook_impl(url, method_str, headers, body).await?;
-                Ok(StepResult::Completed(result))
-            }
-
-            #[cfg(not(feature = "reqwest"))]
-            {
-                // reqwest not enabled — log and return placeholder.
-                warn!(
-                    run_id = %run_id, step = step_id,
-                    "CallWebhook: reqwest feature not enabled, skipping HTTP call"
-                );
-                let _ = (headers, body); // suppress unused warnings
-                Ok(StepResult::Completed(serde_json::json!({
-                    "status": 0,
-                    "body": null,
-                    "skipped": true
-                })))
-            }
+            let _ = (url, method, headers, body);
+            Err(WorkflowError::NotImplemented(
+                "CallWebhook is disabled; submit an exact typed action to the Snowman tool broker"
+                    .into(),
+            ))
         }
 
         RequestApproval {
@@ -652,20 +614,11 @@ pub async fn dispatch_action(
             message,
             timeout,
         } => {
-            let timeout_str = timeout.as_deref().unwrap_or("24h");
-            info!(
-                run_id = %run_id, step = step_id,
-                "RequestApproval from={from} timeout={timeout_str}: {message}"
-            );
-
-            let token = generate_approval_token(run_id, step_id);
-
-            // TODO (WF-08): create approval record in DB, emit kind:46010.
-            // For now, return Suspended with the token so the caller can persist state.
-
-            Ok(StepResult::Suspended {
-                approval_token: token,
-            })
+            let _ = (from, message, timeout);
+            Err(WorkflowError::NotImplemented(
+                "legacy workflow approvals are disabled; use a capability-bound Snowman workforce approval"
+                    .into(),
+            ))
         }
 
         Delay { duration } => {
@@ -687,16 +640,6 @@ pub async fn dispatch_action(
             ))
         }
     }
-}
-
-/// Generate a cryptographically random approval token.
-///
-/// Uses `Uuid::new_v4()` which draws from the OS CSPRNG (via the `getrandom`
-/// crate). The `run_id` and `step_id` parameters are accepted for logging
-/// context but are not mixed into the token — the UUID's own randomness is
-/// sufficient and avoids the predictability of time-based entropy.
-fn generate_approval_token(_run_id: Uuid, _step_id: &str) -> String {
-    Uuid::new_v4().to_string()
 }
 
 /// Parse a duration string like "5m", "1h", "30s" into seconds.
@@ -730,206 +673,6 @@ pub(crate) fn parse_duration_secs(duration: &str) -> Result<u64, WorkflowError> 
     duration
         .parse()
         .map_err(|_| WorkflowError::InvalidDefinition(format!("invalid duration: {duration}")))
-}
-
-// is_private_ip is provided by buzz_core::network::is_private_ip
-
-/// Resolve `host` to IP addresses and reject if any are private/reserved.
-///
-/// Uses the OS resolver (blocking, run on a threadpool via `spawn_blocking`).
-/// Rejects the request if DNS resolution fails or returns zero addresses.
-///
-/// Returns the first validated IP address so the caller can pin DNS resolution
-/// in the HTTP client, preventing DNS rebinding TOCTOU attacks.
-#[cfg(feature = "reqwest")]
-async fn check_ssrf(host: &str, port: u16) -> Result<std::net::IpAddr, WorkflowError> {
-    let addr_str = format!("{host}:{port}");
-    let addrs: Vec<std::net::IpAddr> = tokio::task::spawn_blocking(move || {
-        use std::net::ToSocketAddrs;
-        addr_str
-            .to_socket_addrs()
-            .map(|iter| iter.map(|sa| sa.ip()).collect::<Vec<_>>())
-    })
-    .await
-    .map_err(|e| WorkflowError::WebhookError(format!("SSRF check task failed: {e}")))?
-    .map_err(|e| WorkflowError::WebhookError(format!("DNS resolution failed: {e}")))?;
-
-    if addrs.is_empty() {
-        return Err(WorkflowError::WebhookError(
-            "DNS resolution returned no addresses".into(),
-        ));
-    }
-
-    debug!("Resolved webhook host '{}' → {:?}", host, addrs);
-
-    for ip in &addrs {
-        if buzz_core::network::is_private_ip(ip) {
-            return Err(WorkflowError::WebhookError(format!(
-                "SSRF blocked: '{host}' resolved to private/reserved address {ip}"
-            )));
-        }
-    }
-
-    Ok(addrs[0])
-}
-
-/// Maximum response body size for webhook calls (1 MiB).
-#[cfg(feature = "reqwest")]
-const WEBHOOK_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
-
-#[cfg(feature = "reqwest")]
-async fn call_webhook_impl(
-    url: &str,
-    method: &str,
-    headers: &Option<std::collections::HashMap<String, String>>,
-    body: &Option<String>,
-) -> Result<JsonValue, WorkflowError> {
-    use reqwest::Client;
-    use std::time::Duration;
-
-    let parsed_url = reqwest::Url::parse(url)
-        .map_err(|e| WorkflowError::WebhookError(format!("invalid URL: {e}")))?;
-
-    let host = parsed_url
-        .host_str()
-        .ok_or_else(|| WorkflowError::WebhookError("URL has no host".into()))?;
-
-    // Default ports: 443 for https, 80 for http.
-    let port = parsed_url.port_or_known_default().unwrap_or(80);
-
-    let safe_ip = check_ssrf(host, port).await?;
-
-    // Client is built per-request because `resolve()` pins DNS for a specific host.
-    // This disables connection pooling but is required for SSRF safety: without
-    // pinning, reqwest performs its own DNS resolution which could return a
-    // different address than the one validated above (DNS rebinding TOCTOU).
-    let client = Client::builder()
-        .timeout(Duration::from_secs(10))
-        // A system proxy would resolve the original hostname itself, bypassing
-        // the validated and pinned address above.
-        .no_proxy()
-        // Disable redirects — a redirect to an internal host bypasses the SSRF check.
-        .redirect(reqwest::redirect::Policy::none())
-        .resolve(host, std::net::SocketAddr::new(safe_ip, port))
-        .build()
-        .map_err(|e| WorkflowError::WebhookError(e.to_string()))?;
-
-    let method_parsed = reqwest::Method::from_bytes(method.as_bytes())
-        .map_err(|e| WorkflowError::WebhookError(e.to_string()))?;
-
-    let mut req = client.request(method_parsed, url);
-
-    if let Some(hdrs) = headers {
-        for (k, v) in hdrs {
-            req = req.header(k, v);
-        }
-    }
-
-    if let Some(b) = body {
-        req = req.body(b.clone());
-    }
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| WorkflowError::WebhookError(e.to_string()))?;
-
-    let status = resp.status().as_u16();
-
-    // Read incrementally to prevent OOM from a malicious server returning a
-    // multi-GB payload. `resp.bytes()` would buffer the entire body before we
-    // could check the size; chunked reading lets us abort early.
-    let mut body_bytes = Vec::new();
-    let mut resp = resp;
-    loop {
-        let chunk = resp
-            .chunk()
-            .await
-            .map_err(|e| WorkflowError::WebhookError(format!("reading response body: {e}")))?;
-        match chunk {
-            Some(bytes) => {
-                body_bytes.extend_from_slice(&bytes);
-                if body_bytes.len() > WEBHOOK_MAX_RESPONSE_BYTES {
-                    return Err(WorkflowError::WebhookError(format!(
-                        "response body exceeds {} byte limit",
-                        WEBHOOK_MAX_RESPONSE_BYTES
-                    )));
-                }
-            }
-            None => break,
-        }
-    }
-
-    let body_text = String::from_utf8_lossy(&body_bytes).into_owned();
-
-    Ok(serde_json::json!({
-        "status": status,
-        "body": body_text,
-    }))
-}
-
-/// Returns a shared `reqwest::Client` reused across all workflow HTTP calls.
-/// Sharing a single client reuses the underlying connection pool.
-#[cfg(feature = "reqwest")]
-fn shared_http_client() -> &'static reqwest::Client {
-    use std::sync::LazyLock;
-    use std::time::Duration;
-    static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-            .expect("HTTP client build must succeed")
-    });
-    &CLIENT
-}
-
-/// POST `{"emoji": emoji}` to `POST /api/messages/{message_id}/reactions`.
-#[cfg(feature = "reqwest")]
-async fn add_reaction_impl(message_id: &str, emoji: &str) -> Result<JsonValue, WorkflowError> {
-    let base_url =
-        std::env::var("BUZZ_RELAY_BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_owned());
-
-    let url = format!("{base_url}/api/messages/{message_id}/reactions");
-
-    let client = shared_http_client();
-
-    let mut req = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&serde_json::json!({ "emoji": emoji }));
-
-    if let Ok(token) = std::env::var("BUZZ_API_TOKEN") {
-        req = req.header("Authorization", format!("Bearer {token}"));
-    } else if let Ok(pubkey) = std::env::var("BUZZ_RELAY_PUBKEY") {
-        req = req.header("X-Pubkey", pubkey);
-    }
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| WorkflowError::WebhookError(format!("AddReaction HTTP error: {e}")))?;
-
-    let status = resp.status();
-
-    if !status.is_success() {
-        let body = resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "<unreadable>".to_owned());
-        return Err(WorkflowError::WebhookError(format!(
-            "AddReaction: relay returned {status} for message {message_id}: {body}"
-        )));
-    }
-
-    let body_text = resp.text().await.unwrap_or_else(|_| String::new());
-    let body_json: JsonValue = serde_json::from_str(&body_text)
-        .unwrap_or_else(|_| serde_json::json!({ "raw": body_text }));
-
-    Ok(serde_json::json!({
-        "added": true,
-        "status": status.as_u16(),
-        "response": body_json,
-    }))
 }
 
 /// Rich return type from `execute_run` / `execute_from_step`.

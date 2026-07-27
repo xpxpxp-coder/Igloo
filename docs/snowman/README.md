@@ -7,6 +7,7 @@ upstream self-hosting documentation.
 Current decision: **adopt with hardening; do not activate production yet**.
 
 - [Source-level maturity audit](production-readiness-audit.md)
+- [Immutable audit checkpoints](audit-checkpoints.md)
 - [ADR 0001: separate command-center control plane](adr/0001-separate-command-center-control-plane.md)
 - [ADR 0002: governed, durable AI workforce](adr/0002-governed-ai-workforce.md)
 - [ADR 0003: Snowman-only runtime and egress](adr/0003-snowman-only-runtime-boundary.md)
@@ -32,6 +33,8 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Private model gateway](model-gateway.md)
 - [Private agent job broker](agent-broker.md)
 - [Private agent launch coordinator](agent-coordinator.md)
+- [Governed agent tool broker](agent-tool-broker.md)
+- [Workflow safety boundary](workflow-safety.md)
 - [Private inference fleet](../../infra/aws-inference/README.md)
 
 These documents distinguish three states:

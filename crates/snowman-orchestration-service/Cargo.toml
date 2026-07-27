@@ -1,0 +1,38 @@
+[package]
+name = "snowman-orchestration-service"
+description = "Private transactional API and timezone-aware scheduler for Snowman orchestration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+base64 = { workspace = true }
+buzz-auth = { workspace = true }
+buzz-db = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+hex = { workspace = true }
+nostr = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+snowman-orchestration = { path = "../snowman-orchestration" }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+uuid = { workspace = true }
+
+[lib]
+name = "snowman_orchestration_service"
+path = "src/lib.rs"
+
+[[bin]]
+name = "snowman-orchestration-service"
+path = "src/main.rs"

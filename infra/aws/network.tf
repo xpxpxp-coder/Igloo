@@ -208,6 +208,12 @@ resource "aws_security_group" "model_gateway" {
   vpc_id      = aws_vpc.command_center.id
 }
 
+resource "aws_security_group" "audit_checkpoint" {
+  name        = "${local.workload_name}-audit-checkpoint"
+  description = "One-shot Snowman audit checkpoint publisher and restore verifier"
+  vpc_id      = aws_vpc.command_center.id
+}
+
 resource "aws_security_group" "inference" {
   name        = "${local.workload_name}-inference"
   description = "Snowman-hosted model inference fleet"
@@ -522,6 +528,24 @@ resource "aws_vpc_security_group_egress_rule" "model_gateway_to_database" {
   description                  = "Exact live job authority and durable model accounting only"
 }
 
+resource "aws_vpc_security_group_ingress_rule" "database_from_audit_checkpoint" {
+  security_group_id            = aws_security_group.database.id
+  referenced_security_group_id = aws_security_group.audit_checkpoint.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "Read-only tenant audit chain plus append-only checkpoint evidence"
+}
+
+resource "aws_vpc_security_group_egress_rule" "audit_checkpoint_to_database" {
+  security_group_id            = aws_security_group.audit_checkpoint.id
+  referenced_security_group_id = aws_security_group.database.id
+  from_port                    = 5432
+  to_port                      = 5432
+  ip_protocol                  = "tcp"
+  description                  = "No relay, Analyst, model, connector, or public route"
+}
+
 resource "aws_vpc_security_group_ingress_rule" "database_from_relay" {
   security_group_id            = aws_security_group.database.id
   referenced_security_group_id = aws_security_group.relay.id
@@ -572,15 +596,16 @@ resource "aws_vpc_security_group_egress_rule" "model_gateway_to_valkey" {
 
 resource "aws_vpc_security_group_ingress_rule" "endpoints_from_services" {
   for_each = {
-    relay         = aws_security_group.relay.id
-    worker        = aws_security_group.worker.id
-    scheduler     = aws_security_group.scheduler.id
-    trigger       = aws_security_group.trigger.id
-    reminder      = aws_security_group.reminder.id
-    agent_broker  = aws_security_group.agent_broker.id
-    coordinator   = aws_security_group.agent_coordinator.id
-    model_gateway = aws_security_group.model_gateway.id
-    inference     = aws_security_group.inference.id
+    relay            = aws_security_group.relay.id
+    worker           = aws_security_group.worker.id
+    scheduler        = aws_security_group.scheduler.id
+    trigger          = aws_security_group.trigger.id
+    reminder         = aws_security_group.reminder.id
+    agent_broker     = aws_security_group.agent_broker.id
+    coordinator      = aws_security_group.agent_coordinator.id
+    model_gateway    = aws_security_group.model_gateway.id
+    audit_checkpoint = aws_security_group.audit_checkpoint.id
+    inference        = aws_security_group.inference.id
   }
 
   security_group_id            = aws_security_group.endpoints.id
@@ -610,15 +635,16 @@ resource "aws_vpc_security_group_egress_rule" "agent_executor_to_agent_endpoints
 
 resource "aws_vpc_security_group_egress_rule" "services_to_endpoints" {
   for_each = {
-    relay         = aws_security_group.relay.id
-    worker        = aws_security_group.worker.id
-    scheduler     = aws_security_group.scheduler.id
-    trigger       = aws_security_group.trigger.id
-    reminder      = aws_security_group.reminder.id
-    agent_broker  = aws_security_group.agent_broker.id
-    coordinator   = aws_security_group.agent_coordinator.id
-    model_gateway = aws_security_group.model_gateway.id
-    inference     = aws_security_group.inference.id
+    relay            = aws_security_group.relay.id
+    worker           = aws_security_group.worker.id
+    scheduler        = aws_security_group.scheduler.id
+    trigger          = aws_security_group.trigger.id
+    reminder         = aws_security_group.reminder.id
+    agent_broker     = aws_security_group.agent_broker.id
+    coordinator      = aws_security_group.agent_coordinator.id
+    model_gateway    = aws_security_group.model_gateway.id
+    audit_checkpoint = aws_security_group.audit_checkpoint.id
+    inference        = aws_security_group.inference.id
   }
 
   security_group_id            = each.value
@@ -630,15 +656,16 @@ resource "aws_vpc_security_group_egress_rule" "services_to_endpoints" {
 
 resource "aws_vpc_security_group_egress_rule" "services_to_dns_udp" {
   for_each = {
-    relay         = aws_security_group.relay.id
-    worker        = aws_security_group.worker.id
-    scheduler     = aws_security_group.scheduler.id
-    trigger       = aws_security_group.trigger.id
-    reminder      = aws_security_group.reminder.id
-    agent_broker  = aws_security_group.agent_broker.id
-    coordinator   = aws_security_group.agent_coordinator.id
-    model_gateway = aws_security_group.model_gateway.id
-    inference     = aws_security_group.inference.id
+    relay            = aws_security_group.relay.id
+    worker           = aws_security_group.worker.id
+    scheduler        = aws_security_group.scheduler.id
+    trigger          = aws_security_group.trigger.id
+    reminder         = aws_security_group.reminder.id
+    agent_broker     = aws_security_group.agent_broker.id
+    coordinator      = aws_security_group.agent_coordinator.id
+    model_gateway    = aws_security_group.model_gateway.id
+    audit_checkpoint = aws_security_group.audit_checkpoint.id
+    inference        = aws_security_group.inference.id
   }
 
   security_group_id = each.value
@@ -650,15 +677,16 @@ resource "aws_vpc_security_group_egress_rule" "services_to_dns_udp" {
 
 resource "aws_vpc_security_group_egress_rule" "services_to_dns_tcp" {
   for_each = {
-    relay         = aws_security_group.relay.id
-    worker        = aws_security_group.worker.id
-    scheduler     = aws_security_group.scheduler.id
-    trigger       = aws_security_group.trigger.id
-    reminder      = aws_security_group.reminder.id
-    agent_broker  = aws_security_group.agent_broker.id
-    coordinator   = aws_security_group.agent_coordinator.id
-    model_gateway = aws_security_group.model_gateway.id
-    inference     = aws_security_group.inference.id
+    relay            = aws_security_group.relay.id
+    worker           = aws_security_group.worker.id
+    scheduler        = aws_security_group.scheduler.id
+    trigger          = aws_security_group.trigger.id
+    reminder         = aws_security_group.reminder.id
+    agent_broker     = aws_security_group.agent_broker.id
+    coordinator      = aws_security_group.agent_coordinator.id
+    model_gateway    = aws_security_group.model_gateway.id
+    audit_checkpoint = aws_security_group.audit_checkpoint.id
+    inference        = aws_security_group.inference.id
   }
 
   security_group_id = each.value

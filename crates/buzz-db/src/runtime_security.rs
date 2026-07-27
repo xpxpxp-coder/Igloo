@@ -271,6 +271,101 @@ pub async fn provision_model_gateway_role(pool: &PgPool, role: &str, password: &
     Ok(())
 }
 
+/// Create or reconcile the audit-checkpoint login. It can read only tenant IDs
+/// and the audit chain, freeze checkpoint requests, and append publication
+/// receipts. It cannot read collaboration content or mutate/delete evidence.
+pub async fn provision_audit_checkpoint_role(
+    pool: &PgPool,
+    role: &str,
+    password: &str,
+) -> Result<()> {
+    validate_role_name(role)?;
+    if password.len() < 32 {
+        return Err(DbError::InvalidData(
+            "audit checkpoint database password must contain at least 32 characters".into(),
+        ));
+    }
+    let database: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await?;
+    let role_identifier = quote_identifier(role);
+    let database_identifier = quote_identifier(&database);
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT set_config('snowman.audit_checkpoint_role_password', $1, true)")
+        .bind(password)
+        .execute(&mut *transaction)
+        .await?;
+    let role_ddl = format!(
+        "DO $snowman$\n\
+         BEGIN\n\
+           IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n\
+             CREATE ROLE {role_identifier} LOGIN;\n\
+           END IF;\n\
+           ALTER ROLE {role_identifier}\n\
+             WITH LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n\
+           EXECUTE format('ALTER ROLE %I PASSWORD %L', '{role}',\n\
+             current_setting('snowman.audit_checkpoint_role_password'));\n\
+         END\n\
+         $snowman$;"
+    );
+    sqlx::raw_sql(AssertSqlSafe(role_ddl))
+        .execute(&mut *transaction)
+        .await?;
+    let grants = format!(
+        "REVOKE ALL ON DATABASE {database_identifier} FROM {role_identifier};\n\
+         REVOKE ALL ON SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {role_identifier};\n\
+         REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {role_identifier};\n\
+         GRANT CONNECT ON DATABASE {database_identifier} TO {role_identifier};\n\
+         GRANT USAGE ON SCHEMA public TO {role_identifier};\n\
+         GRANT SELECT ON TABLE communities,audit_log TO {role_identifier};\n\
+         GRANT SELECT,INSERT ON TABLE snowman_audit_checkpoint_requests,\n\
+           snowman_audit_checkpoint_publications TO {role_identifier};"
+    );
+    sqlx::raw_sql(AssertSqlSafe(grants))
+        .execute(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
+    Ok(())
+}
+
+/// Fail closed unless the checkpoint runtime has its exact append-only audit boundary.
+pub async fn verify_audit_checkpoint_role(pool: &PgPool, expected_role: &str) -> Result<()> {
+    validate_role_name(expected_role)?;
+    let valid: bool = sqlx::query_scalar(
+        "SELECT current_user=$1 \
+         AND has_database_privilege(current_user,current_database(),'CONNECT') \
+         AND NOT has_database_privilege(current_user,current_database(),'CREATE') \
+         AND has_schema_privilege(current_user,'public','USAGE') \
+         AND NOT has_schema_privilege(current_user,'public','CREATE') \
+         AND has_table_privilege(current_user,'communities','SELECT') \
+         AND has_table_privilege(current_user,'audit_log','SELECT') \
+         AND NOT has_table_privilege(current_user,'audit_log','INSERT') \
+         AND NOT has_table_privilege(current_user,'audit_log','UPDATE') \
+         AND NOT has_table_privilege(current_user,'audit_log','DELETE') \
+         AND has_table_privilege(current_user,'snowman_audit_checkpoint_requests','SELECT') \
+         AND has_table_privilege(current_user,'snowman_audit_checkpoint_requests','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_audit_checkpoint_requests','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_audit_checkpoint_requests','DELETE') \
+         AND has_table_privilege(current_user,'snowman_audit_checkpoint_publications','SELECT') \
+         AND has_table_privilege(current_user,'snowman_audit_checkpoint_publications','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_audit_checkpoint_publications','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_audit_checkpoint_publications','DELETE') \
+         AND NOT has_table_privilege(current_user,'events','SELECT') \
+         AND NOT has_table_privilege(current_user,'channels','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_work_requests','SELECT')",
+    )
+    .bind(expected_role)
+    .fetch_one(pool)
+    .await?;
+    if !valid {
+        return Err(DbError::InvalidData(
+            "audit checkpoint database identity violates its exact append-only boundary".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Create or reconcile the private meeting-control login. It can maintain only
 /// the governed meeting ledgers and inspect workforce identity existence. It
 /// cannot read collaboration events, raw evidence, agent jobs, model authority,

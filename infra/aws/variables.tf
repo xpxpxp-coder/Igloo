@@ -1041,6 +1041,32 @@ variable "audit_retention_days" {
   }
 }
 
+variable "audit_checkpoint_schedule_enabled" {
+  type        = bool
+  description = "Enable periodic externally anchored audit checkpoints only after staged tamper/restore gates pass."
+  default     = false
+}
+
+variable "audit_checkpoint_schedule_expression" {
+  type        = string
+  description = "Bounded EventBridge cadence for the one-shot checkpoint publisher."
+  default     = "rate(1 hour)"
+  validation {
+    condition     = can(regex("^rate\\(([1-9]|[1-5][0-9]) (minute|minutes)\\)$|^rate\\(([1-9]|1[0-9]|2[0-4]) (hour|hours)\\)$", var.audit_checkpoint_schedule_expression))
+    error_message = "Audit checkpoints must run every 1-59 minutes or 1-24 hours."
+  }
+}
+
+variable "audit_checkpoint_database_schema_sha256" {
+  type        = string
+  description = "Exact lowercase SHA-256 of the migration/schema set installed in the target database."
+  default     = ""
+  validation {
+    condition     = var.audit_checkpoint_database_schema_sha256 == "" || can(regex("^[0-9a-f]{64}$", var.audit_checkpoint_database_schema_sha256))
+    error_message = "The audit checkpoint schema digest must be empty while dormant or an exact lowercase SHA-256."
+  }
+}
+
 variable "deletion_protection" {
   type        = bool
   description = "Protect managed state from ordinary destroy operations."

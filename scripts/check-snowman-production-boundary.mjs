@@ -39,6 +39,8 @@ const runtimeAuthorityFiles = [
   "crates/buzz-db/src/analyst_integration.rs",
   "crates/snowman-workforce/src/lib.rs",
   "crates/snowman-orchestration/src/lib.rs",
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "crates/snowman-orchestration-service/src/main.rs",
   "crates/snowman-aws-auth/src/lib.rs",
   "crates/snowman-analyst-client/src/lib.rs",
   "crates/snowman-workforce-worker/src/lib.rs",
@@ -51,6 +53,11 @@ const runtimeAuthorityFiles = [
   "crates/snowman-agent-executor/src/main.rs",
   "crates/snowman-meeting-control/src/lib.rs",
   "crates/snowman-meeting-media-gateway/src/lib.rs",
+  "crates/snowman-audit-checkpoint/src/lib.rs",
+  "crates/snowman-audit-checkpoint/src/model.rs",
+  "crates/snowman-audit-checkpoint/src/service.rs",
+  "crates/snowman-audit-checkpoint/src/aws.rs",
+  "crates/snowman-audit-checkpoint/src/main.rs",
   "crates/snowman-tool-broker/src/lib.rs",
   "crates/snowman-bootstrap/src/main.rs",
   "crates/buzz-db/src/runtime_security.rs",
@@ -69,6 +76,8 @@ const runtimeAuthorityFiles = [
   "migrations/0049_snowman_agent_tool_authority.sql",
   "migrations/0050_snowman_meeting_media_gateway.sql",
   "migrations/0052_snowman_orchestration_foundation.sql",
+  "migrations/0053_snowman_orchestration_service.sql",
+  "migrations/0054_snowman_audit_checkpoints.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -603,6 +612,21 @@ requireFragment(
   "migrations/0052_snowman_orchestration_foundation.sql",
   "handoff_manifest_reference ~ '^analyst360:sha256:",
   "replacement-agent handoffs must remain Analyst-owned immutable references",
+);
+requireFragment(
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "chrono-tz/0.10.4",
+  "the orchestration scheduler must record its exact compiled timezone implementation",
+);
+requireFragment(
+  "crates/snowman-orchestration-service/src/lib.rs",
+  "Insert dependency edges only after every task row exists",
+  "orchestration persistence must not depend on caller task ordering",
+);
+requireFragment(
+  "migrations/0053_snowman_orchestration_service.sql",
+  "enabled BOOLEAN NOT NULL DEFAULT FALSE",
+  "persisted recurrence schedules must remain disabled by default",
 );
 requireFragment(
   "crates/buzz-db/src/workforce.rs",

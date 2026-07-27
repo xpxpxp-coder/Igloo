@@ -65,4 +65,6 @@ log_retention_days                  = 365
 artifact_retention_days             = 365
 media_noncurrent_retention_days      = 30
 audit_retention_days                = 2555
+audit_checkpoint_schedule_enabled   = false
+audit_checkpoint_database_schema_sha256 = "" # Populate only from the exact staged migration set before enabling.
 deletion_protection                 = true

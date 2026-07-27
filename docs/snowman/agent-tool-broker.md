@@ -48,8 +48,13 @@ client data do not enter the Command Center action ledger.
 High-impact and critical operations require a live human approval bound to the
 exact tenant/workspace/job/task/generation/action digest and bounded by the
 action deadline. This supports the sole-founder operating model without
-inventing a second internal approver. Cancellation that commits while an action
-is `authorized` moves it to `cancelled` and prevents dispatch.
+inventing a second internal approver. The broker also reloads the approver's
+Snowman workforce session and exact approval capability. Normal high-impact
+work may be approved by the founder even when the founder initiated it. A
+different approver is required only when operations registers a named,
+critical exceptional control with `independent_human`; an unnamed or routine
+control cannot silently acquire that requirement. Cancellation that commits
+while an action is `authorized` moves it to `cancelled` and prevents dispatch.
 
 The broker must commit `authorized -> indeterminate` immediately before a
 side effect. That is the dispatch linearization point. Once indeterminate, a
@@ -82,7 +87,11 @@ meeting authority.
    adapter invokes any filesystem, HTTPS, AWS, or reviewed-program side effect.
 5. Enforce the returned route in a separate sandbox with empty environment,
    no child credentials, no shell, bounded input/output, time/process limits,
-   direct-egress denial, and cancellation fencing.
+   direct-egress denial, and cancellation fencing. HTTPS adapters additionally
+   enforce operations-owned destinations and credentials, request/response
+   byte caps, connect/total timeouts, no proxy or redirects, resolve-once DNS
+   pinning with every private/reserved answer rejected, and a named redaction
+   profile.
 6. Commit the known terminal outcome and append/sign/checkpoint a redacted
    receipt. Unknown outcomes remain `indeterminate` for reconciliation.
 

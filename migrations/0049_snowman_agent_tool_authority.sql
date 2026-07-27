@@ -12,7 +12,19 @@ CREATE TABLE snowman_agent_tool_approvals (
     task_id UUID NOT NULL,
     generation BIGINT NOT NULL CHECK (generation > 0),
     action_sha256 BYTEA NOT NULL CHECK (octet_length(action_sha256) = 32),
+    requested_by_identity_id UUID NOT NULL,
     approver_identity_id UUID NOT NULL,
+    approver_capability_id TEXT NOT NULL CHECK (
+        length(approver_capability_id) BETWEEN 1 AND 128 AND
+        approver_capability_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+    ),
+    exceptional_control_id TEXT CHECK (
+        exceptional_control_id IS NULL OR (
+            length(exceptional_control_id) BETWEEN 1 AND 128 AND
+            exceptional_control_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        )
+    ),
+    independence_required BOOLEAN NOT NULL DEFAULT FALSE,
     decision TEXT NOT NULL CHECK (decision IN ('approved','denied','revoked')),
     rationale_sha256 BYTEA NOT NULL CHECK (octet_length(rationale_sha256) = 32),
     decided_at TIMESTAMPTZ NOT NULL,
@@ -24,7 +36,9 @@ CREATE TABLE snowman_agent_tool_approvals (
         REFERENCES snowman_agent_jobs(community_id, job_id) ON DELETE CASCADE,
     FOREIGN KEY (community_id, request_id, task_id)
         REFERENCES snowman_work_tasks(community_id, request_id, task_id) ON DELETE CASCADE,
-    CHECK (expires_at > decided_at)
+    CHECK (expires_at > decided_at),
+    CHECK ((exceptional_control_id IS NOT NULL) = independence_required),
+    CHECK (NOT independence_required OR approver_identity_id <> requested_by_identity_id)
 );
 
 CREATE INDEX idx_snowman_agent_tool_approvals_exact
@@ -41,6 +55,7 @@ CREATE TABLE snowman_agent_tool_actions (
     task_id UUID NOT NULL,
     agent_identity_id UUID NOT NULL,
     service_identity_id UUID NOT NULL,
+    requested_by_identity_id UUID NOT NULL,
     generation BIGINT NOT NULL CHECK (generation > 0),
     lease_generation BIGINT NOT NULL CHECK (lease_generation > 0),
     lease_fence_sha256 BYTEA NOT NULL CHECK (octet_length(lease_fence_sha256) = 32),

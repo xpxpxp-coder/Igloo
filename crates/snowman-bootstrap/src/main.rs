@@ -1066,18 +1066,22 @@ async fn main() -> anyhow::Result<()> {
     let model_gateway_secret_arn = required_env("SNOWMAN_MODEL_GATEWAY_RUNTIME_SECRET_ARN")?;
     let model_gateway_role = required_env("SNOWMAN_MODEL_GATEWAY_DB_ROLE")?;
     buzz_db::runtime_security::validate_role_name(&model_gateway_role)?;
+    let audit_checkpoint_secret_arn = required_env("SNOWMAN_AUDIT_CHECKPOINT_RUNTIME_SECRET_ARN")?;
+    let audit_checkpoint_role = required_env("SNOWMAN_AUDIT_CHECKPOINT_DB_ROLE")?;
+    buzz_db::runtime_security::validate_role_name(&audit_checkpoint_role)?;
     if [
         runtime_role.as_str(),
         agent_broker_role.as_str(),
         agent_coordinator_role.as_str(),
         model_gateway_role.as_str(),
+        audit_checkpoint_role.as_str(),
     ]
     .into_iter()
     .collect::<std::collections::BTreeSet<_>>()
     .len()
-        != 4
+        != 5
     {
-        bail!("relay, agent broker, agent coordinator, and model gateway database roles must be distinct");
+        bail!("relay, agent broker, agent coordinator, model gateway, and audit checkpoint database roles must be distinct");
     }
     let owner_pubkey = required_env("SNOWMAN_RELAY_OWNER_PUBKEY")?.to_ascii_lowercase();
     validate_owner_pubkey(&owner_pubkey)?;
@@ -1145,6 +1149,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Zeroizing::new(random_hex())
     };
+    let existing_audit_checkpoint =
+        existing_database_runtime_secret(&secrets, &audit_checkpoint_secret_arn).await?;
+    let mut audit_checkpoint_password = if let Some(existing) = &existing_audit_checkpoint {
+        let parsed = url::Url::parse(&existing.database_url)
+            .context("audit checkpoint DATABASE_URL is not a URL")?;
+        Zeroizing::new(decoded_url_password(&parsed)?)
+    } else {
+        Zeroizing::new(random_hex())
+    };
 
     let admin = PgPoolOptions::new()
         .max_connections(1)
@@ -1176,6 +1189,12 @@ async fn main() -> anyhow::Result<()> {
         &admin,
         &model_gateway_role,
         &model_gateway_password,
+    )
+    .await?;
+    buzz_db::runtime_security::provision_audit_checkpoint_role(
+        &admin,
+        &audit_checkpoint_role,
+        &audit_checkpoint_password,
     )
     .await?;
     buzz_db::partition::ensure_future_partitions(&admin, 6).await?;
@@ -1236,6 +1255,24 @@ async fn main() -> anyhow::Result<()> {
         .await?;
     model_gateway.close().await;
 
+    let audit_checkpoint_url = database_url(
+        &master,
+        &database,
+        &audit_checkpoint_role,
+        &audit_checkpoint_password,
+    )?;
+    let audit_checkpoint = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&audit_checkpoint_url)
+        .await
+        .context("could not verify the provisioned audit checkpoint identity")?;
+    buzz_db::runtime_security::verify_audit_checkpoint_role(
+        &audit_checkpoint,
+        &audit_checkpoint_role,
+    )
+    .await?;
+    audit_checkpoint.close().await;
+
     let document = RelayRuntimeSecret {
         database_url: runtime_url.to_string(),
         relay_private_key,
@@ -1284,13 +1321,26 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("could not write the governed model gateway runtime secret")?;
 
+    let mut audit_checkpoint_document = serde_json::to_string(&DatabaseRuntimeSecret {
+        database_url: audit_checkpoint_url.to_string(),
+    })?;
+    secrets
+        .put_secret_value()
+        .secret_id(&audit_checkpoint_secret_arn)
+        .secret_string(audit_checkpoint_document.clone())
+        .send()
+        .await
+        .context("could not write the governed audit checkpoint runtime secret")?;
+
     encoded.zeroize();
     agent_broker_document.zeroize();
     agent_coordinator_document.zeroize();
     model_gateway_document.zeroize();
+    audit_checkpoint_document.zeroize();
     agent_broker_password.zeroize();
     agent_coordinator_password.zeroize();
     model_gateway_password.zeroize();
+    audit_checkpoint_password.zeroize();
     runtime_password.zeroize();
     master.password.zeroize();
     if let Some(receipt) = workforce_receipt {

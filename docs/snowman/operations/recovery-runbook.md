@@ -67,9 +67,11 @@ recovered version coordinates plus digest and access-denial results.
 5. Fail the drill on any missing tenant, sequence regression, signature error,
    unexplained head mismatch, restore coordinate mismatch, or retention gap.
 
-The KMS checkpoint key and immutable bucket exist in Terraform; the periodic
-checkpoint publisher/verifier is not yet live. Production activation therefore
-remains blocked until that service and this drill pass.
+The publisher/verifier, dedicated database role, KMS/S3 task identity, dormant
+schedule, immutable evidence tables, and failure alarms now exist in source.
+Production activation remains blocked until the exact-account KMS rotation,
+S3 Object Lock, tamper, tenant-isolation, alert-delivery, and restore drills in
+`docs/snowman/audit-checkpoints.md` pass and the schedule is explicitly enabled.
 
 ## ECS rollback
 

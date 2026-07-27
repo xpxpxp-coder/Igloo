@@ -205,6 +205,69 @@ impl AuditService {
         Ok(true)
     }
 
+    /// Verify an exact contiguous segment and return its final hash.
+    ///
+    /// When `expected_previous_hash` is supplied, the first row must link to
+    /// that externally anchored root. Genesis verification (`from_seq == 1`)
+    /// requires a NULL predecessor. Supplying no predecessor for a later
+    /// one-row segment permits an external checkpoint verifier to compare that
+    /// exact stored row to a separately signed root without reading event data.
+    pub async fn verify_segment(
+        &self,
+        community: CommunityId,
+        from_seq: i64,
+        to_seq: i64,
+        expected_previous_hash: Option<[u8; 32]>,
+    ) -> Result<[u8; 32], AuditError> {
+        if from_seq <= 0 || to_seq < from_seq {
+            return Err(AuditError::ChainViolation { seq: from_seq });
+        }
+        let rows = sqlx::query(
+            r#"
+            SELECT community_id, seq, hash, prev_hash, action, actor_pubkey,
+                   object_id, detail, created_at
+            FROM audit_log
+            WHERE community_id = $1 AND seq BETWEEN $2 AND $3
+            ORDER BY seq ASC
+            "#,
+        )
+        .bind(community.as_uuid())
+        .bind(from_seq)
+        .bind(to_seq)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let expected_count = usize::try_from(to_seq - from_seq + 1)
+            .map_err(|_| AuditError::ChainViolation { seq: from_seq })?;
+        if rows.len() != expected_count {
+            return Err(AuditError::ChainViolation { seq: from_seq });
+        }
+        let mut previous = expected_previous_hash.map(Vec::from);
+        let mut last_hash = None;
+        for (offset, row) in rows.iter().enumerate() {
+            let entry = row_to_audit_entry(row)?;
+            let expected_seq = from_seq + i64::try_from(offset).unwrap_or(i64::MAX);
+            if entry.seq != expected_seq {
+                return Err(AuditError::ChainViolation { seq: entry.seq });
+            }
+            if offset == 0 && from_seq == 1 && entry.prev_hash.is_some() {
+                return Err(AuditError::ChainViolation { seq: entry.seq });
+            }
+            if let Some(expected) = previous.as_deref() {
+                if entry.prev_hash.as_deref() != Some(expected) {
+                    return Err(AuditError::ChainViolation { seq: entry.seq });
+                }
+            }
+            let computed = compute_hash(&entry)?;
+            if computed.as_slice() != entry.hash.as_slice() {
+                return Err(AuditError::HashMismatch { seq: entry.seq });
+            }
+            previous = Some(entry.hash.clone());
+            last_hash = Some(computed);
+        }
+        last_hash.ok_or(AuditError::ChainViolation { seq: from_seq })
+    }
+
     /// Returns up to `limit` entries from one community's chain starting at
     /// `from_seq`, ordered by sequence number. Scoped to `community` — never
     /// returns another community's rows.

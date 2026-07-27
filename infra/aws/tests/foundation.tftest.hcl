@@ -79,6 +79,22 @@ mock_provider "aws" {
     target = data.aws_iam_policy_document.meeting_command_task
     values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
+  override_data {
+    target = data.aws_iam_policy_document.audit_checkpoint_execution
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.audit_checkpoint_task
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.audit_checkpoint_scheduler_trust
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  override_data {
+    target = data.aws_iam_policy_document.audit_checkpoint_scheduler
+    values = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
 }
 
 variables {
@@ -145,6 +161,28 @@ run "dormant_staging_foundation" {
   assert {
     condition     = length(aws_ecs_task_definition.meeting_media) == 0 && length(aws_ecs_service.meeting_media) == 0
     error_message = "No meeting-media runtime may be planned before executable and evidence inputs exist."
+  }
+  assert {
+    condition     = aws_cloudwatch_event_rule.audit_checkpoint.state == "DISABLED" && aws_ecs_task_definition.audit_checkpoint.cpu == "256" && aws_ecs_task_definition.audit_checkpoint.memory == "512"
+    error_message = "Audit checkpoints must remain dormant and cost-bounded before staged evidence passes."
+  }
+}
+
+run "enabled_audit_checkpoint_schedule" {
+  command = plan
+
+  variables {
+    audit_checkpoint_schedule_enabled       = true
+    audit_checkpoint_database_schema_sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+
+  assert {
+    condition     = aws_cloudwatch_event_rule.audit_checkpoint.state == "ENABLED"
+    error_message = "The exact evidence-bound checkpoint schedule should be enabled only when explicitly configured."
+  }
+  assert {
+    condition     = aws_s3_bucket_object_lock_configuration.object["audit"].rule[0].default_retention[0].mode == "COMPLIANCE"
+    error_message = "Signed checkpoints require S3 Object Lock COMPLIANCE retention."
   }
 }
 

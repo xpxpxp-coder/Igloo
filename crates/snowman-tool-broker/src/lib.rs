@@ -55,6 +55,10 @@ pub enum ApprovalRequirement {
     None,
     /// An expiring approval by a Snowman human identity is required.
     Human,
+    /// A capable Snowman human distinct from the requesting identity is
+    /// required. Operations may select this only for an explicitly registered
+    /// exceptional control, not routine sole-founder work.
+    IndependentHuman,
 }
 
 /// File operation available to an agent. There is deliberately no shell form.
@@ -118,6 +122,8 @@ pub enum ToolIntent {
         resource_id: String,
         /// Digest of the separately bounded body, if any.
         body_sha256: Option<String>,
+        /// Size of the separately minimized body.
+        request_bytes: u64,
     },
     /// Perform one exact AWS operation from an operations-owned policy.
     Aws {
@@ -166,6 +172,21 @@ pub enum ToolRoute {
         methods: BTreeSet<HttpMethod>,
         /// Allowed resource identifiers mapped to paths in operations config.
         resource_ids: BTreeSet<String>,
+        /// Maximum minimized request body.
+        max_request_bytes: u64,
+        /// Maximum response body retained by the executor.
+        max_response_bytes: u64,
+        /// Maximum DNS and connection duration.
+        connect_timeout_ms: u64,
+        /// Maximum end-to-end request duration.
+        total_timeout_ms: u64,
+        /// Resolve once, reject every private/reserved answer, and pin one
+        /// validated address for the connection.
+        dns_pin_and_reject_private: bool,
+        /// Operations-owned credential binding, or no credential.
+        credential_binding_id: Option<String>,
+        /// Operations-owned response redaction profile.
+        redaction_profile_id: String,
         /// Must remain false.
         follow_redirects: bool,
         /// Must remain false.
@@ -228,6 +249,12 @@ pub struct CapabilityDefinition {
     pub impact: Impact,
     /// Required approval.
     pub approval: ApprovalRequirement,
+    /// Workforce capability required on the live approver. This is absent
+    /// only when approval is `None`.
+    pub approver_capability_id: Option<String>,
+    /// Stable exceptional-control identifier. This is present only for an
+    /// explicitly independent approval.
+    pub exceptional_control_id: Option<String>,
     /// Maximum execution duration.
     pub max_duration_seconds: u64,
     /// Operations kill switch.
@@ -327,6 +354,8 @@ pub struct ActionRequest {
     pub agent_identity_id: Uuid,
     /// Service identity.
     pub service_identity_id: Uuid,
+    /// Snowman workforce identity that requested the action.
+    pub requested_by_identity_id: Uuid,
     /// Job generation.
     pub generation: u64,
     /// Lease generation.
@@ -383,12 +412,35 @@ pub struct Approval {
     pub action_sha256: String,
     /// Snowman human identity that decided the action.
     pub approver_identity_id: Uuid,
+    /// Exact workforce capability asserted by this decision.
+    pub approver_capability_id: String,
+    /// Exceptional control identifier, present only when independence is
+    /// required.
+    pub exceptional_control_id: Option<String>,
     /// Approval state.
     pub decision: ApprovalDecision,
     /// Decision time.
     pub decided_at: DateTime<Utc>,
     /// Hard expiration.
     pub expires_at: DateTime<Utc>,
+}
+
+/// Fresh Snowman workforce authority for an action approver.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApproverAuthority {
+    /// Tenant boundary.
+    pub tenant_id: Uuid,
+    /// Workspace boundary.
+    pub workspace_id: Uuid,
+    /// Stable workforce identity.
+    pub identity_id: Uuid,
+    /// Live deny-by-omission capabilities.
+    pub capabilities: BTreeSet<String>,
+    /// Session expiration.
+    pub expires_at: DateTime<Utc>,
+    /// Revocation and lifecycle fence.
+    pub active: bool,
 }
 
 /// Human approval decision.
@@ -607,13 +659,28 @@ pub enum Error {
     Database,
 }
 
-/// Authorize a typed action against fresh authority and exact operations
-/// policy. This function performs no side effect.
+/// Authorize an action that needs no human approval, or reconcile an exact
+/// prior action. Approval-gated actions fail closed; callers must use
+/// [`authorize_with_approver`] with fresh workforce authority.
 pub fn authorize(
     authority: &LiveAuthority,
     request: &ActionRequest,
     registry: &CapabilityRegistry,
     approval: Option<&Approval>,
+    prior: Option<&PriorAction>,
+    now: DateTime<Utc>,
+) -> Result<Decision, Error> {
+    authorize_with_approver(authority, request, registry, approval, None, prior, now)
+}
+
+/// Authorize a typed action against fresh job and workforce authority and
+/// exact operations policy. This function performs no side effect.
+pub fn authorize_with_approver(
+    authority: &LiveAuthority,
+    request: &ActionRequest,
+    registry: &CapabilityRegistry,
+    approval: Option<&Approval>,
+    approver_authority: Option<&ApproverAuthority>,
     prior: Option<&PriorAction>,
     now: DateTime<Utc>,
 ) -> Result<Decision, Error> {
@@ -667,11 +734,22 @@ pub fn authorize(
         ));
     }
     validate_intent(&request.intent, definition)?;
+    if request.deadline_at
+        > now
+            + Duration::seconds(i64::try_from(definition.max_duration_seconds).unwrap_or(i64::MAX))
+    {
+        return Err(Error::NotAuthorized(
+            "action deadline exceeds the registered route timeout",
+        ));
+    }
 
     let approval_id =
-        if definition.approval == ApprovalRequirement::Human || definition.impact >= Impact::High {
+        if definition.approval != ApprovalRequirement::None || definition.impact >= Impact::High {
             let approval = approval.ok_or(Error::NotAuthorized("human approval is required"))?;
-            validate_approval(approval, request, now)?;
+            let approver_authority = approver_authority.ok_or(Error::NotAuthorized(
+                "live workforce approver authority is required",
+            ))?;
+            validate_approval(approval, approver_authority, request, definition, now)?;
             Some(approval.approval_id)
         } else {
             None
@@ -798,9 +876,38 @@ fn validate_definition(definition: &CapabilityDefinition) -> Result<(), Error> {
         || !is_sha256(&definition.registry_sha256)
         || definition.classifications.is_empty()
         || !(1..=MAX_ACTION_LIFETIME_SECONDS as u64).contains(&definition.max_duration_seconds)
-        || (definition.impact >= Impact::High && definition.approval != ApprovalRequirement::Human)
     {
         return Err(Error::InvalidPolicy("capability metadata is invalid"));
+    }
+    let valid_approval = match definition.approval {
+        ApprovalRequirement::None => {
+            definition.impact == Impact::Low
+                && definition.approver_capability_id.is_none()
+                && definition.exceptional_control_id.is_none()
+        }
+        ApprovalRequirement::Human => {
+            definition
+                .approver_capability_id
+                .as_deref()
+                .is_some_and(valid_identifier)
+                && definition.exceptional_control_id.is_none()
+        }
+        ApprovalRequirement::IndependentHuman => {
+            definition.impact == Impact::Critical
+                && definition
+                    .approver_capability_id
+                    .as_deref()
+                    .is_some_and(valid_identifier)
+                && definition
+                    .exceptional_control_id
+                    .as_deref()
+                    .is_some_and(valid_identifier)
+        }
+    };
+    if !valid_approval {
+        return Err(Error::InvalidPolicy(
+            "approval policy is not capability-bound or is over-scoped",
+        ));
     }
     match &definition.route {
         ToolRoute::File {
@@ -826,6 +933,13 @@ fn validate_definition(definition: &CapabilityDefinition) -> Result<(), Error> {
             port,
             methods,
             resource_ids,
+            max_request_bytes,
+            max_response_bytes,
+            connect_timeout_ms,
+            total_timeout_ms,
+            dns_pin_and_reject_private,
+            credential_binding_id,
+            redaction_profile_id,
             follow_redirects,
             inherit_proxy,
         } => {
@@ -835,6 +949,19 @@ fn validate_definition(definition: &CapabilityDefinition) -> Result<(), Error> {
                 || methods.is_empty()
                 || resource_ids.is_empty()
                 || resource_ids.iter().any(|v| !valid_identifier(v))
+                || *max_request_bytes == 0
+                || *max_request_bytes > 10 * 1024 * 1024
+                || *max_response_bytes == 0
+                || *max_response_bytes > 10 * 1024 * 1024
+                || *connect_timeout_ms == 0
+                || *connect_timeout_ms > 10_000
+                || *total_timeout_ms < *connect_timeout_ms
+                || *total_timeout_ms > 60_000
+                || !dns_pin_and_reject_private
+                || credential_binding_id
+                    .as_deref()
+                    .is_some_and(|value| !valid_identifier(value))
+                || !valid_identifier(redaction_profile_id)
                 || *follow_redirects
                 || *inherit_proxy
             {
@@ -902,6 +1029,7 @@ fn validate_request(request: &ActionRequest) -> Result<(), Error> {
         || request.task_id.is_nil()
         || request.agent_identity_id.is_nil()
         || request.service_identity_id.is_nil()
+        || request.requested_by_identity_id.is_nil()
         || request.generation == 0
         || request.lease_generation == 0
         || !is_sha256(&request.lease_fence_sha256)
@@ -963,16 +1091,20 @@ fn validate_intent(intent: &ToolIntent, definition: &CapabilityDefinition) -> Re
                 method,
                 resource_id,
                 body_sha256,
+                request_bytes,
             },
             ToolRoute::Https {
                 destination_id: allowed_destination,
                 methods,
                 resource_ids,
+                max_request_bytes,
                 ..
             },
         ) if destination_id == allowed_destination
             && methods.contains(method)
             && resource_ids.contains(resource_id)
+            && *request_bytes <= *max_request_bytes
+            && ((*request_bytes == 0) == body_sha256.is_none())
             && body_sha256.as_deref().is_none_or(is_sha256) =>
         {
             Ok(())
@@ -1019,7 +1151,9 @@ fn validate_intent(intent: &ToolIntent, definition: &CapabilityDefinition) -> Re
 
 fn validate_approval(
     approval: &Approval,
+    authority: &ApproverAuthority,
     request: &ActionRequest,
+    definition: &CapabilityDefinition,
     now: DateTime<Utc>,
 ) -> Result<(), Error> {
     if approval.approval_id.is_nil()
@@ -1030,12 +1164,39 @@ fn validate_approval(
         || approval.generation != request.generation
         || approval.action_sha256 != request.action_sha256
         || approval.approver_identity_id.is_nil()
+        || authority.tenant_id != request.tenant_id
+        || authority.workspace_id != request.workspace_id
+        || authority.identity_id != approval.approver_identity_id
+        || !authority.active
+        || authority.expires_at <= now
         || approval.decision != ApprovalDecision::Approved
         || approval.decided_at > now
         || approval.expires_at <= now
         || approval.expires_at > request.deadline_at
     {
         return Err(Error::NotAuthorized("approval is not live and exact"));
+    }
+    let required_capability =
+        definition
+            .approver_capability_id
+            .as_deref()
+            .ok_or(Error::NotAuthorized(
+                "approver capability is not configured",
+            ))?;
+    if approval.approver_capability_id != required_capability
+        || !authority.capabilities.contains(required_capability)
+        || approval.exceptional_control_id != definition.exceptional_control_id
+    {
+        return Err(Error::NotAuthorized(
+            "approver lacks the exact live workforce capability",
+        ));
+    }
+    if definition.approval == ApprovalRequirement::IndependentHuman
+        && approval.approver_identity_id == request.requested_by_identity_id
+    {
+        return Err(Error::NotAuthorized(
+            "exceptional control requires an independent approver",
+        ));
     }
     Ok(())
 }
@@ -1201,6 +1362,8 @@ mod tests {
             ]),
             impact: Impact::Low,
             approval: ApprovalRequirement::None,
+            approver_capability_id: None,
+            exceptional_control_id: None,
             max_duration_seconds: 60,
             enabled: true,
         }
@@ -1218,6 +1381,7 @@ mod tests {
             task_id: authority.task_id,
             agent_identity_id: authority.agent_identity_id,
             service_identity_id: authority.service_identity_id,
+            requested_by_identity_id: Uuid::from_u128(9),
             generation: authority.generation,
             lease_generation: authority.lease_generation,
             lease_fence_sha256: authority.lease_fence_sha256,
@@ -1232,11 +1396,26 @@ mod tests {
                 size_bytes: 512,
             },
             input_sha256: digest('d'),
-            deadline_at: now + Duration::minutes(5),
+            deadline_at: now + Duration::seconds(30),
             action_sha256: String::new(),
         };
         request.action_sha256 = request.canonical_sha256().expect("canonical digest");
         request
+    }
+
+    fn approver_authority(
+        request: &ActionRequest,
+        identity_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> ApproverAuthority {
+        ApproverAuthority {
+            tenant_id: request.tenant_id,
+            workspace_id: request.workspace_id,
+            identity_id,
+            capabilities: BTreeSet::from(["workforce.tools.approve".into()]),
+            expires_at: now + Duration::hours(1),
+            active: true,
+        }
     }
 
     #[test]
@@ -1382,6 +1561,13 @@ mod tests {
                 port: 443,
                 methods: BTreeSet::from([HttpMethod::Post]),
                 resource_ids: BTreeSet::from(["artifact-create".into()]),
+                max_request_bytes: 64 * 1024,
+                max_response_bytes: 64 * 1024,
+                connect_timeout_ms: 2_000,
+                total_timeout_ms: 10_000,
+                dns_pin_and_reject_private: true,
+                credential_binding_id: None,
+                redaction_profile_id: "default-redaction-v1".into(),
                 follow_redirects: false,
                 inherit_proxy: false,
             };
@@ -1394,6 +1580,13 @@ mod tests {
             port: 443,
             methods: BTreeSet::from([HttpMethod::Post]),
             resource_ids: BTreeSet::from(["artifact-create".into()]),
+            max_request_bytes: 64 * 1024,
+            max_response_bytes: 64 * 1024,
+            connect_timeout_ms: 2_000,
+            total_timeout_ms: 10_000,
+            dns_pin_and_reject_private: true,
+            credential_binding_id: None,
+            redaction_profile_id: "default-redaction-v1".into(),
             follow_redirects: true,
             inherit_proxy: false,
         };
@@ -1445,6 +1638,7 @@ mod tests {
         let mut high = definition();
         high.impact = Impact::High;
         high.approval = ApprovalRequirement::Human;
+        high.approver_capability_id = Some("workforce.tools.approve".into());
         let registry = CapabilityRegistry::new(vec![high]).expect("registry");
         let request = request(now);
         assert_eq!(
@@ -1459,18 +1653,73 @@ mod tests {
             task_id: request.task_id,
             generation: request.generation,
             action_sha256: request.action_sha256.clone(),
-            approver_identity_id: Uuid::new_v4(),
+            approver_identity_id: request.requested_by_identity_id,
+            approver_capability_id: "workforce.tools.approve".into(),
+            exceptional_control_id: None,
             decision: ApprovalDecision::Approved,
             decided_at: now,
             expires_at: request.deadline_at,
         };
-        assert!(authorize(
+        let approver = approver_authority(&request, approval.approver_identity_id, now);
+        assert!(authorize_with_approver(
             &authority(now),
             &request,
             &registry,
             Some(&approval),
+            Some(&approver),
             None,
             now
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn founder_can_approve_normal_high_impact_but_exceptional_control_is_independent() {
+        let now = Utc::now();
+        let mut exceptional = definition();
+        exceptional.impact = Impact::Critical;
+        exceptional.approval = ApprovalRequirement::IndependentHuman;
+        exceptional.approver_capability_id = Some("workforce.tools.approve".into());
+        exceptional.exceptional_control_id = Some("production-key-destruction".into());
+        let registry = CapabilityRegistry::new(vec![exceptional]).expect("registry");
+        let request = request(now);
+        let mut approval = Approval {
+            approval_id: Uuid::new_v4(),
+            tenant_id: request.tenant_id,
+            workspace_id: request.workspace_id,
+            job_id: request.job_id,
+            task_id: request.task_id,
+            generation: request.generation,
+            action_sha256: request.action_sha256.clone(),
+            approver_identity_id: request.requested_by_identity_id,
+            approver_capability_id: "workforce.tools.approve".into(),
+            exceptional_control_id: Some("production-key-destruction".into()),
+            decision: ApprovalDecision::Approved,
+            decided_at: now,
+            expires_at: request.deadline_at,
+        };
+        let same_person = approver_authority(&request, approval.approver_identity_id, now);
+        assert!(authorize_with_approver(
+            &authority(now),
+            &request,
+            &registry,
+            Some(&approval),
+            Some(&same_person),
+            None,
+            now,
+        )
+        .is_err());
+
+        approval.approver_identity_id = Uuid::from_u128(10);
+        let independent = approver_authority(&request, approval.approver_identity_id, now);
+        assert!(authorize_with_approver(
+            &authority(now),
+            &request,
+            &registry,
+            Some(&approval),
+            Some(&independent),
+            None,
+            now,
         )
         .is_ok());
     }
@@ -1481,6 +1730,7 @@ mod tests {
         let mut high = definition();
         high.impact = Impact::High;
         high.approval = ApprovalRequirement::Human;
+        high.approver_capability_id = Some("workforce.tools.approve".into());
         let registry = CapabilityRegistry::new(vec![high]).expect("registry");
         let request = request(now);
         let mut approval = Approval {
@@ -1492,6 +1742,8 @@ mod tests {
             generation: request.generation,
             action_sha256: request.action_sha256.clone(),
             approver_identity_id: Uuid::new_v4(),
+            approver_capability_id: "workforce.tools.approve".into(),
+            exceptional_control_id: None,
             decision: ApprovalDecision::Approved,
             decided_at: now,
             expires_at: request.deadline_at,
@@ -1504,22 +1756,26 @@ mod tests {
                 2 => invalid.decision = ApprovalDecision::Denied,
                 _ => invalid.decision = ApprovalDecision::Revoked,
             }
-            assert!(authorize(
+            let approver = approver_authority(&request, invalid.approver_identity_id, now);
+            assert!(authorize_with_approver(
                 &authority(now),
                 &request,
                 &registry,
                 Some(&invalid),
+                Some(&approver),
                 None,
                 now
             )
             .is_err());
         }
         approval.approver_identity_id = Uuid::nil();
-        assert!(authorize(
+        let approver = approver_authority(&request, approval.approver_identity_id, now);
+        assert!(authorize_with_approver(
             &authority(now),
             &request,
             &registry,
             Some(&approval),
+            Some(&approver),
             None,
             now
         )

@@ -1,6 +1,7 @@
 # Snowman 24/7 specialist-team orchestration boundary
 
-Status: production foundation implemented; live scheduler/service/UI and staged
+Status: production foundation and bounded private API implemented; activation,
+dispatch materialization, worker delivery, completion ingestion, and staged
 verification remain gated.
 
 The Snowman orchestration layer turns a governed user request, project,
@@ -66,13 +67,27 @@ task, cost-accounted, and evidence preserving. Sorted receipt metadata produces
 a deterministic progress digest and unlocks only DAG nodes whose dependencies
 have accepted successful receipts.
 
+## Bounded private service
+
+`snowman-orchestration-service` implements signed, tenant-scoped create-plan,
+cancel-plan, and crash-fenced dispatch-claim operations. Plan persistence is
+serializable and writes all task rows before dependency edges, so a valid DAG
+does not depend on caller ordering. Recurrence records remain disabled by
+default. DST gap/fold, weekday, catch-up, and local-minute resolution use the
+pinned `chrono-tz/0.10.4` implementation; this is recorded as the compiled
+timezone implementation and does not claim an independently attested IANA data
+release.
+
+The service does not yet activate a plan, materialize due recurrences into
+dispatch rows, deliver coordinator commands, or ingest terminal receipts.
+Those absences are fail-closed rather than simulated by the UI.
+
 ## Remaining launch gates
 
-- implement the private transactional orchestration API that writes these
-  tables and calls the existing workforce/coordinator contracts;
-- run a timezone-aware scheduler against a pinned IANA timezone database,
-  including DST gap/fold, quiet-hour, reminder, recurrence, and catch-up tests;
-- implement request/project/deadline/team-progress and approval UI with full
+- implement activation, recurrence materialization, coordinator delivery,
+  terminal-receipt ingestion, and the long-running scheduler loop;
+- independently attest the IANA data release used by the pinned timezone build;
+- connect the default-off team-operations UI to the private API and complete
   keyboard, screen-reader, zoom, reduced-motion, and mobile verification;
 - add crash/lost-response, cancellation race, supersession, duplicate receipt,
   cross-tenant, budget exhaustion, and Analyst-reference authorization tests
