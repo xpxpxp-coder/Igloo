@@ -20,6 +20,7 @@ Current decision: **adopt with hardening; do not activate production yet**.
 - [Tenant-isolation proof and staging gate](tenant-isolation-proof.md)
 - [One-shot agent executor boundary](agent-executor-boundary.md)
 - [Production acceptance criteria](production-acceptance-criteria.md)
+- [Production activation inputs](production-activation-inputs.md)
 - [External dependency and data-egress register](external-dependency-register.md)
 - [Available resource and reuse inventory](resource-inventory.md)
 - [Branding and compatibility register](branding-compatibility-register.md)
