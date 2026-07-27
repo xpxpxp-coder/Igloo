@@ -2952,6 +2952,15 @@ impl Db {
         workforce_identity::enroll_human_workforce_session(&self.pool, community, enrollment).await
     }
 
+    /// Atomically consume an authority assertion and revoke human access.
+    pub async fn revoke_human_workforce_session(
+        &self,
+        community: CommunityId,
+        revocation: &workforce_identity::NewHumanWorkforceRevocation,
+    ) -> Result<workforce_identity::HumanWorkforceRevocationResult> {
+        workforce_identity::revoke_human_workforce_session(&self.pool, community, revocation).await
+    }
+
     /// Verify an active tenant-local agent service identity and capability.
     pub async fn active_service_identity_has_capability(
         &self,

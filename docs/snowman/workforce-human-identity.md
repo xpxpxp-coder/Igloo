@@ -1,7 +1,8 @@
 # Snowman workforce human identity bridge
 
-Status: enrollment contract and least-privilege AWS key boundary implemented in
-source; production activation remains blocked on revocation/logout, client UX,
+Status: enrollment, signed session/global/identity revocation, Analyst logout
+propagation, and the least-privilege AWS key boundary are implemented in source.
+Production activation remains blocked on client UX, durable retry operation,
 live private routing, current Google Workspace MFA-policy evidence, and staged
 adversarial proof.
 
@@ -80,10 +81,30 @@ SHA-256 digest and review time for Google Workspace MFA/2SV policy evidence; the
 receiver refuses evidence older than 120 days. This is a policy-evidence control,
 not a claim of per-request authentication-method proof.
 
+## Revocation and logout
+
+Analyst 360 records a privacy-preserving binding between its federated session
+and each Command Center device session. Logout signs a new one-time assertion
+for the distinct `sessions.revoke` operation and exact private revocation path.
+The receiver validates the same tenant, broker, project, key, body, nonce, and
+host boundaries as enrollment, then atomically revokes the session, device key,
+role grants when no live sessions remain, and only relay membership that the
+Snowman identity broker created.
+
+Revocation assertions accept only receiver-defined lifecycle reasons. Session,
+all-session, and permanent identity scopes are explicit; only the session scope
+may include a session ID. Provider tokens, email addresses, raw provider
+subjects, Analyst cookies, and client data remain excluded. If delivery is not
+confirmed, Analyst completes local logout but returns HTTP 202 and retains the
+binding as `revocation_pending` for governed retry. A successful receipt is
+hashed into the Analyst audit record. Retried logical revocations select only
+still-live device sessions, so they cannot remove membership from a later
+re-enrollment.
+
 ## Remaining production evidence
 
-- implement logout, single-device and global revocation, workforce removal, and
-  key-rotation flows with end-to-end audit receipts;
+- operate and prove durable retry for unconfirmed revocations, plus the admin
+  workforce-removal and key-rotation UX;
 - build the desktop/web/mobile enrollment and session/device management UX;
 - prove device-count, replay, stale-authentication, stale-MFA, role downgrade,
   broker/key rotation, and two-tenant isolation in staging;

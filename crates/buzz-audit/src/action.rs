@@ -24,6 +24,8 @@ pub enum AuditAction {
     AuthSuccess,
     /// A client authentication attempt failed.
     AuthFailure,
+    /// A previously authenticated client or identity was revoked.
+    AuthRevoked,
     /// A client exceeded the rate limit.
     RateLimitExceeded,
     /// A media file was uploaded via the Blossom endpoint.
@@ -43,6 +45,7 @@ impl AuditAction {
             Self::MemberRemoved => "member_removed",
             Self::AuthSuccess => "auth_success",
             Self::AuthFailure => "auth_failure",
+            Self::AuthRevoked => "auth_revoked",
             Self::RateLimitExceeded => "rate_limit_exceeded",
             Self::MediaUploaded => "media_uploaded",
         }
@@ -58,6 +61,7 @@ impl AuditAction {
         Self::MemberRemoved,
         Self::AuthSuccess,
         Self::AuthFailure,
+        Self::AuthRevoked,
         Self::RateLimitExceeded,
         Self::MediaUploaded,
     ];

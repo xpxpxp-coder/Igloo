@@ -18,7 +18,9 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use buzz_audit::{AuditAction, NewAuditEntry};
 use buzz_auth::LimitType;
-use buzz_db::workforce_identity::{NewHumanWorkforceSession, WorkforceIdentityBroker};
+use buzz_db::workforce_identity::{
+    NewHumanWorkforceRevocation, NewHumanWorkforceSession, WorkforceIdentityBroker,
+};
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -31,9 +33,12 @@ use crate::state::AppState;
 use super::{api_error, internal_error};
 
 const PATH: &str = "/internal/snowman/v1/workforce/sessions/enroll";
+const REVOCATION_PATH: &str = "/internal/snowman/v1/workforce/sessions/revoke";
 const ASSERTION_VERSION: &str = "snowman.workforce-identity-assertion.v1";
 const CONTRACT_VERSION: &str = "snowman.workforce-session-enrollment.v1";
+const REVOCATION_CONTRACT_VERSION: &str = "snowman.workforce-session-revocation.v1";
 const OPERATION: &str = "sessions.enroll";
+const REVOCATION_OPERATION: &str = "sessions.revoke";
 const DEVICE_PROOF_PURPOSE: &str = "snowman-workforce-session-enrollment";
 const MAX_BODY_BYTES: usize = 32 * 1024;
 const MAX_ASSERTION_AGE_SECONDS: i64 = 90;
@@ -62,6 +67,23 @@ struct EnrollmentRequest {
     device_proof: nostr::Event,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RevocationRequest {
+    schema_version: String,
+    assertion_id: Uuid,
+    broker_id: String,
+    provider: String,
+    provider_subject_sha256: String,
+    hosted_domain: String,
+    tenant_id: String,
+    client_id: String,
+    project_id: String,
+    revocation_scope: String,
+    session_id: Option<Uuid>,
+    reason: String,
+}
+
 #[derive(Debug)]
 struct AuthorityAssertion {
     principal_id: String,
@@ -70,6 +92,8 @@ struct AuthorityAssertion {
     signed_at: DateTime<Utc>,
     signature: Vec<u8>,
     body_sha256: [u8; 32],
+    operation: &'static str,
+    request_target: &'static str,
 }
 
 #[derive(Serialize)]
@@ -111,7 +135,7 @@ pub async fn enroll_human_session(
     let request: EnrollmentRequest = serde_json::from_slice(&body)
         .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workforce enrollment JSON"))?;
     validate_request_shape(&request)?;
-    let assertion = parse_assertion(&headers, payload_sha256)?;
+    let assertion = parse_assertion(&headers, payload_sha256, OPERATION, PATH)?;
     if assertion.principal_id != request.broker_id
         || assertion.nonce != request.assertion_id.to_string()
     {
@@ -236,6 +260,204 @@ pub async fn enroll_human_session(
             "provider_token_persisted": false
         })),
     ))
+}
+
+/// Revoke one session, all sessions, or one Google-authenticated human identity.
+pub async fn revoke_human_session(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
+    if !state.config.snowman_workforce_identity_api_enabled {
+        return Err(api_error(StatusCode::NOT_FOUND, "not found"));
+    }
+    if body.len() > MAX_BODY_BYTES {
+        return Err(api_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "workforce revocation request is too large",
+        ));
+    }
+    let raw_host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let tenant = crate::tenant::bind_community(&state.db, raw_host)
+        .await
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "not found"))?;
+    let payload_sha256: [u8; 32] = Sha256::digest(&body).into();
+    let request: RevocationRequest = serde_json::from_slice(&body)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid workforce revocation JSON"))?;
+    validate_revocation_shape(&request)?;
+    let assertion = parse_assertion(
+        &headers,
+        payload_sha256,
+        REVOCATION_OPERATION,
+        REVOCATION_PATH,
+    )?;
+    if assertion.principal_id != request.broker_id
+        || assertion.nonce != request.assertion_id.to_string()
+    {
+        return Err(unauthorized(
+            "workforce revocation assertion is not bound to this request",
+        ));
+    }
+    validate_assertion_freshness(assertion.signed_at, Utc::now())?;
+    let broker = state
+        .db
+        .workforce_identity_broker(tenant.community(), &request.broker_id)
+        .await
+        .map_err(|_| internal_error("workforce identity authority lookup failed"))?
+        .ok_or_else(|| {
+            api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "workforce identity authority is not active for this workspace",
+            )
+        })?;
+    if assertion.key_id != broker.signing_kms_key_arn
+        || request.provider != broker.provider
+        || request.hosted_domain != broker.hosted_domain
+        || request.tenant_id != broker.tenant_id
+        || request.client_id != broker.client_id
+        || request.project_id != broker.project_id
+    {
+        return Err(unauthorized(
+            "workforce revocation assertion is not bound to this workspace",
+        ));
+    }
+    enforce_admission(&state, &tenant, &assertion).await?;
+    verify_kms_signature(&assertion).await.map_err(|error| {
+        tracing::warn!(%error, "Snowman workforce revocation KMS verification failed");
+        unauthorized("workforce revocation assertion is invalid")
+    })?;
+    let subject_sha256 = parse_sha256(&request.provider_subject_sha256)
+        .ok_or_else(|| unprocessable("provider subject digest is invalid"))?;
+    let identity_id = stable_identity_id(tenant.community().as_uuid(), &subject_sha256);
+    let revoked = state
+        .db
+        .revoke_human_workforce_session(
+            tenant.community(),
+            &NewHumanWorkforceRevocation {
+                assertion_id: request.assertion_id,
+                broker_id: request.broker_id.clone(),
+                identity_id,
+                provider_subject_sha256: subject_sha256,
+                session_id: request.session_id,
+                revocation_scope: request.revocation_scope.clone(),
+                reason: request.reason.clone(),
+                assertion_body_sha256: assertion.body_sha256,
+                revoked_at: Utc::now(),
+            },
+        )
+        .await
+        .map_err(|error| {
+            let message = error.to_string();
+            if message.contains("already used") {
+                api_error(
+                    StatusCode::CONFLICT,
+                    "workforce revocation assertion was already used",
+                )
+            } else if message.contains("not enrolled") || message.contains("not bound") {
+                api_error(
+                    StatusCode::NOT_FOUND,
+                    "workforce revocation target was not found",
+                )
+            } else if message.contains("conflict") {
+                api_error(
+                    StatusCode::CONFLICT,
+                    "workforce revocation authority conflicts",
+                )
+            } else {
+                tracing::error!(%error, "Snowman workforce revocation failed");
+                internal_error("workforce revocation failed")
+            }
+        })?;
+    if let Some(audit_tx) = &state.audit_tx {
+        if let Err(error) = audit_tx
+            .send(NewAuditEntry {
+                community_id: tenant.community(),
+                action: AuditAction::AuthRevoked,
+                actor_pubkey: None,
+                object_id: Some(
+                    request
+                        .session_id
+                        .map_or_else(|| identity_id.to_string(), |value| value.to_string()),
+                ),
+                detail: json!({
+                    "broker_id": request.broker_id,
+                    "identity_id": identity_id,
+                    "revocation_scope": request.revocation_scope,
+                    "reason": request.reason,
+                    "revoked_session_count": revoked.revoked_session_count,
+                    "revoked_device_count": revoked.revoked_device_count,
+                    "revoked_grant_count": revoked.revoked_grant_count,
+                    "revoked_member_count": revoked.revoked_member_count,
+                    "identity_revoked": revoked.identity_revoked,
+                    "provider_subject_excluded": true,
+                    "raw_email_excluded": true,
+                    "token_excluded": true
+                }),
+            })
+            .await
+        {
+            tracing::error!(%error, "workforce revocation audit channel closed");
+            metrics::counter!("buzz_audit_send_errors_total").increment(1);
+        }
+    }
+    metrics::counter!(
+        "snowman_workforce_human_revocations_total",
+        "scope" => request.revocation_scope.clone(),
+        "reason" => request.reason.clone()
+    )
+    .increment(1);
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "schema_version": REVOCATION_CONTRACT_VERSION,
+            "identity_id": revoked.identity_id,
+            "session_id": request.session_id,
+            "revocation_scope": request.revocation_scope,
+            "reason": request.reason,
+            "revoked_session_count": revoked.revoked_session_count,
+            "revoked_device_count": revoked.revoked_device_count,
+            "revoked_grant_count": revoked.revoked_grant_count,
+            "revoked_member_count": revoked.revoked_member_count,
+            "identity_revoked": revoked.identity_revoked,
+            "provider_token_persisted": false
+        })),
+    ))
+}
+
+fn validate_revocation_shape(request: &RevocationRequest) -> Result<(), (StatusCode, Json<Value>)> {
+    let valid_scope = matches!(
+        request.revocation_scope.as_str(),
+        "session" | "all_sessions" | "identity"
+    );
+    let valid_reason = matches!(
+        request.reason.as_str(),
+        "user_logout"
+            | "device_removed"
+            | "global_logout"
+            | "identity_inactive"
+            | "assignment_changed"
+            | "security_response"
+    );
+    if request.schema_version != REVOCATION_CONTRACT_VERSION
+        || request.assertion_id.is_nil()
+        || !bounded_identifier(&request.broker_id)
+        || request.provider != "google_workspace"
+        || parse_sha256(&request.provider_subject_sha256).is_none()
+        || !snowman_scope(&request.tenant_id)
+        || !snowman_scope(&request.client_id)
+        || !snowman_scope(&request.project_id)
+        || !valid_hosted_domain(&request.hosted_domain)
+        || !valid_scope
+        || !valid_reason
+        || (request.revocation_scope == "session") != request.session_id.is_some()
+        || request.session_id.is_some_and(|value| value.is_nil())
+    {
+        return Err(unprocessable("workforce revocation contract is invalid"));
+    }
+    Ok(())
 }
 
 fn validate_request_shape(request: &EnrollmentRequest) -> Result<(), (StatusCode, Json<Value>)> {
@@ -399,6 +621,8 @@ fn human_capabilities(role: &str) -> Vec<String> {
 fn parse_assertion(
     headers: &HeaderMap,
     body_sha256: [u8; 32],
+    operation: &'static str,
+    request_target: &'static str,
 ) -> Result<AuthorityAssertion, (StatusCode, Json<Value>)> {
     if required_header(headers, "x-snowman-assertion-version", 80)? != ASSERTION_VERSION {
         return Err(unauthorized(
@@ -428,6 +652,8 @@ fn parse_assertion(
         signed_at,
         signature,
         body_sha256,
+        operation,
+        request_target,
     })
 }
 
@@ -516,9 +742,9 @@ fn canonical_assertion_message(assertion: &AuthorityAssertion) -> Result<Vec<u8>
         key_id: &assertion.key_id,
         method: "POST",
         nonce: &assertion.nonce,
-        operation: OPERATION,
+        operation: assertion.operation,
         principal_id: &assertion.principal_id,
-        request_target: PATH,
+        request_target: assertion.request_target,
         signed_at: rfc3339(assertion.signed_at),
         version: ASSERTION_VERSION,
     })
@@ -644,5 +870,82 @@ mod tests {
         assert!(!valid_hosted_domain("snowmanai.org.evil.example"));
         assert!(snowman_scope("aptive"));
         assert!(!snowman_scope("aptive client"));
+    }
+
+    #[test]
+    fn revocation_contract_rejects_mismatched_targets_and_unapproved_reasons() {
+        let valid = RevocationRequest {
+            schema_version: REVOCATION_CONTRACT_VERSION.to_string(),
+            assertion_id: Uuid::from_u128(1),
+            broker_id: "snowman-analyst360-identity".to_string(),
+            provider: "google_workspace".to_string(),
+            provider_subject_sha256: "11".repeat(32),
+            hosted_domain: "snowmanai.org".to_string(),
+            tenant_id: "aptive".to_string(),
+            client_id: "aptive".to_string(),
+            project_id: "direct_mail_matchback".to_string(),
+            revocation_scope: "session".to_string(),
+            session_id: Some(Uuid::from_u128(2)),
+            reason: "user_logout".to_string(),
+        };
+        assert!(validate_revocation_shape(&valid).is_ok());
+        assert!(validate_revocation_shape(&RevocationRequest {
+            session_id: None,
+            ..valid
+        })
+        .is_err());
+        assert!(validate_revocation_shape(&RevocationRequest {
+            revocation_scope: "identity".to_string(),
+            session_id: None,
+            reason: "caller_supplied_reason".to_string(),
+            ..RevocationRequest {
+                schema_version: REVOCATION_CONTRACT_VERSION.to_string(),
+                assertion_id: Uuid::from_u128(3),
+                broker_id: "snowman-analyst360-identity".to_string(),
+                provider: "google_workspace".to_string(),
+                provider_subject_sha256: "22".repeat(32),
+                hosted_domain: "snowmanai.org".to_string(),
+                tenant_id: "aptive".to_string(),
+                client_id: "aptive".to_string(),
+                project_id: "direct_mail_matchback".to_string(),
+                revocation_scope: "identity".to_string(),
+                session_id: None,
+                reason: "security_response".to_string(),
+            }
+        })
+        .is_err());
+    }
+
+    #[test]
+    fn canonical_assertions_bind_enrollment_and_revocation_to_distinct_routes() {
+        let base = AuthorityAssertion {
+            principal_id: "snowman-analyst360-identity".to_string(),
+            key_id: "arn:aws:kms:us-west-2:333333333333:key/00000000-0000-4000-8000-000000000030"
+                .to_string(),
+            nonce: Uuid::from_u128(1).to_string(),
+            signed_at: DateTime::parse_from_rfc3339("2026-07-26T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            signature: vec![7; 256],
+            body_sha256: [9; 32],
+            operation: OPERATION,
+            request_target: PATH,
+        };
+        let enrollment: Value =
+            serde_json::from_slice(&canonical_assertion_message(&base).unwrap()).unwrap();
+        let revocation: Value = serde_json::from_slice(
+            &canonical_assertion_message(&AuthorityAssertion {
+                operation: REVOCATION_OPERATION,
+                request_target: REVOCATION_PATH,
+                ..base
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(enrollment["operation"], OPERATION);
+        assert_eq!(enrollment["request_target"], PATH);
+        assert_eq!(revocation["operation"], REVOCATION_OPERATION);
+        assert_eq!(revocation["request_target"], REVOCATION_PATH);
+        assert_ne!(enrollment, revocation);
     }
 }

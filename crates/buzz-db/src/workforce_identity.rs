@@ -90,6 +90,46 @@ pub struct EnrolledHumanWorkforceSession {
     pub role: String,
 }
 
+/// Validated, authority-signed revocation of a human identity or session set.
+#[derive(Debug, Clone)]
+pub struct NewHumanWorkforceRevocation {
+    /// One-time authority assertion identifier.
+    pub assertion_id: Uuid,
+    /// Bound identity-authority principal.
+    pub broker_id: String,
+    /// Stable tenant-local human identity.
+    pub identity_id: Uuid,
+    /// Domain-separated provider-subject digest used to prove identity binding.
+    pub provider_subject_sha256: [u8; 32],
+    /// One session for `session`, otherwise `None`.
+    pub session_id: Option<Uuid>,
+    /// `session`, `all_sessions`, or permanent `identity` revocation.
+    pub revocation_scope: String,
+    /// Bounded receiver-approved lifecycle reason.
+    pub reason: String,
+    /// SHA-256 of the complete revocation request body.
+    pub assertion_body_sha256: [u8; 32],
+    /// Receiver-observed revocation time.
+    pub revoked_at: DateTime<Utc>,
+}
+
+/// Counts returned from an atomic human workforce revocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HumanWorkforceRevocationResult {
+    /// Stable affected identity.
+    pub identity_id: Uuid,
+    /// Number of live sessions revoked.
+    pub revoked_session_count: u64,
+    /// Number of live device bindings revoked.
+    pub revoked_device_count: u64,
+    /// Number of live role grants revoked.
+    pub revoked_grant_count: u64,
+    /// Number of broker-owned relay memberships removed.
+    pub revoked_member_count: u64,
+    /// Whether the identity itself is now permanently revoked.
+    pub identity_revoked: bool,
+}
+
 /// Load one active, tenant-scoped Snowman identity-authority binding.
 pub async fn workforce_identity_broker(
     pool: &PgPool,
@@ -376,6 +416,263 @@ pub async fn enroll_human_workforce_session(
         session_id: enrollment.session_id,
         expires_at: enrollment.expires_at,
         role: enrollment.role.clone(),
+    })
+}
+
+/// Atomically revoke one device session, every session, or the human identity.
+pub async fn revoke_human_workforce_session(
+    pool: &PgPool,
+    community_id: CommunityId,
+    revocation: &NewHumanWorkforceRevocation,
+) -> Result<HumanWorkforceRevocationResult> {
+    if revocation.assertion_id.is_nil()
+        || revocation.identity_id.is_nil()
+        || revocation.broker_id.trim().is_empty()
+        || !matches!(
+            revocation.reason.as_str(),
+            "user_logout"
+                | "device_removed"
+                | "global_logout"
+                | "identity_inactive"
+                | "assignment_changed"
+                | "security_response"
+        )
+        || !matches!(
+            revocation.revocation_scope.as_str(),
+            "session" | "all_sessions" | "identity"
+        )
+        || (revocation.revocation_scope == "session") != revocation.session_id.is_some()
+    {
+        return Err(DbError::InvalidData(
+            "Snowman human revocation contains an invalid target".into(),
+        ));
+    }
+    let mut tx = pool.begin().await?;
+    let identity = sqlx::query(
+        r#"
+        SELECT identity_id, identity_type, provisioning_authority
+        FROM snowman_workforce_identities
+        WHERE community_id=$1 AND provider='google_workspace'
+          AND provider_subject_sha256=$2
+        FOR UPDATE
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(revocation.provider_subject_sha256.as_slice())
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(identity) = identity else {
+        return Err(DbError::InvalidData(
+            "Snowman human revocation identity is not enrolled".into(),
+        ));
+    };
+    let stored_identity: Uuid = identity.try_get("identity_id")?;
+    let identity_type: String = identity.try_get("identity_type")?;
+    let authority: Option<String> = identity.try_get("provisioning_authority")?;
+    if stored_identity != revocation.identity_id
+        || identity_type != "human"
+        || authority.as_deref() != Some("identity_broker")
+    {
+        return Err(DbError::InvalidData(
+            "Snowman human revocation conflicts with identity authority".into(),
+        ));
+    }
+    if let Some(session_id) = revocation.session_id {
+        let belongs: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM snowman_workforce_sessions \
+             WHERE community_id=$1 AND identity_id=$2 AND session_id=$3)",
+        )
+        .bind(community_id.as_uuid())
+        .bind(revocation.identity_id)
+        .bind(session_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !belongs {
+            return Err(DbError::InvalidData(
+                "Snowman human revocation session is not bound to the identity".into(),
+            ));
+        }
+    }
+
+    let receipt = sqlx::query(
+        r#"
+        INSERT INTO snowman_workforce_revocation_receipts
+          (community_id, assertion_id, broker_id, identity_id, session_id,
+           revocation_scope, reason, assertion_body_sha256,
+           revoked_session_count, revoked_device_count, revoked_grant_count,
+           revoked_member_count, revoked_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,0,0,0,$9)
+        ON CONFLICT (community_id, assertion_id) DO NOTHING
+        "#,
+    )
+    .bind(community_id.as_uuid())
+    .bind(revocation.assertion_id)
+    .bind(&revocation.broker_id)
+    .bind(revocation.identity_id)
+    .bind(revocation.session_id)
+    .bind(&revocation.revocation_scope)
+    .bind(&revocation.reason)
+    .bind(revocation.assertion_body_sha256.as_slice())
+    .bind(revocation.revoked_at)
+    .execute(&mut *tx)
+    .await?;
+    if receipt.rows_affected() != 1 {
+        return Err(DbError::InvalidData(
+            "Snowman workforce revocation assertion was already used".into(),
+        ));
+    }
+
+    let device_rows = if let Some(session_id) = revocation.session_id {
+        sqlx::query(
+            "SELECT device_pubkey FROM snowman_workforce_sessions \
+             WHERE community_id=$1 AND identity_id=$2 AND session_id=$3 \
+               AND revoked_at IS NULL",
+        )
+        .bind(community_id.as_uuid())
+        .bind(revocation.identity_id)
+        .bind(session_id)
+        .fetch_all(&mut *tx)
+        .await?
+    } else {
+        sqlx::query(
+            "SELECT DISTINCT device_pubkey FROM snowman_workforce_sessions \
+             WHERE community_id=$1 AND identity_id=$2 AND revoked_at IS NULL",
+        )
+        .bind(community_id.as_uuid())
+        .bind(revocation.identity_id)
+        .fetch_all(&mut *tx)
+        .await?
+    };
+    let device_pubkeys = device_rows
+        .iter()
+        .map(|row| row.try_get::<Vec<u8>, _>("device_pubkey"))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let sessions = if let Some(session_id) = revocation.session_id {
+        sqlx::query(
+            "UPDATE snowman_workforce_sessions SET revoked_at=$4, revocation_reason=$5 \
+             WHERE community_id=$1 AND identity_id=$2 AND session_id=$3 \
+               AND revoked_at IS NULL",
+        )
+        .bind(community_id.as_uuid())
+        .bind(revocation.identity_id)
+        .bind(session_id)
+        .bind(revocation.revoked_at)
+        .bind(&revocation.reason)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+    } else {
+        sqlx::query(
+            "UPDATE snowman_workforce_sessions SET revoked_at=$3, revocation_reason=$4 \
+             WHERE community_id=$1 AND identity_id=$2 AND revoked_at IS NULL",
+        )
+        .bind(community_id.as_uuid())
+        .bind(revocation.identity_id)
+        .bind(revocation.revoked_at)
+        .bind(&revocation.reason)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+    };
+    let bindings = if let Some(session_id) = revocation.session_id {
+        sqlx::query(
+            "UPDATE snowman_workforce_key_bindings SET revoked_at=$4 \
+             WHERE community_id=$1 AND identity_id=$2 AND session_id=$3 \
+               AND binding_type='human_device' AND revoked_at IS NULL",
+        )
+        .bind(community_id.as_uuid())
+        .bind(revocation.identity_id)
+        .bind(session_id)
+        .bind(revocation.revoked_at)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+    } else {
+        sqlx::query(
+            "UPDATE snowman_workforce_key_bindings SET revoked_at=$3 \
+             WHERE community_id=$1 AND identity_id=$2 \
+               AND binding_type='human_device' AND revoked_at IS NULL",
+        )
+        .bind(community_id.as_uuid())
+        .bind(revocation.identity_id)
+        .bind(revocation.revoked_at)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+    };
+    let remaining_sessions: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM snowman_workforce_sessions \
+         WHERE community_id=$1 AND identity_id=$2 AND revoked_at IS NULL \
+           AND expires_at > $3",
+    )
+    .bind(community_id.as_uuid())
+    .bind(revocation.identity_id)
+    .bind(revocation.revoked_at)
+    .fetch_one(&mut *tx)
+    .await?;
+    let grants = if remaining_sessions == 0 {
+        sqlx::query(
+            "UPDATE snowman_workforce_capability_grants SET revoked_at=$3 \
+             WHERE community_id=$1 AND identity_id=$2 AND grant_source='role_policy' \
+               AND revoked_at IS NULL",
+        )
+        .bind(community_id.as_uuid())
+        .bind(revocation.identity_id)
+        .bind(revocation.revoked_at)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+    } else {
+        0
+    };
+    let mut members = 0_u64;
+    for pubkey in &device_pubkeys {
+        members += sqlx::query(
+            "DELETE FROM relay_members WHERE community_id=$1 AND pubkey=$2 \
+             AND added_by='snowman_identity_broker'",
+        )
+        .bind(community_id.as_uuid())
+        .bind(hex::encode(pubkey))
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    }
+    let identity_revoked = revocation.revocation_scope == "identity";
+    if identity_revoked {
+        sqlx::query(
+            "UPDATE snowman_workforce_identities \
+             SET status='revoked', revoked_at=COALESCE(revoked_at,$3), updated_at=$3 \
+             WHERE community_id=$1 AND identity_id=$2 AND identity_type='human'",
+        )
+        .bind(community_id.as_uuid())
+        .bind(revocation.identity_id)
+        .bind(revocation.revoked_at)
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query(
+        "UPDATE snowman_workforce_revocation_receipts SET \
+           revoked_session_count=$3, revoked_device_count=$4, \
+           revoked_grant_count=$5, revoked_member_count=$6 \
+         WHERE community_id=$1 AND assertion_id=$2",
+    )
+    .bind(community_id.as_uuid())
+    .bind(revocation.assertion_id)
+    .bind(i64::try_from(sessions).unwrap_or(i64::MAX))
+    .bind(i64::try_from(bindings).unwrap_or(i64::MAX))
+    .bind(i64::try_from(grants).unwrap_or(i64::MAX))
+    .bind(i64::try_from(members).unwrap_or(i64::MAX))
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(HumanWorkforceRevocationResult {
+        identity_id: revocation.identity_id,
+        revoked_session_count: sessions,
+        revoked_device_count: bindings,
+        revoked_grant_count: grants,
+        revoked_member_count: members,
+        identity_revoked,
     })
 }
 
