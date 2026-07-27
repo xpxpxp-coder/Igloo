@@ -507,6 +507,25 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
         &self,
         request: VerifiedLaunchRequest,
     ) -> Result<LaunchReceipt, CoordinatorError> {
+        self.submit_with_authorization(request, false).await
+    }
+
+    /// Submit a job through the private orchestration endpoint. The caller's
+    /// key must be an active service identity with the exact scheduler-dispatch
+    /// capability; the task's own specialist identity and live lease remain
+    /// independently enforced by job issuance.
+    pub async fn submit_orchestrated(
+        &self,
+        request: VerifiedLaunchRequest,
+    ) -> Result<LaunchReceipt, CoordinatorError> {
+        self.submit_with_authorization(request, true).await
+    }
+
+    async fn submit_with_authorization(
+        &self,
+        request: VerifiedLaunchRequest,
+        orchestrated: bool,
+    ) -> Result<LaunchReceipt, CoordinatorError> {
         self.validate_request(&request)?;
         let tenant_id = Uuid::parse_str(&request.snapshot.tenant_id)
             .map_err(|_| CoordinatorError::InvalidRequest)?;
@@ -533,7 +552,11 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
             .begin()
             .await
             .map_err(|_| CoordinatorError::Database)?;
-        authorize_requester(&mut transaction, tenant_id, &request).await?;
+        if orchestrated {
+            authorize_orchestration_requester(&mut transaction, tenant_id, &request).await?;
+        } else {
+            authorize_requester(&mut transaction, tenant_id, &request).await?;
+        }
         record_auth_event(&mut transaction, tenant_id, &request).await?;
         issue_job_in_transaction(
             &mut transaction,
@@ -1107,6 +1130,33 @@ impl<D: TokenDeriver, E: EcsControl> Coordinator<D, E> {
             launched: true,
         })
     }
+}
+
+async fn authorize_orchestration_requester(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant_id: Uuid,
+    request: &VerifiedLaunchRequest,
+) -> Result<(), CoordinatorError> {
+    let authorized: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM snowman_workforce_key_bindings k \
+         JOIN snowman_workforce_identities i ON i.community_id=k.community_id AND i.identity_id=k.identity_id \
+         JOIN snowman_workforce_capability_grants g ON g.community_id=i.community_id AND g.identity_id=i.identity_id \
+         WHERE k.community_id=$1 AND k.pubkey=$2 AND k.binding_type='service_runtime' \
+           AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>NOW()) \
+           AND i.identity_type='service' AND i.status='active' AND i.revoked_at IS NULL \
+           AND (i.expires_at IS NULL OR i.expires_at>NOW()) \
+           AND g.capability='orchestration.scheduler.dispatch' AND g.revoked_at IS NULL \
+           AND (g.expires_at IS NULL OR g.expires_at>NOW()))",
+    )
+    .bind(tenant_id)
+    .bind(request.requester_pubkey.as_slice())
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(|_| CoordinatorError::Database)?;
+    if !authorized {
+        return Err(CoordinatorError::InvalidRequest);
+    }
+    Ok(())
 }
 
 async fn authorize_requester(

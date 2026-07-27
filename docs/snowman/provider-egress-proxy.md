@@ -1,8 +1,11 @@
 # Governed provider-egress proxy
 
-Status: implemented and unit-tested as a fail-closed core; AWS packaging is
-hard dormant. Live transport, identity, replay-store, DNS, TLS, cancellation,
-provider, and recovery drills remain production-activation gates.
+Status: the fail-closed core now has a private HTTP runtime, AWS KMS workload
+verification, tenant-RLS PostgreSQL replay/cancellation receipts, direct
+DNS-pinned rustls transport, Secrets Manager credential injection, graceful
+shutdown, bounded metrics, container packaging, and hard-dormant AWS ECS
+foundations. Live provider, network-denial, database-fault, secret-rotation,
+and recovery drills remain production-activation gates.
 
 ## Boundary
 
@@ -26,8 +29,9 @@ bounded sizes and timeout, and an AWS Secrets Manager reference.
 
 ## Direct transport requirements
 
-The production transport must satisfy all of these requirements before its
-ECS service can be raised above zero:
+The runtime transport enforces the following requirements, which must still be
+proven against the staged AWS network before its ECS service can be raised
+above zero:
 
 1. Disable environment/system proxy discovery and redirects.
 2. Resolve the exact route hostname without search-domain expansion for every
@@ -45,19 +49,63 @@ ECS service can be raised above zero:
    provider supports it. Enforce request, response, deadline, timeout, and
    concurrency ceilings before allocating unbounded buffers.
 
-AWS must route Secrets Manager access over a VPC endpoint. Public provider
-egress is restricted to this security group and inspected DNS/HTTPS path; no
-other Command Center workload receives equivalent public egress.
+AWS routes Secrets Manager access over a VPC endpoint. The current ECS package
+is deliberately unroutable to public providers: it stays in the private tier,
+receives no public IP, and has no public HTTPS security-group rule or default
+route. Application host sealing is defense in depth, not a substitute for
+network-exact enforcement. Activation requires a separately reviewed AWS
+Network Firewall domain-list route or Snowman Cloudflare egress-control path,
+bound by `provider_egress_inspected_egress_evidence_sha256`. No other Command
+Center workload may receive equivalent egress. Internal TLS ingress is
+optional, disabled by default, and accepts only the meeting-media security
+group through an internal NLB.
 
 ## Replay, cancellation, and evidence
 
-The durable fence atomically claims `(request_id, request_digest)` against the
-session generation. Reuse with different signed content is denied. Exact
+The durable fence atomically claims tenant-scoped
+`(community_id, request_id, request_digest)` against the
+session generation. Both dispatch and cancellation require that exact
+tenant/session/generation to be live in the meeting-media authority, and the
+provider tables carry tenant-leading foreign keys back to that session. Reuse
+with different signed content is denied. Exact
 replay never invokes the provider again and returns only the prior content-free
-receipt. Cancellation is rechecked after claim, after DNS, and immediately
-before dispatch. A cancellation or timeout racing an in-flight provider call
-is recorded as sticky `indeterminate`; automatic retry is prohibited because
-the remote side effect might have occurred.
+receipt. Before the first provider byte can be sent, the runtime commits a
+sticky `indeterminate` receipt marker. Cancellation is rechecked after claim,
+after DNS, and immediately before dispatch. A crash, cancellation, or timeout
+racing an in-flight provider call therefore cannot trigger an automatic retry,
+because the remote side effect might have occurred.
+
+The cancellation endpoint is itself KMS-signed and binds tenant, session,
+generation, service principal, reason digest, issue time, and deadline. Each
+database transaction sets `snowman.tenant_id`; PostgreSQL FORCE RLS repeats the
+tenant boundary beneath application filtering. Receipt transitions are append
+only, digest-only evidence and cannot represent provider content.
+
+## Runtime contract
+
+- `POST /v1/tenants/{tenant_id}/dispatch` accepts the exact envelope plus
+  base64 payload/signature under a 12 MiB wire ceiling. Successful provider
+  content exists only in the live response; replay returns the receipt alone.
+- `POST /v1/tenants/{tenant_id}/sessions/{session_id}/generations/{generation}/cancel`
+  writes the signed generation fence.
+- `/_liveness`, `/_readiness`, and `/metrics` expose no tenant, provider body,
+  URL, credential, prompt, transcript, or audio labels.
+
+`SNOWMAN_PROVIDER_EGRESS_POLICY_JSON` is non-secret, operations-owned config.
+It maps exact principals to same-account asymmetric KMS key ARNs and exact
+dispatch/cancel capabilities and tenant grants. It maps
+destination IDs to provider URLs, methods, tenant/purpose/classification and
+budget bounds, response/request content types, and Snowman-named same-account
+Secrets Manager ARNs. Provider credentials are never accepted through an
+environment variable or caller field.
+
+Terraform packaging lives in `infra/aws/provider_egress_proxy.tf`. It creates
+nothing until runtime evidence, route policy, caller KMS keys, and provider
+secret ARNs are supplied together. Even then, desired count is statically
+restricted to zero and the task has no public provider route. Private TLS
+ingress is a second default-off switch. Do not raise the service until the
+inspected-egress path and its bypass-denial tests are represented in Terraform
+and bound to immutable launch evidence.
 
 Only `snowman.provider-egress.receipt.v1` may be persisted. It contains tenant,
 session, generation, provider, purpose, classification, authorized budget,
@@ -72,7 +120,7 @@ only to the authenticated live caller; an exact replay cannot recover it.
 The service stays at ECS desired count zero until staging proves:
 
 - KMS-backed workload signature verification and tenant/principal denial;
-- Redis/Valkey or PostgreSQL atomic claim, cancellation, and sticky
+- PostgreSQL FORCE-RLS atomic claim, cancellation, pre-send sticky
   indeterminate behavior under concurrent faults;
 - pinned DNS and certificate/SNI enforcement, including mixed-answer DNS
   rebinding tests and redirect/proxy/`CONNECT` denial;

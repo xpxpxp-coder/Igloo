@@ -204,6 +204,10 @@ pub async fn provision_agent_coordinator_role(
            TO {role_identifier};\n\
          GRANT SELECT, INSERT, UPDATE ON TABLE snowman_agent_jobs,\n\
            snowman_agent_launches TO {role_identifier};\n\
+         GRANT SELECT, INSERT, UPDATE ON TABLE snowman_orchestration_destination_receipts\n\
+           TO {role_identifier};\n\
+         GRANT SELECT ON TABLE snowman_orchestration_dispatches,\n\
+           snowman_orchestration_control_outbox TO {role_identifier};\n\
          GRANT SELECT, INSERT ON TABLE snowman_agent_coordinator_auth_events\n\
            TO {role_identifier};"
     );
@@ -564,6 +568,19 @@ pub async fn verify_agent_coordinator_role(pool: &PgPool, expected_role: &str) -
          AND has_table_privilege(current_user,'snowman_agent_launches','UPDATE') \
          AND NOT has_table_privilege(current_user,'snowman_agent_launches','DELETE') \
          AND NOT has_table_privilege(current_user,'snowman_agent_launches','TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_orchestration_destination_receipts','SELECT') \
+         AND has_table_privilege(current_user,'snowman_orchestration_destination_receipts','INSERT') \
+         AND has_table_privilege(current_user,'snowman_orchestration_destination_receipts','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_destination_receipts','DELETE') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_destination_receipts','TRUNCATE') \
+         AND has_table_privilege(current_user,'snowman_orchestration_dispatches','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_dispatches','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_dispatches','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_dispatches','DELETE') \
+         AND has_table_privilege(current_user,'snowman_orchestration_control_outbox','SELECT') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_control_outbox','INSERT') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_control_outbox','UPDATE') \
+         AND NOT has_table_privilege(current_user,'snowman_orchestration_control_outbox','DELETE') \
          AND has_table_privilege(current_user,'snowman_agent_coordinator_auth_events','SELECT') \
          AND has_table_privilege(current_user,'snowman_agent_coordinator_auth_events','INSERT') \
          AND NOT has_table_privilege(current_user,'snowman_agent_coordinator_auth_events','UPDATE') \

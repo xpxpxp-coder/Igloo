@@ -8,6 +8,9 @@
 //! and hands a pinned address set plus TLS SNI name to an injected direct
 //! transport. Only the transport may retrieve and inject a provider secret.
 
+/// Private production HTTP, AWS, DNS, and PostgreSQL adapters.
+pub mod server;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -255,18 +258,28 @@ pub trait RequestFence: Send + Sync {
     /// Atomically claim one request ID and digest, respecting cancellation.
     async fn claim(
         &self,
-        request_id: Uuid,
-        session_id: Uuid,
-        generation: u64,
+        envelope: &RequestEnvelope,
         request_sha256: &str,
-        deadline: DateTime<Utc>,
     ) -> Result<ClaimOutcome, ProxyError>;
 
     /// Recheck cancellation immediately before dispatch.
-    async fn is_cancelled(&self, session_id: Uuid, generation: u64) -> Result<bool, ProxyError>;
+    async fn is_cancelled(
+        &self,
+        tenant_id: Uuid,
+        session_id: Uuid,
+        generation: u64,
+    ) -> Result<bool, ProxyError>;
 
     /// Wait until cancellation wins for this generation.
-    async fn wait_cancelled(&self, session_id: Uuid, generation: u64) -> Result<(), ProxyError>;
+    async fn wait_cancelled(
+        &self,
+        tenant_id: Uuid,
+        session_id: Uuid,
+        generation: u64,
+    ) -> Result<(), ProxyError>;
+
+    /// Persist a sticky indeterminate marker before any provider bytes can be sent.
+    async fn mark_dispatched(&self, receipt: &Receipt) -> Result<(), ProxyError>;
 
     /// Persist only the redacted terminal or indeterminate receipt.
     async fn complete(&self, receipt: &Receipt) -> Result<(), ProxyError>;
@@ -429,17 +442,7 @@ impl Proxy {
             .await?;
         let route = self.authorize_request(&request)?;
         let request_sha256 = sha256(&canonical);
-        match self
-            .fence
-            .claim(
-                request.envelope.request_id,
-                request.envelope.session_id,
-                request.envelope.generation,
-                &request_sha256,
-                request.envelope.deadline,
-            )
-            .await?
-        {
+        match self.fence.claim(&request.envelope, &request_sha256).await? {
             ClaimOutcome::Duplicate(receipt) => {
                 if receipt.request_sha256 != request_sha256 {
                     return Err(ProxyError::ReplayConflict);
@@ -483,7 +486,11 @@ impl Proxy {
         }
         if self
             .fence
-            .is_cancelled(request.envelope.session_id, request.envelope.generation)
+            .is_cancelled(
+                request.envelope.tenant_id,
+                request.envelope.session_id,
+                request.envelope.generation,
+            )
             .await?
         {
             return self
@@ -536,7 +543,11 @@ impl Proxy {
         }
         if self
             .fence
-            .is_cancelled(request.envelope.session_id, request.envelope.generation)
+            .is_cancelled(
+                request.envelope.tenant_id,
+                request.envelope.session_id,
+                request.envelope.generation,
+            )
             .await?
         {
             return self
@@ -565,10 +576,19 @@ impl Proxy {
             .to_std()
             .map_err(|_| ProxyError::InvalidRequest)?
             .min(route.timeout);
+        let dispatched_receipt = build_receipt(
+            &request.envelope,
+            request_sha256.clone(),
+            ReceiptStatus::Indeterminate,
+            None,
+        );
+        self.fence.mark_dispatched(&dispatched_receipt).await?;
         let transport = self.transport.send(outbound);
-        let cancelled = self
-            .fence
-            .wait_cancelled(request.envelope.session_id, request.envelope.generation);
+        let cancelled = self.fence.wait_cancelled(
+            request.envelope.tenant_id,
+            request.envelope.session_id,
+            request.envelope.generation,
+        );
         let response = tokio::select! {
             biased;
             cancel = cancelled => {
@@ -710,24 +730,12 @@ impl Proxy {
             }
             None => ("0".repeat(64), 0, None, None),
         };
-        let receipt = Receipt {
-            schema_version: RECEIPT_SCHEMA.to_owned(),
-            request_id: envelope.request_id,
-            tenant_id: envelope.tenant_id,
-            session_id: envelope.session_id,
-            generation: envelope.generation,
-            provider: envelope.provider,
-            purpose: envelope.purpose.clone(),
-            classification: envelope.classification.clone(),
-            budget_microusd: envelope.budget_microusd,
-            policy_generation: envelope.policy_generation,
-            destination_id: envelope.destination_id.clone(),
+        let receipt = build_receipt(
+            envelope,
             request_sha256,
-            response_sha256,
-            response_bytes,
             status,
-            completed_at: Utc::now(),
-        };
+            Some((response_sha256, response_bytes)),
+        );
         self.fence.complete(&receipt).await?;
         Ok(ProxyResult {
             receipt,
@@ -735,6 +743,33 @@ impl Proxy {
             response_content_type: content_type,
             replayed: false,
         })
+    }
+}
+
+fn build_receipt(
+    envelope: &RequestEnvelope,
+    request_sha256: String,
+    status: ReceiptStatus,
+    response: Option<(String, usize)>,
+) -> Receipt {
+    let (response_sha256, response_bytes) = response.unwrap_or_else(|| ("0".repeat(64), 0));
+    Receipt {
+        schema_version: RECEIPT_SCHEMA.to_owned(),
+        request_id: envelope.request_id,
+        tenant_id: envelope.tenant_id,
+        session_id: envelope.session_id,
+        generation: envelope.generation,
+        provider: envelope.provider,
+        purpose: envelope.purpose.clone(),
+        classification: envelope.classification.clone(),
+        budget_microusd: envelope.budget_microusd,
+        policy_generation: envelope.policy_generation,
+        destination_id: envelope.destination_id.clone(),
+        request_sha256,
+        response_sha256,
+        response_bytes,
+        status,
+        completed_at: Utc::now(),
     }
 }
 
@@ -979,11 +1014,8 @@ mod tests {
     impl RequestFence for MockFence {
         async fn claim(
             &self,
-            request_id: Uuid,
-            _session_id: Uuid,
-            _generation: u64,
+            envelope: &RequestEnvelope,
             request_sha256: &str,
-            _deadline: DateTime<Utc>,
         ) -> Result<ClaimOutcome, ProxyError> {
             if *self
                 .cancelled
@@ -996,7 +1028,7 @@ mod tests {
                 .claims
                 .lock()
                 .map_err(|_| ProxyError::AuthorityUnavailable)?;
-            if let Some((digest, receipt)) = claims.get(&request_id) {
+            if let Some((digest, receipt)) = claims.get(&envelope.request_id) {
                 if digest != request_sha256 {
                     return Ok(ClaimOutcome::Conflict);
                 }
@@ -1006,12 +1038,13 @@ mod tests {
                     .map(ClaimOutcome::Duplicate)
                     .ok_or(ProxyError::AuthorityUnavailable);
             }
-            claims.insert(request_id, (request_sha256.to_owned(), None));
+            claims.insert(envelope.request_id, (request_sha256.to_owned(), None));
             Ok(ClaimOutcome::Claimed)
         }
 
         async fn is_cancelled(
             &self,
+            _tenant_id: Uuid,
             _session_id: Uuid,
             _generation: u64,
         ) -> Result<bool, ProxyError> {
@@ -1023,14 +1056,19 @@ mod tests {
 
         async fn wait_cancelled(
             &self,
+            tenant_id: Uuid,
             _session_id: Uuid,
             _generation: u64,
         ) -> Result<(), ProxyError> {
-            if self.is_cancelled(Uuid::nil(), 0).await? {
+            if self.is_cancelled(tenant_id, Uuid::nil(), 0).await? {
                 return Ok(());
             }
             self.notify.notified().await;
             Ok(())
+        }
+
+        async fn mark_dispatched(&self, receipt: &Receipt) -> Result<(), ProxyError> {
+            self.complete(receipt).await
         }
 
         async fn complete(&self, receipt: &Receipt) -> Result<(), ProxyError> {

@@ -9496,6 +9496,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "snowman-orchestration",
  "snowman-orchestration-service",
  "thiserror 2.0.18",
  "tokio",
@@ -9511,14 +9512,26 @@ name = "snowman-provider-egress-proxy"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "aws-config",
+ "aws-sdk-kms",
+ "aws-sdk-secretsmanager",
+ "axum",
+ "base64",
  "chrono",
+ "hex",
+ "reqwest 0.13.4",
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "sqlx",
  "thiserror 2.0.18",
  "tokio",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

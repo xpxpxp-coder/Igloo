@@ -583,6 +583,16 @@ pub struct DispatchLease {
     pub plan_generation: u64,
     /// Existing workforce task.
     pub task_id: Uuid,
+    /// Parent governed request used by the coordinator snapshot.
+    pub request_id: Uuid,
+    /// Digest of the immutable minimized execution projection.
+    pub execution_snapshot_sha256: String,
+    /// Exact evaluated model catalog ID selected by the persona policy.
+    pub model_id: String,
+    /// Exact specialist role selected by the persona policy.
+    pub specialist_role: String,
+    /// Governed maximum data classification for this task.
+    pub classification: Classification,
     /// Lease generation, incremented on every recovery claim.
     pub lease_generation: u64,
     /// Coordinator job coordinate.
@@ -597,6 +607,8 @@ pub struct DispatchLease {
     pub cancellation_generation: u64,
     /// Worst-case reserved task cost for observability only.
     pub reserved_cost_microusd: u64,
+    /// Hard task deadline, independent from the short delivery lease.
+    pub deadline_at: DateTime<Utc>,
     /// Lease expiry.
     pub lease_expires_at: DateTime<Utc>,
 }
@@ -670,6 +682,8 @@ pub struct ControlLease {
     pub coordinator_job_reference: Option<String>,
     /// Monotonic claim fence.
     pub lease_generation: u64,
+    /// Stable outbox creation time used to create replay-stable reminder events.
+    pub command_created_at: DateTime<Utc>,
     /// Lease expiry.
     pub lease_expires_at: DateTime<Utc>,
 }
@@ -2390,7 +2404,7 @@ async fn materialize_ready_dispatches(
     now: DateTime<Utc>,
 ) -> Result<u32, ApiError> {
     let candidates = sqlx::query(
-        "SELECT t.task_id,t.max_cost_microusd,pe.model_route_reference,\
+        "SELECT t.task_id,t.max_cost_microusd,pe.model_route_reference,wl.generation workforce_generation,\
           ARRAY(SELECT c.context_manifest_reference FROM snowman_orchestration_task_context_refs c \
                 WHERE c.community_id=t.community_id AND c.plan_id=t.plan_id AND c.task_id=t.task_id \
                 ORDER BY c.context_manifest_reference) AS context_refs,\
@@ -2402,6 +2416,10 @@ async fn materialize_ready_dispatches(
            AND p.generation=t.plan_generation \
          JOIN snowman_orchestration_personas pe ON pe.community_id=t.community_id \
            AND pe.plan_id=t.plan_id AND pe.persona_id=t.persona_id \
+         JOIN snowman_work_tasks wt ON wt.community_id=t.community_id AND wt.task_id=t.task_id \
+           AND wt.request_id=p.request_id AND wt.model_id=pe.model_id AND wt.specialist_role=pe.specialist_role \
+         JOIN snowman_task_leases wl ON wl.community_id=wt.community_id AND wl.task_id=wt.task_id \
+           AND wl.worker_identity_id=wt.service_identity_id \
          WHERE t.community_id=$1 AND p.workspace_id=$2 AND t.plan_id=$3 AND t.plan_generation=$4 \
            AND p.state='active' AND p.automatic_execution_enabled AND pe.enabled \
            AND t.automatic_execution_candidate AND t.reversible AND NOT t.approval_required \
@@ -2409,7 +2427,8 @@ async fn materialize_ready_dispatches(
            AND t.value_basis_points>=p.minimum_value_basis_points \
            AND t.risk_basis_points<=p.maximum_risk_basis_points \
            AND t.max_cost_microusd<=p.max_automatic_task_cost_microusd \
-           AND t.deadline_at>$5 AND p.deadline_at>$5 \
+           AND t.deadline_at>$5 AND p.deadline_at>$5 AND wl.expires_at>t.deadline_at \
+           AND wt.status IN ('leased','running') \
            AND NOT EXISTS (SELECT 1 FROM snowman_orchestration_task_required_capabilities rc \
              WHERE rc.community_id=t.community_id AND rc.plan_id=t.plan_id \
                AND rc.plan_generation=t.plan_generation AND rc.task_id=t.task_id \
@@ -2484,6 +2503,12 @@ async fn materialize_ready_dispatches(
         }
         let dispatch_id = Uuid::new_v4();
         let job_id = Uuid::new_v4();
+        let workforce_generation: i64 = row
+            .try_get("workforce_generation")
+            .map_err(|_| ApiError(Error::Database))?;
+        if workforce_generation <= 0 || workforce_generation > i64::from(u32::MAX) {
+            return Err(ApiError(Error::Conflict));
+        }
         let snapshot = dispatch_snapshot_digest(
             scope,
             generation,
@@ -2510,7 +2535,9 @@ async fn materialize_ready_dispatches(
         .bind(task_id)
         .bind(occurrence_id)
         .bind(snapshot.as_slice())
-        .bind(format!("snowman:agent-job:{job_id}:generation:1"))
+        .bind(format!(
+            "snowman:agent-job:{job_id}:generation:{workforce_generation}"
+        ))
         .bind(model_route_reference)
         .bind(context_refs)
         .bind(capabilities)
@@ -3762,7 +3789,7 @@ async fn claim_control_outbox(
         .collect::<Vec<_>>();
     let rows = sqlx::query(
         "SELECT o.outbox_id,o.command_kind,o.plan_id,o.plan_generation,o.dispatch_id,o.occurrence_id,\
-                o.command_sha256,o.attempt_count,o.max_attempts,o.lease_generation,\
+                o.command_sha256,o.attempt_count,o.max_attempts,o.lease_generation,o.created_at,\
                 d.coordinator_job_reference \
          FROM snowman_orchestration_control_outbox o \
          JOIN snowman_orchestration_plans p ON p.community_id=o.community_id \
@@ -3858,6 +3885,9 @@ async fn claim_control_outbox(
                 .try_get("coordinator_job_reference")
                 .map_err(|_| ApiError(Error::Database))?,
             lease_generation: u64::try_from(next_generation)
+                .map_err(|_| ApiError(Error::Database))?,
+            command_created_at: row
+                .try_get("created_at")
                 .map_err(|_| ApiError(Error::Database))?,
             lease_expires_at,
         });
@@ -4139,10 +4169,16 @@ async fn claim_ready_dispatches(
     let rows = sqlx::query(
         "SELECT d.dispatch_id,d.plan_id,d.plan_generation,d.task_id,d.lease_generation,\
                 d.coordinator_job_reference,d.model_route_reference,d.analyst_context_references,\
-                d.required_capabilities,d.reserved_cost_microusd,d.attempt_count,d.max_attempts,d.cancellation_generation \
+                d.required_capabilities,d.reserved_cost_microusd,d.attempt_count,d.max_attempts,\
+                d.cancellation_generation,d.execution_snapshot_sha256,t.deadline_at,\
+                p.request_id,p.classification,pe.model_id,pe.specialist_role \
          FROM snowman_orchestration_dispatches d \
          JOIN snowman_orchestration_plans p ON p.community_id=d.community_id AND p.plan_id=d.plan_id \
            AND p.generation=d.plan_generation \
+         JOIN snowman_orchestration_tasks t ON t.community_id=d.community_id AND t.plan_id=d.plan_id \
+           AND t.plan_generation=d.plan_generation AND t.task_id=d.task_id \
+         JOIN snowman_orchestration_personas pe ON pe.community_id=t.community_id \
+           AND pe.plan_id=t.plan_id AND pe.plan_generation=t.plan_generation AND pe.persona_id=t.persona_id \
          WHERE d.community_id=$1 AND d.workspace_id=$2 AND p.state='active' \
            AND p.automatic_execution_enabled AND d.status IN ('pending','failed') \
            AND d.next_attempt_at<=$3 AND d.attempt_count<d.max_attempts \
@@ -4204,6 +4240,23 @@ async fn claim_ready_dispatches(
             task_id: row
                 .try_get("task_id")
                 .map_err(|_| ApiError(Error::Database))?,
+            request_id: row
+                .try_get("request_id")
+                .map_err(|_| ApiError(Error::Database))?,
+            execution_snapshot_sha256: hex::encode(
+                row.try_get::<Vec<u8>, _>("execution_snapshot_sha256")
+                    .map_err(|_| ApiError(Error::Database))?,
+            ),
+            model_id: row
+                .try_get("model_id")
+                .map_err(|_| ApiError(Error::Database))?,
+            specialist_role: row
+                .try_get("specialist_role")
+                .map_err(|_| ApiError(Error::Database))?,
+            classification: parse_classification(
+                &row.try_get::<String, _>("classification")
+                    .map_err(|_| ApiError(Error::Database))?,
+            )?,
             lease_generation: next_generation as u64,
             coordinator_job_reference: row
                 .try_get("coordinator_job_reference")
@@ -4227,6 +4280,9 @@ async fn claim_ready_dispatches(
                     .map_err(|_| ApiError(Error::Database))?,
             )
             .map_err(|_| ApiError(Error::Database))?,
+            deadline_at: row
+                .try_get("deadline_at")
+                .map_err(|_| ApiError(Error::Database))?,
             lease_expires_at,
         });
     }
@@ -4467,6 +4523,15 @@ fn classification(value: Classification) -> &'static str {
         Classification::Internal => "internal",
         Classification::Confidential => "confidential",
         Classification::Restricted => "restricted",
+    }
+}
+
+fn parse_classification(value: &str) -> Result<Classification, ApiError> {
+    match value {
+        "internal" => Ok(Classification::Internal),
+        "confidential" => Ok(Classification::Confidential),
+        "restricted" => Ok(Classification::Restricted),
+        _ => Err(ApiError(Error::Database)),
     }
 }
 

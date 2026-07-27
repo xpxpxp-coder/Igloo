@@ -57,6 +57,8 @@ const runtimeAuthorityFiles = [
   "crates/snowman-meeting-media-gateway/src/lib.rs",
   "crates/snowman-meeting-media-gateway/src/adapters.rs",
   "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "crates/snowman-provider-egress-proxy/src/server.rs",
+  "crates/snowman-provider-egress-proxy/src/main.rs",
   "crates/snowman-meeting-media-gateway/src/server.rs",
   "crates/snowman-meeting-media-gateway/src/main.rs",
   "crates/snowman-audit-checkpoint/src/lib.rs",
@@ -87,6 +89,8 @@ const runtimeAuthorityFiles = [
   "migrations/0055_snowman_orchestration_execution_lifecycle.sql",
   "migrations/0056_snowman_meeting_media_service.sql",
   "migrations/0057_snowman_orchestration_control_delivery.sql",
+  "migrations/0058_snowman_provider_egress_runtime.sql",
+  "migrations/0059_snowman_orchestration_destinations.sql",
   "desktop/src-tauri/src/commands/agent_models.rs",
   "desktop/src-tauri/src/builderlab.rs",
   "desktop/src-tauri/src/relay.rs",
@@ -143,6 +147,7 @@ const runtimeAuthorityFiles = [
   "infra/aws/launch_evidence.tf",
   "infra/aws/supply_chain.tf",
   "infra/aws/outputs.tf",
+  "infra/aws/provider_egress_proxy.tf",
   ".github/workflows/snowman-production-evidence.yml",
 ];
 
@@ -185,6 +190,56 @@ requireFragment(
   "crates/snowman-provider-egress-proxy/src/lib.rs",
   'Self::Twilio => "api.twilio.com"',
   "provider egress must map Twilio to its exact operations-sealed host",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/lib.rs",
+  "mark_dispatched(&dispatched_receipt).await?",
+  "provider egress must commit a sticky receipt before provider bytes can be sent",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/server.rs",
+  ".resolve_to_addrs(&request.tls_server_name, &pinned)",
+  "provider HTTPS must use only the freshly validated DNS address set",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/server.rs",
+  ".no_proxy()",
+  "provider egress must reject ambient proxy discovery",
+);
+requireFragment(
+  "crates/snowman-provider-egress-proxy/src/server.rs",
+  ".redirect(Policy::none())",
+  "provider egress must not follow provider redirects",
+);
+requireFragment(
+  "migrations/0058_snowman_provider_egress_runtime.sql",
+  "FORCE ROW LEVEL SECURITY",
+  "provider replay and cancellation state must repeat tenant isolation in PostgreSQL",
+);
+requireFragment(
+  "migrations/0059_snowman_orchestration_destinations.sql",
+  "FOREIGN KEY (community_id, workspace_id, dispatch_id)",
+  "orchestration dispatch receipts must remain bound to their exact tenant and workspace authority",
+);
+requireFragment(
+  "migrations/0059_snowman_orchestration_destinations.sql",
+  "FOREIGN KEY (community_id, workspace_id, outbox_id)",
+  "orchestration cancellation receipts must remain bound to their exact tenant and workspace authority",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "var.provider_egress_desired_count == 0",
+  "provider egress must remain dormant until staged launch evidence passes",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "provider_egress_inspected_egress_evidence_sha256",
+  "provider activation must depend on exact-domain inspected-egress evidence",
+);
+requireFragment(
+  "infra/aws/provider_egress_proxy.tf",
+  "assign_public_ip = false",
+  "the dormant provider task must not silently receive a public egress path",
 );
 requireFragment(
   "crates/snowman-provider-egress-proxy/src/lib.rs",

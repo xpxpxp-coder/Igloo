@@ -74,6 +74,7 @@ RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
                                    -p snowman-audit-checkpoint --bin snowman-audit-checkpoint \
                                    -p snowman-meeting-command-service --bin snowman-meeting-command-service \
                                    -p snowman-meeting-media-gateway --bin snowman-meeting-media-gateway \
+                                   -p snowman-provider-egress-proxy --bin snowman-provider-egress-proxy \
                                    -p snowman-orchestration-service --bin snowman-orchestration-service \
                                    -p snowman-orchestration-worker --bin snowman-orchestration-worker \
                                    -p snowman-workforce-worker --bins \
@@ -87,6 +88,7 @@ RUN cargo build --release --locked -p buzz-relay --bin buzz-relay \
     && strip target/release/snowman-audit-checkpoint \
     && strip target/release/snowman-meeting-command-service \
     && strip target/release/snowman-meeting-media-gateway \
+    && strip target/release/snowman-provider-egress-proxy \
     && strip target/release/snowman-orchestration-service \
     && strip target/release/snowman-orchestration-worker \
     && strip target/release/snowman-workforce-worker \
@@ -167,6 +169,7 @@ COPY --from=builder    /build/target/release/snowman-model-gateway /usr/local/bi
 COPY --from=builder    /build/target/release/snowman-audit-checkpoint /usr/local/bin/snowman-audit-checkpoint
 COPY --from=builder    /build/target/release/snowman-meeting-command-service /usr/local/bin/snowman-meeting-command-service
 COPY --from=builder    /build/target/release/snowman-meeting-media-gateway /usr/local/bin/snowman-meeting-media-gateway
+COPY --from=builder    /build/target/release/snowman-provider-egress-proxy /usr/local/bin/snowman-provider-egress-proxy
 COPY --from=builder    /build/target/release/snowman-orchestration-service /usr/local/bin/snowman-orchestration-service
 COPY --from=builder    /build/target/release/snowman-orchestration-worker /usr/local/bin/snowman-orchestration-worker
 COPY --from=builder    /build/target/release/snowman-workforce-worker /usr/local/bin/snowman-workforce-worker

@@ -277,6 +277,7 @@ resource "aws_ecs_task_definition" "agent_coordinator" {
       { name = "SNOWMAN_AGENT_COORDINATOR_PRIVATE_SUBNET_IDS_JSON", value = jsonencode([for key in sort(keys(aws_subnet.private)) : aws_subnet.private[key].id]) },
       { name = "SNOWMAN_AGENT_COORDINATOR_EXECUTOR_SECURITY_GROUP_ID", value = aws_security_group.agent_executor.id },
       { name = "SNOWMAN_AGENT_COORDINATOR_RUNTIME_PROFILES_JSON", value = jsonencode(local.agent_coordinator_runtime_profiles) },
+      { name = "SNOWMAN_AGENT_COORDINATOR_ORCHESTRATION_ROUTES_JSON", value = jsonencode(var.orchestration_model_route_profiles) },
       { name = "SNOWMAN_AGENT_COORDINATOR_TOKEN_HMAC_KEY_ARN", value = aws_kms_key.agent_job_token.arn },
     ]
     secrets = [{

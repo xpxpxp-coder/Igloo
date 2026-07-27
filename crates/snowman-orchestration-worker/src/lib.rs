@@ -12,7 +12,7 @@ use std::{env, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Utc;
-use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag};
+use nostr::{EventBuilder, JsonUtil, Keys, Kind, Tag, Timestamp};
 use reqwest::{header, redirect::Policy, Client};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -30,6 +30,8 @@ const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 const DESTINATION_RECEIPT_SCHEMA: &str = "snowman.orchestration.destination-receipt.v1";
 const COORDINATOR_DISPATCH_SCHEMA: &str = "snowman.orchestration.coordinator-dispatch.v1";
 const CONTROL_COMMAND_SCHEMA: &str = "snowman.orchestration.control-command.v1";
+const FIXED_REMINDER_TEXT: &str =
+    "Snowman deadline reminder: governed work is due. Open the Command Center for details.";
 
 /// Non-sensitive worker failures safe for centralized logs.
 #[derive(Debug, thiserror::Error)]
@@ -57,6 +59,8 @@ pub struct Config {
     coordinator_origin: Url,
     reminder_origin: Url,
     keys: Keys,
+    reminder_keys: Keys,
+    reminder_channel_id: Uuid,
     tenant_id: Uuid,
     workspace_id: Uuid,
     service_identity_id: Uuid,
@@ -101,6 +105,11 @@ impl Config {
             )?)?,
             keys: Keys::parse(&required("SNOWMAN_ORCHESTRATION_WORKER_NOSTR_PRIVATE_KEY")?)
                 .map_err(|_| Error::Configuration("Nostr private key is invalid"))?,
+            reminder_keys: Keys::parse(&required(
+                "SNOWMAN_ORCHESTRATION_REMINDER_NOSTR_PRIVATE_KEY",
+            )?)
+            .map_err(|_| Error::Configuration("reminder Nostr private key is invalid"))?,
+            reminder_channel_id: parse_uuid("SNOWMAN_ORCHESTRATION_REMINDER_CHANNEL_ID")?,
             tenant_id: parse_uuid("SNOWMAN_ORCHESTRATION_WORKER_TENANT_ID")?,
             workspace_id: parse_uuid("SNOWMAN_ORCHESTRATION_WORKER_WORKSPACE_ID")?,
             service_identity_id: parse_uuid("SNOWMAN_ORCHESTRATION_WORKER_IDENTITY_ID")?,
@@ -129,6 +138,7 @@ pub struct Worker {
     orchestration: SignedClient,
     coordinator: SignedClient,
     reminder: SignedClient,
+    reminder_channel_id: Uuid,
     tenant_id: Uuid,
     workspace_id: Uuid,
     service_identity_id: Uuid,
@@ -157,9 +167,10 @@ impl Worker {
             )?,
             reminder: SignedClient::new(
                 config.reminder_origin,
-                config.keys,
+                config.reminder_keys,
                 config.request_timeout,
             )?,
+            reminder_channel_id: config.reminder_channel_id,
             tenant_id: config.tenant_id,
             workspace_id: config.workspace_id,
             service_identity_id: config.service_identity_id,
@@ -281,12 +292,19 @@ impl Worker {
             plan_id: lease.plan_id,
             plan_generation: lease.plan_generation,
             task_id: lease.task_id,
+            request_id: lease.request_id,
+            execution_snapshot_sha256: lease.execution_snapshot_sha256.clone(),
+            model_id: lease.model_id.clone(),
+            specialist_role: lease.specialist_role.clone(),
+            classification: lease.classification,
             lease_generation: lease.lease_generation,
             cancellation_generation: lease.cancellation_generation,
             coordinator_job_reference: lease.coordinator_job_reference.clone(),
             model_route_reference: lease.model_route_reference.clone(),
             analyst_context_references: lease.analyst_context_references.clone(),
             required_capabilities: lease.required_capabilities.clone(),
+            reserved_cost_microusd: lease.reserved_cost_microusd,
+            deadline_at: lease.deadline_at,
             lease_expires_at: lease.lease_expires_at,
         };
         let result = self
@@ -386,35 +404,6 @@ impl Worker {
         if lease.community_id != self.tenant_id || lease.workspace_id != self.workspace_id {
             return Err(Error::Contract("control lease scope is invalid"));
         }
-        let (client, destination_path, expected_reference) = match lease.command_kind {
-            ControlCommandKind::CancelDispatch => {
-                let reference = lease
-                    .coordinator_job_reference
-                    .clone()
-                    .ok_or(Error::Contract(
-                        "cancellation has no coordinator job reference",
-                    ))?;
-                (
-                    &self.coordinator,
-                    format!(
-                        "/v1/tenants/{}/workspaces/{}/orchestration/cancellations/{}",
-                        self.tenant_id, self.workspace_id, lease.outbox_id
-                    ),
-                    reference,
-                )
-            }
-            ControlCommandKind::DeliverReminder => (
-                &self.reminder,
-                format!(
-                    "/v1/tenants/{}/workspaces/{}/orchestration/reminders/{}",
-                    self.tenant_id, self.workspace_id, lease.outbox_id
-                ),
-                format!(
-                    "snowman:reminder-delivery:{}:generation:{}",
-                    lease.outbox_id, lease.lease_generation
-                ),
-            ),
-        };
         let destination = ControlDestinationCommand {
             schema_version: CONTROL_COMMAND_SCHEMA.into(),
             community_id: lease.community_id,
@@ -430,26 +419,42 @@ impl Worker {
             lease_generation: lease.lease_generation,
             lease_expires_at: lease.lease_expires_at,
         };
-        let result = client
-            .post_json::<DestinationReceipt, _>(&destination_path, &destination)
-            .await;
-        let command = match result {
-            Ok(receipt) => {
+        let result = match lease.command_kind {
+            ControlCommandKind::CancelDispatch => {
+                let expected_reference =
+                    lease
+                        .coordinator_job_reference
+                        .clone()
+                        .ok_or(Error::Contract(
+                            "cancellation has no coordinator job reference",
+                        ))?;
+                let destination_path = format!(
+                    "/v1/tenants/{}/workspaces/{}/orchestration/cancellations/{}",
+                    self.tenant_id, self.workspace_id, lease.outbox_id
+                );
+                let receipt = self
+                    .coordinator
+                    .post_json::<DestinationReceipt, _>(&destination_path, &destination)
+                    .await?;
                 validate_destination_receipt(&receipt, &expected_reference, lease.outbox_id)?;
-                ControlDeliveryResultCommand {
-                    schema_version: CONTROL_DELIVERY_SCHEMA.into(),
-                    service_identity_id: self.service_identity_id,
-                    service_principal: self.service_principal.clone(),
-                    policy_generation: self.policy_generation,
-                    lease_generation: lease.lease_generation,
-                    command_sha256: lease.command_sha256.clone(),
-                    outcome: ControlDeliveryOutcome::Delivered,
-                    delivery_reference: Some(receipt.delivery_reference),
-                    response_sha256: Some(receipt.response_sha256),
-                    failure_sha256: None,
-                    retry_after_seconds: None,
-                }
+                Ok(receipt)
             }
+            ControlCommandKind::DeliverReminder => self.deliver_reminder(lease).await,
+        };
+        let command = match result {
+            Ok(receipt) => ControlDeliveryResultCommand {
+                schema_version: CONTROL_DELIVERY_SCHEMA.into(),
+                service_identity_id: self.service_identity_id,
+                service_principal: self.service_principal.clone(),
+                policy_generation: self.policy_generation,
+                lease_generation: lease.lease_generation,
+                command_sha256: lease.command_sha256.clone(),
+                outcome: ControlDeliveryOutcome::Delivered,
+                delivery_reference: Some(receipt.delivery_reference),
+                response_sha256: Some(receipt.response_sha256),
+                failure_sha256: None,
+                retry_after_seconds: None,
+            },
             Err(error) => ControlDeliveryResultCommand {
                 schema_version: CONTROL_DELIVERY_SCHEMA.into(),
                 service_identity_id: self.service_identity_id,
@@ -490,6 +495,44 @@ impl Worker {
         Ok(())
     }
 
+    async fn deliver_reminder(&self, lease: &ControlLease) -> Result<DestinationReceipt, Error> {
+        let channel = self.reminder_channel_id.to_string();
+        let plan = lease.plan_id.to_string();
+        let occurrence = lease.occurrence_id.to_string();
+        let delivery = lease.outbox_id.to_string();
+        let created_at = u64::try_from(lease.command_created_at.timestamp())
+            .map_err(|_| Error::Contract("reminder creation time is invalid"))?;
+        let event = EventBuilder::new(Kind::Custom(9), FIXED_REMINDER_TEXT)
+            .tags([
+                Tag::parse(["h", channel.as_str()]).map_err(|_| Error::Signing)?,
+                Tag::parse(["snowman-plan", plan.as_str()]).map_err(|_| Error::Signing)?,
+                Tag::parse(["snowman-occurrence", occurrence.as_str()])
+                    .map_err(|_| Error::Signing)?,
+                Tag::parse(["snowman-delivery", delivery.as_str()]).map_err(|_| Error::Signing)?,
+                Tag::parse(["snowman-command-sha256", lease.command_sha256.as_str()])
+                    .map_err(|_| Error::Signing)?,
+            ])
+            .custom_created_at(Timestamp::from(created_at))
+            .sign_with_keys(&self.reminder.keys)
+            .map_err(|_| Error::Signing)?;
+        let event_id = event.id.to_hex();
+        let relay: RelayEventReceipt = self.reminder.post_json("/events", &event).await?;
+        if !relay.accepted || relay.event_id != event_id {
+            return Err(Error::Contract("reminder relay receipt is invalid"));
+        }
+        let delivery_reference = format!("snowman:reminder-delivery:{}", lease.outbox_id);
+        let mut hasher = Sha256::new();
+        hasher.update(b"snowman.orchestration.reminder-receipt.v1\0");
+        hasher.update(event_id.as_bytes());
+        hasher.update(delivery_reference.as_bytes());
+        Ok(DestinationReceipt {
+            schema_version: DESTINATION_RECEIPT_SCHEMA.into(),
+            request_id: lease.outbox_id,
+            delivery_reference,
+            response_sha256: hex::encode(hasher.finalize()),
+        })
+    }
+
     fn scoped_path(&self, suffix: &str) -> String {
         format!(
             "/v1/tenants/{}/workspaces/{}/{}",
@@ -508,12 +551,19 @@ struct CoordinatorDispatchEnvelope {
     plan_id: Uuid,
     plan_generation: u64,
     task_id: Uuid,
+    request_id: Uuid,
+    execution_snapshot_sha256: String,
+    model_id: String,
+    specialist_role: String,
+    classification: snowman_orchestration::Classification,
     lease_generation: u64,
     cancellation_generation: u64,
     coordinator_job_reference: String,
     model_route_reference: String,
     analyst_context_references: Vec<String>,
     required_capabilities: Vec<String>,
+    reserved_cost_microusd: u64,
+    deadline_at: chrono::DateTime<Utc>,
     lease_expires_at: chrono::DateTime<Utc>,
 }
 
@@ -542,6 +592,15 @@ struct DestinationReceipt {
     request_id: Uuid,
     delivery_reference: String,
     response_sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayEventReceipt {
+    event_id: String,
+    accepted: bool,
+    #[serde(rename = "message")]
+    _message: String,
 }
 
 fn validate_destination_receipt(
@@ -794,6 +853,19 @@ mod tests {
         let contract = &tail[..end];
         for prohibited in ["message", "prompt", "transcript", "provider", "api_key"] {
             assert!(!contract.contains(prohibited), "{prohibited}");
+        }
+    }
+
+    #[test]
+    fn reminder_content_is_fixed_and_contains_no_work_coordinates() {
+        assert_eq!(
+            FIXED_REMINDER_TEXT,
+            "Snowman deadline reminder: governed work is due. Open the Command Center for details."
+        );
+        for prohibited in ["client", "provider", "transcript", "email", "prompt"] {
+            assert!(!FIXED_REMINDER_TEXT
+                .to_ascii_lowercase()
+                .contains(prohibited));
         }
     }
 }

@@ -13,10 +13,10 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{Duration as ChronoDuration, Utc};
 use nostr::TagKind;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use snowman_agent_contract::JobSnapshot;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use snowman_agent_contract::{AgentDataPolicy, Classification, JobSnapshot, JOB_SNAPSHOT_SCHEMA};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use tower_http::limit::RequestBodyLimitLayer;
 use url::Url;
 use uuid::Uuid;
@@ -31,6 +31,115 @@ const AUTH_EVIDENCE_SECONDS: i64 = 120;
 
 type ProductionCoordinator = Coordinator<KmsTokenDeriver, AwsEcsControl>;
 
+const ORCHESTRATION_DISPATCH_SCHEMA: &str = "snowman.orchestration.coordinator-dispatch.v1";
+const ORCHESTRATION_CONTROL_SCHEMA: &str = "snowman.orchestration.control-command.v1";
+const DESTINATION_RECEIPT_SCHEMA: &str = "snowman.orchestration.destination-receipt.v1";
+
+/// Reviewed local mapping from an opaque orchestration model-route coordinate
+/// to the existing immutable coordinator runtime catalog.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestrationRouteProfile {
+    /// Opaque Snowman route coordinate, never a provider URL.
+    pub model_route_reference: String,
+    /// Existing coordinator runtime policy ID.
+    pub runtime_id: String,
+    /// Exact evaluated model catalog ID.
+    pub model_id: String,
+    /// Exact specialist role allowed to use the route.
+    pub specialist_role: String,
+    /// Maximum classification allowed on this route.
+    pub classification: Classification,
+    /// Reviewed Snowman system policy; no task or client content is loaded here.
+    pub system_prompt: String,
+    /// Hard input token ceiling.
+    pub max_input_tokens: u64,
+    /// Hard output token ceiling.
+    pub max_output_tokens: u64,
+}
+
+impl OrchestrationRouteProfile {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if !valid_route_reference(&self.model_route_reference)
+            || !valid_policy_label(&self.runtime_id, 128)
+            || !valid_policy_label(&self.model_id, 128)
+            || !valid_policy_label(&self.specialist_role, 64)
+            || self.system_prompt.is_empty()
+            || self.system_prompt.len() > 4096
+            || self.system_prompt.contains("http://")
+            || self.system_prompt.contains("https://")
+            || self.max_input_tokens == 0
+            || self.max_input_tokens > 1_000_000
+            || self.max_output_tokens == 0
+            || self.max_output_tokens > 250_000
+        {
+            return Err(ConfigError::Invalid(
+                "orchestration route profile is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoordinatorDispatchEnvelope {
+    schema_version: String,
+    community_id: Uuid,
+    workspace_id: Uuid,
+    dispatch_id: Uuid,
+    plan_id: Uuid,
+    plan_generation: u64,
+    request_id: Uuid,
+    task_id: Uuid,
+    execution_snapshot_sha256: String,
+    model_id: String,
+    specialist_role: String,
+    classification: Classification,
+    lease_generation: u64,
+    cancellation_generation: u64,
+    coordinator_job_reference: String,
+    model_route_reference: String,
+    analyst_context_references: Vec<String>,
+    required_capabilities: Vec<String>,
+    reserved_cost_microusd: u64,
+    deadline_at: chrono::DateTime<Utc>,
+    lease_expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum OrchestrationControlKind {
+    CancelDispatch,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OrchestrationCancellationCommand {
+    schema_version: String,
+    community_id: Uuid,
+    workspace_id: Uuid,
+    outbox_id: Uuid,
+    command_kind: OrchestrationControlKind,
+    plan_id: Uuid,
+    plan_generation: u64,
+    dispatch_id: Option<Uuid>,
+    occurrence_id: Uuid,
+    command_sha256: String,
+    coordinator_job_reference: Option<String>,
+    lease_generation: u64,
+    lease_expires_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DestinationReceipt {
+    schema_version: String,
+    request_id: Uuid,
+    delivery_reference: String,
+    response_sha256: String,
+}
+
 /// Exact service configuration loaded from a dedicated secret and static ECS policy.
 pub struct Config {
     bind_addr: SocketAddr,
@@ -40,6 +149,7 @@ pub struct Config {
     public_origin: Url,
     coordinator: CoordinatorConfig,
     token_hmac_key_arn: String,
+    orchestration_routes: BTreeMap<String, OrchestrationRouteProfile>,
 }
 
 /// Non-sensitive startup failure classes.
@@ -101,9 +211,26 @@ impl Config {
             .validate()
             .map_err(|_| ConfigError::Invalid("coordinator placement policy is invalid"))?;
         let token_hmac_key_arn = required("SNOWMAN_AGENT_COORDINATOR_TOKEN_HMAC_KEY_ARN")?;
+        let profiles: Vec<OrchestrationRouteProfile> = serde_json::from_str(&required(
+            "SNOWMAN_AGENT_COORDINATOR_ORCHESTRATION_ROUTES_JSON",
+        )?)
+        .map_err(|_| ConfigError::Invalid("orchestration route JSON is invalid"))?;
+        let mut orchestration_routes = BTreeMap::new();
+        for profile in profiles {
+            profile.validate()?;
+            if orchestration_routes
+                .insert(profile.model_route_reference.clone(), profile)
+                .is_some()
+            {
+                return Err(ConfigError::Invalid(
+                    "orchestration model route references must be unique",
+                ));
+            }
+        }
         if max_connections == 0
             || max_connections > 16
             || !valid_database_url(&database_url)
+            || orchestration_routes.len() > 32
             || env_value("SNOWMAN_AGENT_COORDINATOR_NETWORK_POLICY").as_deref()
                 != Some("private-snowman-only")
         {
@@ -119,6 +246,7 @@ impl Config {
             public_origin,
             coordinator,
             token_hmac_key_arn,
+            orchestration_routes,
         })
     }
 }
@@ -130,6 +258,7 @@ pub struct AppState {
     coordinator: Arc<ProductionCoordinator>,
     bind_addr: SocketAddr,
     public_origin: Url,
+    orchestration_routes: Arc<BTreeMap<String, OrchestrationRouteProfile>>,
 }
 
 impl AppState {
@@ -162,6 +291,7 @@ impl AppState {
             coordinator: Arc::new(coordinator),
             bind_addr: config.bind_addr,
             public_origin: config.public_origin,
+            orchestration_routes: Arc::new(config.orchestration_routes),
         })
     }
 
@@ -208,6 +338,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/tenants/{tenant_id}/launches/{launch_id}/bootstrap",
             post(post_bootstrap),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/orchestration/dispatches/{dispatch_id}",
+            post(post_orchestration_dispatch),
+        )
+        .route(
+            "/v1/tenants/{tenant_id}/workspaces/{workspace_id}/orchestration/cancellations/{outbox_id}",
+            post(post_orchestration_cancellation),
         )
         .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BYTES))
         .with_state(state)
@@ -276,6 +414,156 @@ async fn post_launch(
     }))
 }
 
+async fn post_orchestration_dispatch(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id, dispatch_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<DestinationReceipt>, ApiError> {
+    check_orchestration_body(&body)?;
+    let expected_url = state
+        .public_origin
+        .join(&format!(
+            "v1/tenants/{tenant_id}/workspaces/{workspace_id}/orchestration/dispatches/{dispatch_id}"
+        ))
+        .map_err(|_| ApiError::Internal)?;
+    let auth = verify_auth(&headers, expected_url.as_str(), &body)?;
+    let command: CoordinatorDispatchEnvelope =
+        serde_json::from_slice(&body).map_err(|_| ApiError::Invalid)?;
+    validate_dispatch(&command, tenant_id, workspace_id, dispatch_id)?;
+    let body_sha256: [u8; 32] = Sha256::digest(&body).into();
+    if let Some(receipt) = claim_destination_receipt(
+        &state.pool,
+        tenant_id,
+        workspace_id,
+        "dispatch",
+        dispatch_id,
+        body_sha256,
+        &command.coordinator_job_reference,
+    )
+    .await?
+    {
+        return Ok(Json(receipt));
+    }
+    let route = state
+        .orchestration_routes
+        .get(&command.model_route_reference)
+        .ok_or(ApiError::Invalid)?;
+    if route.model_id != command.model_id
+        || route.specialist_role != command.specialist_role
+        || route.classification != command.classification
+    {
+        return Err(ApiError::Invalid);
+    }
+    let (job_id, generation) = parse_job_reference(&command.coordinator_job_reference)?;
+    let prompt = serde_json::to_string(&serde_json::json!({
+        "schema_version": "snowman.orchestration.agent-projection.v1",
+        "plan_id": command.plan_id,
+        "plan_generation": command.plan_generation,
+        "task_id": command.task_id,
+        "context_manifest_references": command.analyst_context_references,
+    }))
+    .map_err(|_| ApiError::Internal)?;
+    let snapshot = JobSnapshot {
+        schema_version: JOB_SNAPSHOT_SCHEMA.into(),
+        job_id,
+        tenant_id: tenant_id.to_string(),
+        workspace_id,
+        request_id: command.request_id,
+        task_id: command.task_id,
+        generation,
+        runtime_id: route.runtime_id.clone(),
+        model_id: route.model_id.clone(),
+        specialist_role: route.specialist_role.clone(),
+        classification: route.classification,
+        data_policy: AgentDataPolicy {
+            pii_prohibited: true,
+            minimization_evidence_sha256: command.execution_snapshot_sha256.clone(),
+        },
+        system_prompt: route.system_prompt.clone(),
+        prompt,
+        capability_grants: command.required_capabilities.clone(),
+        max_input_tokens: route.max_input_tokens,
+        max_output_tokens: route.max_output_tokens,
+        max_cost_microusd: command.reserved_cost_microusd,
+        deadline_at: command.deadline_at,
+    };
+    let now = Utc::now();
+    state
+        .coordinator
+        .submit_orchestrated(VerifiedLaunchRequest {
+            snapshot,
+            request_sha256: body_sha256,
+            requester_pubkey: auth.pubkey,
+            auth_event_id: auth.event_id,
+            auth_observed_at: now,
+            auth_expires_at: now + ChronoDuration::seconds(AUTH_EVIDENCE_SECONDS),
+        })
+        .await
+        .map_err(ApiError::from)?;
+    let response_sha256 = stable_destination_digest(
+        "dispatch",
+        dispatch_id,
+        &command.coordinator_job_reference,
+        body_sha256,
+    );
+    let receipt = DestinationReceipt {
+        schema_version: DESTINATION_RECEIPT_SCHEMA.into(),
+        request_id: dispatch_id,
+        delivery_reference: command.coordinator_job_reference,
+        response_sha256,
+    };
+    complete_destination_receipt(&state.pool, tenant_id, dispatch_id, &receipt).await?;
+    Ok(Json(receipt))
+}
+
+async fn post_orchestration_cancellation(
+    State(state): State<AppState>,
+    Path((tenant_id, workspace_id, outbox_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<DestinationReceipt>, ApiError> {
+    check_orchestration_body(&body)?;
+    let expected_url = state
+        .public_origin
+        .join(&format!(
+            "v1/tenants/{tenant_id}/workspaces/{workspace_id}/orchestration/cancellations/{outbox_id}"
+        ))
+        .map_err(|_| ApiError::Internal)?;
+    verify_auth(&headers, expected_url.as_str(), &body)?;
+    let command: OrchestrationCancellationCommand =
+        serde_json::from_slice(&body).map_err(|_| ApiError::Invalid)?;
+    let reference = validate_cancellation(&command, tenant_id, workspace_id, outbox_id)?;
+    let body_sha256: [u8; 32] = Sha256::digest(&body).into();
+    if let Some(receipt) = claim_destination_receipt(
+        &state.pool,
+        tenant_id,
+        workspace_id,
+        "cancel",
+        outbox_id,
+        body_sha256,
+        &reference,
+    )
+    .await?
+    {
+        return Ok(Json(receipt));
+    }
+    let (job_id, _) = parse_job_reference(&reference)?;
+    state
+        .coordinator
+        .cancel_job(tenant_id, job_id, "orchestration_cancelled")
+        .await
+        .map_err(ApiError::from)?;
+    let receipt = DestinationReceipt {
+        schema_version: DESTINATION_RECEIPT_SCHEMA.into(),
+        request_id: outbox_id,
+        delivery_reference: reference.clone(),
+        response_sha256: stable_destination_digest("cancel", outbox_id, &reference, body_sha256),
+    };
+    complete_destination_receipt(&state.pool, tenant_id, outbox_id, &receipt).await?;
+    Ok(Json(receipt))
+}
+
 async fn post_bootstrap(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -336,6 +624,249 @@ fn verify_auth(headers: &HeaderMap, url: &str, body: &[u8]) -> Result<VerifiedAu
         pubkey: pubkey.to_bytes(),
         event_id: event.id.to_bytes(),
     })
+}
+
+fn check_orchestration_body(body: &[u8]) -> Result<(), ApiError> {
+    if body.is_empty() || body.len() > 256 * 1024 {
+        Err(ApiError::Invalid)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_dispatch(
+    command: &CoordinatorDispatchEnvelope,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    dispatch_id: Uuid,
+) -> Result<(), ApiError> {
+    let now = Utc::now();
+    if command.schema_version != ORCHESTRATION_DISPATCH_SCHEMA
+        || command.community_id != tenant_id
+        || command.workspace_id != workspace_id
+        || command.dispatch_id != dispatch_id
+        || command.plan_id.is_nil()
+        || command.plan_generation == 0
+        || command.request_id.is_nil()
+        || command.task_id.is_nil()
+        || command.lease_generation == 0
+        || command.cancellation_generation > i64::MAX as u64
+        || command.reserved_cost_microusd == 0
+        || command.deadline_at <= now
+        || command.lease_expires_at <= now
+        || command.lease_expires_at > now + ChronoDuration::minutes(20)
+        || !valid_sha256(&command.execution_snapshot_sha256)
+        || command.analyst_context_references.is_empty()
+        || command.analyst_context_references.len() > 32
+        || command.required_capabilities.is_empty()
+        || command.required_capabilities.len() > 32
+        || command
+            .analyst_context_references
+            .iter()
+            .any(|value| !valid_analyst_reference(value))
+        || command
+            .required_capabilities
+            .iter()
+            .any(|value| !valid_policy_label(value, 128) || value.contains('*'))
+    {
+        return Err(ApiError::Invalid);
+    }
+    parse_job_reference(&command.coordinator_job_reference)?;
+    Ok(())
+}
+
+fn validate_cancellation(
+    command: &OrchestrationCancellationCommand,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    outbox_id: Uuid,
+) -> Result<String, ApiError> {
+    if command.schema_version != ORCHESTRATION_CONTROL_SCHEMA
+        || command.community_id != tenant_id
+        || command.workspace_id != workspace_id
+        || command.outbox_id != outbox_id
+        || command.command_kind != OrchestrationControlKind::CancelDispatch
+        || command.plan_id.is_nil()
+        || command.plan_generation == 0
+        || command.dispatch_id.is_none_or(|value| value.is_nil())
+        || command.occurrence_id.is_nil()
+        || command.lease_generation == 0
+        || command.lease_expires_at <= Utc::now()
+        || !valid_sha256(&command.command_sha256)
+    {
+        return Err(ApiError::Invalid);
+    }
+    let reference = command
+        .coordinator_job_reference
+        .clone()
+        .ok_or(ApiError::Invalid)?;
+    parse_job_reference(&reference)?;
+    Ok(reference)
+}
+
+fn parse_job_reference(reference: &str) -> Result<(Uuid, u32), ApiError> {
+    let fields = reference.split(':').collect::<Vec<_>>();
+    if fields.len() != 5 || fields[0..2] != ["snowman", "agent-job"] || fields[3] != "generation" {
+        return Err(ApiError::Invalid);
+    }
+    let job_id = Uuid::parse_str(fields[2]).map_err(|_| ApiError::Invalid)?;
+    let generation = fields[4].parse::<u32>().map_err(|_| ApiError::Invalid)?;
+    if job_id.is_nil() || generation == 0 {
+        return Err(ApiError::Invalid);
+    }
+    Ok((job_id, generation))
+}
+
+async fn claim_destination_receipt(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    workspace_id: Uuid,
+    destination_kind: &str,
+    request_id: Uuid,
+    request_sha256: [u8; 32],
+    delivery_reference: &str,
+) -> Result<Option<DestinationReceipt>, ApiError> {
+    let authority_exists: bool = match destination_kind {
+        "dispatch" => sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM snowman_orchestration_dispatches \
+             WHERE community_id=$1 AND workspace_id=$2 AND dispatch_id=$3)",
+        )
+        .bind(tenant_id)
+        .bind(workspace_id)
+        .bind(request_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| ApiError::Internal)?,
+        "cancel" => sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM snowman_orchestration_control_outbox \
+             WHERE community_id=$1 AND workspace_id=$2 AND outbox_id=$3 AND command_kind='cancel_dispatch')",
+        )
+        .bind(tenant_id)
+        .bind(workspace_id)
+        .bind(request_id)
+        .fetch_one(pool)
+        .await
+        .map_err(|_| ApiError::Internal)?,
+        _ => return Err(ApiError::Invalid),
+    };
+    if !authority_exists {
+        return Err(ApiError::Conflict);
+    }
+    sqlx::query(
+        "INSERT INTO snowman_orchestration_destination_receipts \
+         (community_id,workspace_id,destination_kind,request_id,request_sha256,delivery_reference,status) \
+         VALUES ($1,$2,$3,$4,$5,$6,'processing') ON CONFLICT DO NOTHING",
+    )
+    .bind(tenant_id)
+    .bind(workspace_id)
+    .bind(destination_kind)
+    .bind(request_id)
+    .bind(request_sha256.as_slice())
+    .bind(delivery_reference)
+    .execute(pool)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    let row = sqlx::query(
+        "SELECT workspace_id,destination_kind,request_sha256,delivery_reference,status,response_sha256 \
+         FROM snowman_orchestration_destination_receipts WHERE community_id=$1 AND request_id=$2",
+    )
+    .bind(tenant_id)
+    .bind(request_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    if row.try_get::<Uuid, _>("workspace_id").ok() != Some(workspace_id)
+        || row.try_get::<String, _>("destination_kind").ok().as_deref() != Some(destination_kind)
+        || row.try_get::<Vec<u8>, _>("request_sha256").ok().as_deref()
+            != Some(request_sha256.as_slice())
+        || row
+            .try_get::<String, _>("delivery_reference")
+            .ok()
+            .as_deref()
+            != Some(delivery_reference)
+    {
+        return Err(ApiError::Conflict);
+    }
+    if row.try_get::<String, _>("status").ok().as_deref() == Some("completed") {
+        let response = row
+            .try_get::<Vec<u8>, _>("response_sha256")
+            .map_err(|_| ApiError::Internal)?;
+        if response.len() != 32 {
+            return Err(ApiError::Internal);
+        }
+        return Ok(Some(DestinationReceipt {
+            schema_version: DESTINATION_RECEIPT_SCHEMA.into(),
+            request_id,
+            delivery_reference: delivery_reference.into(),
+            response_sha256: hex::encode(response),
+        }));
+    }
+    Ok(None)
+}
+
+async fn complete_destination_receipt(
+    pool: &PgPool,
+    tenant_id: Uuid,
+    request_id: Uuid,
+    receipt: &DestinationReceipt,
+) -> Result<(), ApiError> {
+    let response = hex::decode(&receipt.response_sha256).map_err(|_| ApiError::Internal)?;
+    let updated = sqlx::query(
+        "UPDATE snowman_orchestration_destination_receipts SET status='completed',response_sha256=$1,completed_at=NOW() \
+         WHERE community_id=$2 AND request_id=$3 AND delivery_reference=$4 AND status IN ('processing','completed')",
+    )
+    .bind(response)
+    .bind(tenant_id)
+    .bind(request_id)
+    .bind(&receipt.delivery_reference)
+    .execute(pool)
+    .await
+    .map_err(|_| ApiError::Internal)?;
+    if updated.rows_affected() != 1 {
+        return Err(ApiError::Conflict);
+    }
+    Ok(())
+}
+
+fn stable_destination_digest(
+    kind: &str,
+    request_id: Uuid,
+    reference: &str,
+    request_sha256: [u8; 32],
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"snowman.orchestration.destination-receipt.v1\0");
+    hasher.update(kind.as_bytes());
+    hasher.update([0]);
+    hasher.update(request_id.as_bytes());
+    hasher.update(reference.as_bytes());
+    hasher.update(request_sha256);
+    hex::encode(hasher.finalize())
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_policy_label(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn valid_route_reference(value: &str) -> bool {
+    value.starts_with("snowman:model-route:")
+        && value.contains(":revision:")
+        && valid_policy_label(value, 192)
+}
+
+fn valid_analyst_reference(value: &str) -> bool {
+    value.starts_with("snowman:analyst360:") && value.len() <= 256 && valid_policy_label(value, 256)
 }
 
 #[derive(Debug)]
@@ -503,5 +1034,69 @@ mod tests {
             body,
         )
         .is_err());
+    }
+
+    #[test]
+    fn orchestration_job_reference_is_exact_and_generation_bound() {
+        let job = Uuid::new_v4();
+        assert_eq!(
+            parse_job_reference(&format!("snowman:agent-job:{job}:generation:7")).unwrap(),
+            (job, 7)
+        );
+        for denied in [
+            format!("snowman:agent-job:{job}:generation:0"),
+            format!("https://coordinator/{job}"),
+            format!("snowman:agent-job:{job}:generation:7:extra"),
+        ] {
+            assert!(parse_job_reference(&denied).is_err(), "{denied}");
+        }
+    }
+
+    #[test]
+    fn orchestration_route_profile_rejects_provider_urls() {
+        let mut profile = OrchestrationRouteProfile {
+            model_route_reference: format!("snowman:model-route:{}:revision:1", Uuid::new_v4()),
+            runtime_id: "native-acp".into(),
+            model_id: "snowman-evaluated-model-v1".into(),
+            specialist_role: "research_analyst".into(),
+            classification: Classification::Confidential,
+            system_prompt: "Use only governed Snowman references and capabilities.".into(),
+            max_input_tokens: 16_000,
+            max_output_tokens: 4_000,
+        };
+        assert!(profile.validate().is_ok());
+        profile.system_prompt = "send to https://attacker.test".into();
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn destination_receipt_digest_is_stable_and_request_bound() {
+        let request_id = Uuid::new_v4();
+        let reference = format!("snowman:agent-job:{}:generation:1", Uuid::new_v4());
+        let first = stable_destination_digest("dispatch", request_id, &reference, [3; 32]);
+        assert_eq!(
+            first,
+            stable_destination_digest("dispatch", request_id, &reference, [3; 32])
+        );
+        assert_ne!(
+            first,
+            stable_destination_digest("cancel", request_id, &reference, [3; 32])
+        );
+        assert!(valid_sha256(&first));
+    }
+
+    #[test]
+    fn destination_authority_rejects_orphan_and_cross_workspace_coordinates() {
+        let source = include_str!("service.rs");
+        for query in [
+            "WHERE community_id=$1 AND workspace_id=$2 AND dispatch_id=$3",
+            "WHERE community_id=$1 AND workspace_id=$2 AND outbox_id=$3",
+        ] {
+            assert!(source.contains(query), "{query}");
+        }
+        let migration =
+            include_str!("../../../migrations/0059_snowman_orchestration_destinations.sql");
+        assert!(migration.contains("FOREIGN KEY (community_id, workspace_id, dispatch_id)"));
+        assert!(migration.contains("FOREIGN KEY (community_id, workspace_id, outbox_id)"));
     }
 }
